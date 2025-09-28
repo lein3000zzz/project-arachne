@@ -9,13 +9,13 @@ import (
 )
 
 type PageDataNeo4jRepo struct {
-	neo4j  neo4j.DriverWithContext
+	driver neo4j.DriverWithContext
 	logger *zap.SugaredLogger
 }
 
-func NewNeo4jRepo(logger *zap.SugaredLogger, neo4j neo4j.DriverWithContext) *PageDataNeo4jRepo {
+func NewNeo4jRepo(logger *zap.SugaredLogger, driver neo4j.DriverWithContext) *PageDataNeo4jRepo {
 	return &PageDataNeo4jRepo{
-		neo4j:  neo4j,
+		driver: driver,
 		logger: logger,
 	}
 }
@@ -25,7 +25,38 @@ func (repo *PageDataNeo4jRepo) EnsureConnectivity() error {
 	defer cancel()
 
 	var err error
-	err = repo.neo4j.VerifyConnectivity(ctx)
+	err = repo.driver.VerifyConnectivity(ctx)
 
 	return err
+}
+
+func (repo *PageDataNeo4jRepo) SavePage(page PageData) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	params, errParams := page.toParams()
+	if errParams != nil {
+		repo.logger.Errorf("failed to parse params: %v", errParams)
+		return errParams
+	}
+
+	// TODO ссылки сохранять через MERGE, сразу создавая чудо-юдо ноды (итерацией по links)
+	queryRes, errQuery := neo4j.ExecuteQuery(ctx, repo.driver, `
+		MERGE (p:Page {url: $url})
+		ON CREATE SET p.foundAt = $foundAt, p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType 
+		ON MATCH SET p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType 
+	`,
+		params,
+		neo4j.EagerResultTransformer,
+		neo4j.ExecuteQueryWithDatabase("pages"),
+	)
+
+	if errQuery != nil {
+		repo.logger.Errorf("failed to execute query: %v", errQuery)
+		return errQuery
+	}
+
+	repo.logger.Debugw("page saved pages number: %d", queryRes.Summary.ResultAvailableAfter())
+
+	return nil
 }
