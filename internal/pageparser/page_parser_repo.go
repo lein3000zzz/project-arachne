@@ -181,10 +181,17 @@ func (repo *ParserRepo) resolveAndAdd(raw string, seen map[string]struct{}, base
 	}
 
 	if !parsed.IsAbs() && base != nil {
-		resolved := base.ResolveReference(parsed)
-		seen[resolved.String()] = struct{}{}
-		return
+		parsed = base.ResolveReference(parsed)
 	}
+
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+
+	// Чтобы /a и /a/ считалось как одно и то же, что не совсем корректно, но у этого могут быть юзкейсы
+	// if parsed.Path != "/" && strings.HasSuffix(parsed.Path, "/") {
+	// 	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	// }
 
 	seen[parsed.String()] = struct{}{}
 }

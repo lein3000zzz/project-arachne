@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"time"
-	"web-crawler/internal/cache"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/webcrawler"
+	"web-crawler/internal/webcrawler/cache"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"go.uber.org/zap"
