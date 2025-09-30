@@ -17,20 +17,21 @@ import (
 )
 
 type CrawlerRepo struct {
-	Logger    *zap.SugaredLogger
-	Parser    pageparser.PageParser
-	Networker networker.Networker
-	PageRepo  pages.PageDataRepo
-	Cache     cache.CachedStorage
+	Logger      *zap.SugaredLogger
+	Parser      pageparser.PageParser
+	Networker   networker.Networker
+	PageRepo    pages.PageDataRepo
+	CachePages  cache.CachedStorage
+	CacheRobots cache.CachedStorage
 }
 
 func NewCrawlerRepo(logger *zap.SugaredLogger, parser pageparser.PageParser, networker networker.Networker, pageRepo pages.PageDataRepo, cache cache.CachedStorage) *CrawlerRepo {
 	return &CrawlerRepo{
-		Logger:    logger,
-		Parser:    parser,
-		Networker: networker,
-		PageRepo:  pageRepo,
-		Cache:     cache,
+		Logger:     logger,
+		Parser:     parser,
+		Networker:  networker,
+		PageRepo:   pageRepo,
+		CachePages: cache,
 	}
 }
 
@@ -46,7 +47,7 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 	for currDepth < depth {
 		var newLinks []string
 		for _, link := range links {
-			cachedPageRaw, errCache := repo.Cache.Get(link)
+			cachedPageRaw, errCache := repo.CachePages.Get(link)
 
 			var cachedPageData pages.PageData
 			errUnmarshal := json.Unmarshal([]byte(cachedPageRaw), &cachedPageData)
@@ -83,7 +84,7 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 
 			repo.TakeScreenshot(link)
 
-			errCache = repo.Cache.Set(link, pageData, cache.BaseTTL)
+			errCache = repo.CachePages.Set(link, pageData, cache.BaseTTL)
 			if errCache != nil {
 				repo.Logger.Warnw("Failed to cache page", "url", link, "depth", currDepth, "err", errCache)
 			}
