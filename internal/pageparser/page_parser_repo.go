@@ -126,15 +126,22 @@ func (repo *ParserRepo) extractFromSrcset(val string, seen map[string]struct{}, 
 }
 
 func (repo *ParserRepo) extractLinksFromNode(node *html.Node, seen map[string]struct{}, base *url.URL) {
+	if node == nil {
+		return
+	}
+
 	if node.Type == html.ElementNode {
 		for _, attribute := range node.Attr {
-			if _, valid := attrsWithURLs[attribute.Key]; valid {
-				if attribute.Key == "srcset" || attribute.Key == "data-srcset" {
-					repo.extractFromSrcset(attribute.Val, seen, base)
-				} else {
-					if urlNormalized := repo.normalizeURL(attribute.Val); urlNormalized != "" {
-						repo.resolveAndAdd(urlNormalized, seen, base)
-					}
+			if _, valid := attrsWithURLs[attribute.Key]; !valid {
+				continue
+			}
+
+			switch attribute.Key {
+			case "srcset", "data-srcset":
+				repo.extractFromSrcset(attribute.Val, seen, base)
+			default:
+				if urlNormalized := repo.normalizeURL(attribute.Val); urlNormalized != "" {
+					repo.resolveAndAdd(urlNormalized, seen, base)
 				}
 			}
 		}

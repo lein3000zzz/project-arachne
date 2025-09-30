@@ -54,7 +54,7 @@ func main() {
 	parser := pageparser.NewParserRepo(logger)
 	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, pageRepo)
 
-	errCrawl := crawler.StartCrawler("https://example.com/", 3)
+	errCrawl := crawler.StartCrawler("https://lein3000.live/", 3)
 	if errCrawl != nil {
 		logger.Fatal("Error starting crawler:", err)
 	}
