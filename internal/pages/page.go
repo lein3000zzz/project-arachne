@@ -30,5 +30,6 @@ func (p PageData) toParams() (map[string]any, error) {
 }
 
 type PageDataRepo interface {
-	s()
+	SavePage(page PageData) error
+	EnsureConnectivity() error
 }
