@@ -43,7 +43,7 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 				continue
 			}
 
-			linksFromThePage := repo.Parser.ParseLinks(fetchRes.Body)
+			linksFromThePage := repo.Parser.ParseLinks(fetchRes.Body, link)
 
 			pageData := pages.PageData{
 				URL:           link,
@@ -56,7 +56,7 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 			}
 
 			errSaving := repo.PageRepo.SavePage(pageData)
-			
+
 			if errSaving != nil {
 				repo.Logger.Warnw("Failed to save page", "url", link, "depth", currDepth)
 			}

@@ -3,7 +3,7 @@ package pageparser
 import "regexp"
 
 type PageParser interface {
-	ParseLinks(body []byte) []string
+	ParseLinks(body []byte, base string) []string
 }
 
 var urlRegex = regexp.MustCompile(`https?://[^\s"'<>]+`)
