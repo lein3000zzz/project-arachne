@@ -6,16 +6,20 @@ import (
 )
 
 type PageData struct {
-	URL           string    `json:"url"`
-	Status        int       `json:"status"`
-	Links         []string  `json:"links"`
-	LastRunID     string    `json:"lastRunID"`
-	LastUpdatedAt time.Time `json:"lastUpdatedAt"`
-	FoundAt       time.Time `json:"foundAt"`
-	ContentType   string    `json:"contentType"`
+	URL           string    `json:"url" bson:"url"`
+	Status        int       `json:"status" bson:"status"`
+	Links         []string  `json:"links" bson:"links"`
+	LastRunID     string    `json:"lastRunID" bson:"lastRunID"`
+	LastUpdatedAt time.Time `json:"lastUpdatedAt" bson:"lastUpdatedAt,omitempty"`
+	FoundAt       time.Time `json:"foundAt" bson:"foundAt,omitempty"`
+	ContentType   string    `json:"contentType" bson:"contentType"`
 }
 
-func (p PageData) toParams() (map[string]any, error) {
+func (p *PageData) MarshalBinary() ([]byte, error) {
+	return json.Marshal(p)
+}
+
+func (p *PageData) toParams() (map[string]any, error) {
 	var m map[string]any
 	b, err := json.Marshal(p)
 
@@ -30,6 +34,6 @@ func (p PageData) toParams() (map[string]any, error) {
 }
 
 type PageDataRepo interface {
-	SavePage(page PageData) error
+	SavePage(page *PageData) error
 	EnsureConnectivity() error
 }

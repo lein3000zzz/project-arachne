@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"web-crawler/internal/cache"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
@@ -52,9 +53,10 @@ func main() {
 
 	fetcher := networker.NewNetworker(logger)
 	parser := pageparser.NewParserRepo(logger)
-	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, pageRepo)
+	redisCache := cache.NewRedisCache("localhost:6379", "", 0, logger)
+	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, pageRepo, redisCache)
 
-	errCrawl := crawler.StartCrawler("https://lein3000.live/", 3)
+	errCrawl := crawler.StartCrawler("https://lein3000.live/", 2)
 	if errCrawl != nil {
 		logger.Fatal("Error starting crawler:", err)
 	}
@@ -80,7 +82,7 @@ func main() {
 	//	ContentType:   "text/html",
 	//}
 
-	errPage := pageRepo.SavePage(s)
+	errPage := pageRepo.SavePage(&s)
 	//errPage2 := pageRepo.SavePage(s2)
 	logger.Fatal(errPage)
 	//logger.Fatal(errPage2)

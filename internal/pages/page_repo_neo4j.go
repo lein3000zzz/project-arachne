@@ -30,7 +30,7 @@ func (repo *PageDataNeo4jRepo) EnsureConnectivity() error {
 	return err
 }
 
-func (repo *PageDataNeo4jRepo) SavePage(page PageData) error {
+func (repo *PageDataNeo4jRepo) SavePage(page *PageData) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -40,7 +40,6 @@ func (repo *PageDataNeo4jRepo) SavePage(page PageData) error {
 		return errParams
 	}
 
-	// TODO ссылки сохранять через MERGE, сразу создавая чудо-юдо ноды (итерацией по links)
 	queryRes, errQuery := neo4j.ExecuteQuery(ctx, repo.driver, `
 		MERGE (p:Page {url: $url})
 		ON CREATE SET p.foundAt = $foundAt, p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType 
