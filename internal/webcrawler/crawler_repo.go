@@ -2,19 +2,15 @@ package webcrawler
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/url"
-	"strconv"
 	"time"
 	"web-crawler/internal/networker"
+	"web-crawler/internal/networker/extraworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler/cache"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/jimsmart/grobotstxt"
 	"go.uber.org/zap"
 )
@@ -23,23 +19,25 @@ type CrawlerRepo struct {
 	Logger      *zap.SugaredLogger
 	Parser      pageparser.PageParser
 	Networker   networker.Networker
+	ExtraWorker extraworker.ExtraWorker
 	PageRepo    pages.PageDataRepo
 	CachePages  cache.CachedStorage
 	CacheRobots cache.CachedStorage
 }
 
-func NewCrawlerRepo(logger *zap.SugaredLogger, parser pageparser.PageParser, networker networker.Networker, pageRepo pages.PageDataRepo, cachePages cache.CachedStorage, cacheRobots cache.CachedStorage) *CrawlerRepo {
+func NewCrawlerRepo(logger *zap.SugaredLogger, parser pageparser.PageParser, networker networker.Networker, extraWorker extraworker.ExtraWorker, pageRepo pages.PageDataRepo, cachePages cache.CachedStorage, cacheRobots cache.CachedStorage) *CrawlerRepo {
 	return &CrawlerRepo{
 		Logger:      logger,
 		Parser:      parser,
 		Networker:   networker,
+		ExtraWorker: extraWorker,
 		PageRepo:    pageRepo,
 		CachePages:  cachePages,
 		CacheRobots: cacheRobots,
 	}
 }
 
-func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
+func (repo *CrawlerRepo) StartCrawler(url string, depth int, extra bool) error {
 	err := repo.PageRepo.EnsureConnectivity()
 	if err != nil {
 		repo.Logger.Errorf("Error ensuring connectivity: %v", err)
@@ -51,10 +49,10 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 	for currDepth < depth {
 		var newLinks []string
 		for _, link := range links {
-			canParse := repo.isAllowedRobots(link)
+			canParse := repo.isAllowedByRobots(link)
 			repo.Logger.Infow("link %")
 			if !canParse {
-				repo.Logger.Warnw("Skipping link because of robots", "url", link)
+				repo.Logger.Warnw("Skipping link because of robots.txt", "url", link)
 				continue
 			}
 
@@ -69,9 +67,9 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 				continue
 			}
 
-			fetchRes, err := repo.Networker.Fetch(link)
-			if err != nil {
-				repo.Logger.Warnw("Failed to fetch link", "url", link, "depth", currDepth)
+			fetchRes, errFetch := repo.Networker.Fetch(link)
+			if errFetch != nil {
+				repo.Logger.Warnw("Failed to fetch link", "url", link, "depth", currDepth, "err", errFetch)
 				continue
 			}
 
@@ -93,7 +91,7 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 				repo.Logger.Warnw("Failed to save page", "url", link, "depth", currDepth, "err", errCache)
 			}
 
-			//repo.TakeScreenshot(link)
+			//repo.takeScreenshot(link)
 
 			errCache = repo.CachePages.Set(link, pageData, cache.BaseTTL)
 			if errCache != nil {
@@ -109,22 +107,20 @@ func (repo *CrawlerRepo) StartCrawler(url string, depth int) error {
 	return nil
 }
 
-func (repo *CrawlerRepo) isAllowedRobots(urlToCheck string) bool {
+func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 	baseURL, err := utils.GetBaseURL(urlToCheck)
 	if err != nil {
 		repo.Logger.Errorw("Failed to get robots URL", "url", urlToCheck, "err", err)
 		return false
 	}
 
-	var robots string
-	// TODO
-	cachedString, errRobotsCache := repo.CacheRobots.Get(baseURL)
+	robots, errRobotsCache := repo.CacheRobots.Get(baseURL)
 	if errRobotsCache == nil {
-		repo.Logger.Warnw("Robots cache hit", "url", urlToCheck)
-		robots = cachedString
+		repo.Logger.Infow("Robots cache hit", "url", urlToCheck)
+		return grobotstxt.AgentAllowed(robots, "project-arachne", urlToCheck)
 	}
 
-	repo.Logger.Warnw("cache miss or some other redis error", "errCache", errRobotsCache, "errParseBool", errParseBool)
+	repo.Logger.Warnw("cache miss or some other redis error", "errCache", errRobotsCache)
 
 	robotsURL := baseURL + "/robots.txt"
 	responseData, errFetch := repo.Networker.Fetch(robotsURL)
@@ -138,42 +134,12 @@ func (repo *CrawlerRepo) isAllowedRobots(urlToCheck string) bool {
 		return true
 	}
 
-	isAllowed := grobotstxt.AgentAllowed(string(responseData.Body), "project-arachne", urlToCheck)
+	robots = string(responseData.Body)
 
-	errSaveCache := repo.CacheRobots.Set(urlToCheck, strconv.FormatBool(isAllowed), cache.BaseTTL)
+	errSaveCache := repo.CacheRobots.Set(urlToCheck, string(responseData.Body), cache.BaseTTL)
 	if errSaveCache != nil {
 		repo.Logger.Warnw("failed to save cache", "url", baseURL, "err", errSaveCache)
 	}
 
-	return isAllowed
-}
-
-func (repo *CrawlerRepo) TakeScreenshot(pageURL string) {
-	outDir := "output/screenshots"
-
-	safeName := url.QueryEscape(pageURL)
-	outPath := fmt.Sprintf("%s/%s.png", outDir, safeName)
-
-	l := launcher.New().Headless(true)
-
-	browserURL, err := l.Launch()
-	if err != nil {
-		repo.Logger.Warnw("failed to launch browser", "err", err)
-		return
-	}
-
-	browser := rod.New().ControlURL(browserURL)
-	if err := browser.Connect(); err != nil {
-		repo.Logger.Warnw("failed to connect to browser", "err", err)
-		return
-	}
-	defer func() {
-		_ = browser.Close()
-	}()
-
-	page := browser.MustPage(pageURL)
-	page.MustWaitLoad()
-	page.MustScreenshot(outPath)
-
-	repo.Logger.Infof("screenshot saved: %s", outPath)
+	return grobotstxt.AgentAllowed(robots, "project-arachne", urlToCheck)
 }

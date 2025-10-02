@@ -26,6 +26,10 @@ func NewRedisCache(addr, password string, db int, logger *zap.SugaredLogger) *Re
 		DB:       db,
 	})
 
+	if err := rdb.ConfigSet(context.Background(), "maxmemory", "512mb").Err(); err != nil {
+		log.Fatalf("failed to set redis maxmemory: %v", err)
+	}
+
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		log.Fatalf("failed to connect to redis: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 	"web-crawler/internal/networker"
+	"web-crawler/internal/networker/extraworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/webcrawler"
@@ -55,9 +56,14 @@ func main() {
 	parser := pageparser.NewParserRepo(logger)
 	redisPagesCache := cache.NewRedisCache("localhost:6379", "", 0, logger)
 	redisRobotsCache := cache.NewRedisCache("localhost:6379", "", 1, logger)
-	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, pageRepo, redisPagesCache, redisRobotsCache)
+	extraWorker, errRod := extraworker.NewExtraRodParser(logger)
+	if errRod != nil {
+		logger.Fatal("Error initializing extra worker parser:", err)
+	}
 
-	errCrawl := crawler.StartCrawler("https://github.com", 2)
+	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, pageRepo, redisPagesCache, redisRobotsCache)
+
+	errCrawl := crawler.StartCrawler("https://github.com", 2, false)
 	if errCrawl != nil {
 		logger.Fatal("Error starting crawler:", err)
 	}
