@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/go-rod/rod v0.116.2
+	github.com/jimsmart/grobotstxt v1.0.3
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.3
 	github.com/redis/go-redis/v9 v9.14.0
 	go.uber.org/zap v1.27.0

@@ -53,10 +53,11 @@ func main() {
 
 	fetcher := networker.NewNetworker(logger)
 	parser := pageparser.NewParserRepo(logger)
-	redisCache := cache.NewRedisCache("localhost:6379", "", 0, logger)
-	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, pageRepo, redisCache)
+	redisPagesCache := cache.NewRedisCache("localhost:6379", "", 0, logger)
+	redisRobotsCache := cache.NewRedisCache("localhost:6379", "", 1, logger)
+	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, pageRepo, redisPagesCache, redisRobotsCache)
 
-	errCrawl := crawler.StartCrawler("https://lein3000.live/", 2)
+	errCrawl := crawler.StartCrawler("https://github.com", 2)
 	if errCrawl != nil {
 		logger.Fatal("Error starting crawler:", err)
 	}
