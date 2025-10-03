@@ -8,6 +8,7 @@ import (
 	"web-crawler/internal/networker/extraworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
+	"web-crawler/internal/processor"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
 
@@ -51,8 +52,11 @@ func main() {
 	}
 
 	// TODO закрывать кафку в дефере
+	seeds := []string{"localhost:9092"}
 
-	//crawler := webcrawler.NewCrawlerRepo(logger)
+	kafkaManager := processor.NewTaskProcessorKafka(logger, seeds)
+
+	defer kafkaManager.KafkaClient.Close()
 
 	fetcher := networker.NewNetworker(logger)
 	parser := pageparser.NewParserRepo(logger)

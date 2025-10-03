@@ -1,31 +1,31 @@
-package tasksprocessor
+package processor
 
 import (
 	"errors"
-	"time"
+	"sync"
 )
 
-// TODO
+// TODO RUN LOGIC IMPLEMENTATION. THE RUNPROCESSOR HAS TASKPROCESSOR AND EACH TASK IS REFERENCING ITS RUN
 
 var (
 	ErrNoTasks = errors.New("no tasks found")
 )
 
-const (
-	singleRequestTimeout = 5 * time.Second
-	queueTimeout         = 1 * time.Minute
-	tickerTimeout        = 1 * time.Second
-)
-
 type Task struct {
 	ID string
 
-	URL          string
+	URL string
+
 	CurrentDepth int
 	MaxDepth     int
+
+	CurrentLinks int
+	MaxLinks     int
+
+	*sync.RWMutex
 }
 
-type TaskProcessor interface {
+type Processor interface {
 	SendTask(task *Task)
 	GetTask() *Task
 	StartTaskProducer()
