@@ -1,6 +1,12 @@
 package tasksprocessor
 
+import "errors"
+
 // TODO
+
+var (
+	ErrNoTasks = errors.New("no tasks found")
+)
 
 type Task struct {
 	ID string

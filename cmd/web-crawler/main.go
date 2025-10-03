@@ -50,6 +50,8 @@ func main() {
 		logger.Fatal("Error connecting to neo4j:", err)
 	}
 
+	// TODO закрывать кафку в дефере
+
 	//crawler := webcrawler.NewCrawlerRepo(logger)
 
 	fetcher := networker.NewNetworker(logger)
