@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+	"web-crawler/internal/utils"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
@@ -13,8 +14,10 @@ import (
 // TODO
 
 type TaskProcessorKafka struct {
-	Logger      *zap.SugaredLogger
-	KafkaClient *kgo.Client
+	logger            *zap.SugaredLogger
+	kafkaClient       *kgo.Client
+	tasksConsumerChan chan *Task
+	tasksProducerChan chan *Task
 }
 
 func NewTaskProcessorKafka(logger *zap.SugaredLogger, seeds []string) *TaskProcessorKafka {
@@ -29,64 +32,140 @@ func NewTaskProcessorKafka(logger *zap.SugaredLogger, seeds []string) *TaskProce
 	}
 
 	return &TaskProcessorKafka{
-		Logger:      logger,
-		KafkaClient: client,
+		logger:            logger,
+		kafkaClient:       client,
+		tasksConsumerChan: make(chan *Task, 50),
+		tasksProducerChan: make(chan *Task, 50),
 	}
 }
 
-func (p *TaskProcessorKafka) AddTask(task *Task) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+func (p *TaskProcessorKafka) SendTask(task *Task) {
+	p.tasksProducerChan <- task
+}
 
-	bytes, err := json.Marshal(task)
-	if err != nil {
-		p.Logger.Warnw("Failed to marshal task to json", "task", task)
-		return
+func (p *TaskProcessorKafka) GetTask() *Task {
+	return <-p.tasksConsumerChan
+}
+
+func (p *TaskProcessorKafka) StartTaskProducer() {
+	tasks := make([][]byte, 0, 50)
+	flushTicker := time.NewTicker(1 * time.Second)
+	defer flushTicker.Stop()
+
+	for {
+		select {
+		case task := <-p.tasksProducerChan:
+			bytes, err := json.Marshal(task)
+			if err != nil {
+				p.logger.Warnw("Failed to marshal task to json", "task", task)
+				continue
+			}
+			tasks = append(tasks, bytes)
+			if len(tasks) >= 50 {
+				p.sendTasks(tasks)
+				tasks = make([][]byte, 0, 50)
+			}
+		case <-flushTicker.C:
+			if len(tasks) > 0 {
+				p.sendTasks(tasks)
+				tasks = make([][]byte, 0, 50)
+			}
+		}
 	}
+}
 
-	record := &kgo.Record{
-		Topic: "tasks",
-		Value: bytes,
+func (p *TaskProcessorKafka) sendTasks(tasks [][]byte) {
+	records := make([]*kgo.Record, 0, len(tasks))
+
+	for _, taskBytes := range tasks {
+		record := &kgo.Record{
+			Topic: "tasks",
+			Value: taskBytes,
+		}
+		records = append(records, record)
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	p.KafkaClient.Produce(ctx, record, func(_ *kgo.Record, err error) {
-		if err != nil {
-			p.Logger.Warnw("Failed to produce task record in kafka", "record", record)
-		}
-	})
+
+	for _, record := range records {
+		wg.Add(1)
+		p.produceRecord(record, &wg)
+	}
 	wg.Wait()
 }
 
-func (p *TaskProcessorKafka) GetTask() (*Task, error) {
+func (p *TaskProcessorKafka) produceRecord(record *kgo.Record, wg *sync.WaitGroup) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	p.kafkaClient.Produce(ctx, record, func(_ *kgo.Record, err error) {
+		wg.Done()
+		if err != nil {
+			p.logger.Warnw("Failed to produce taskBytes record in kafka", "record", record)
+		}
+	})
+}
+
+func (p *TaskProcessorKafka) StartTaskConsumer() {
+	timer := time.NewTimer(1 * time.Minute)
+
+	utils.DrainTimer(timer)
+
+	for {
+		fetches := p.getFetches()
+		iter := fetches.RecordIter()
+
+		var recordsToCommit []*kgo.Record
+
+		for !iter.Done() {
+			record := iter.Next()
+
+			if record == nil {
+				continue
+			}
+
+			task := new(Task)
+			if err := json.Unmarshal(record.Value, task); err != nil {
+				p.logger.Warnw("Failed to unmarshal task from kafka", "record", record, "err", err)
+				continue
+			}
+
+			timer.Reset(1 * time.Minute)
+
+			select {
+			case p.tasksConsumerChan <- task:
+				utils.DrainTimer(timer)
+			case <-time.After(1 * time.Minute):
+				p.logger.Warnw("Dropping task due to slow consumer or full channel", "task", task)
+			}
+
+			recordsToCommit = append(recordsToCommit, record)
+		}
+
+		if len(recordsToCommit) > 0 {
+			p.commitRecords(recordsToCommit...)
+		}
+	}
+}
+
+func (p *TaskProcessorKafka) getFetches() kgo.Fetches {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return p.kafkaClient.PollFetches(ctx)
+}
+
+func (p *TaskProcessorKafka) commitRecords(records ...*kgo.Record) {
+	if len(records) == 0 {
+		p.logger.Warnw("No records to commit", "records", records)
+		return
+	}
 
 	commitCtx, commitCancel := context.WithTimeout(context.Background(), 7*time.Second)
 	defer commitCancel()
 
-	fetches := p.KafkaClient.PollFetches(ctx)
-	iter := fetches.RecordIter()
-
-	var record *kgo.Record
-	for !iter.Done() {
-		record = iter.Next()
-
-		if record == nil {
-			continue
-		}
-
-		var task Task
-		if err := json.Unmarshal(record.Value, &task); err != nil {
-			p.Logger.Warnw("Failed to unmarshal task from kafka", "record", record)
-			continue
-		}
-
-		//p.KafkaClient.CommitOffsets(commitCtx, record)
-
-		return &task, nil
+	err := p.kafkaClient.CommitRecords(commitCtx, records...)
+	if err != nil {
+		p.logger.Warnw("Failed to commit task records in kafka", "records", records)
 	}
-
-	return nil, ErrNoTasks
 }

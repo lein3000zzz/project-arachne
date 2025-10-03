@@ -17,6 +17,8 @@ type Task struct {
 }
 
 type TaskProcessor interface {
-	AddTask()
-	GetTask()
+	SendTask(task *Task)
+	GetTask() *Task
+	StartTaskProducer()
+	StartTaskConsumer()
 }
