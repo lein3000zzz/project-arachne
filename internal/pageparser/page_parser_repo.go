@@ -10,12 +10,12 @@ import (
 	"golang.org/x/net/html"
 )
 
-type ParserRepo struct {
+type ParserBasic struct {
 	Logger *zap.SugaredLogger
 }
 
-func NewParserRepo(logger *zap.SugaredLogger) *ParserRepo {
-	return &ParserRepo{
+func NewParserRepo(logger *zap.SugaredLogger) *ParserBasic {
+	return &ParserBasic{
 		Logger: logger,
 	}
 }
@@ -24,7 +24,7 @@ var (
 	ErrEmptyURL = errors.New("empty URL")
 )
 
-func (repo *ParserRepo) ParseLinks(body []byte, base string) []string {
+func (p *ParserBasic) ParseLinks(body []byte, base string) []string {
 	seen := map[string]struct{}{}
 	var links []string
 
@@ -32,17 +32,17 @@ func (repo *ParserRepo) ParseLinks(body []byte, base string) []string {
 	if base != "" {
 		if parsedURL, err := url.Parse(base); err == nil {
 			baseURL = parsedURL
-		} else if repo.Logger != nil {
-			repo.Logger.Warnw("invalid base URL, skipping resolution", "base", base, "err", err)
+		} else if p.Logger != nil {
+			p.Logger.Warnw("invalid base URL, skipping resolution", "base", base, "err", err)
 		}
 	}
 
 	doc, err := html.Parse(bytes.NewReader(body))
 	if err == nil {
-		repo.extractLinksFromNode(doc, seen, baseURL)
+		p.extractLinksFromNode(doc, seen, baseURL)
 	}
 
-	repo.regexFallback(body, seen, baseURL)
+	p.regexFallback(body, seen, baseURL)
 
 	for u := range seen {
 		links = append(links, u)
@@ -51,7 +51,7 @@ func (repo *ParserRepo) ParseLinks(body []byte, base string) []string {
 	return links
 }
 
-func (repo *ParserRepo) normalizeURL(url string) string {
+func (p *ParserBasic) normalizeURL(url string) string {
 	url = strings.TrimSpace(url)
 	url = strings.Trim(url, `"'`)
 
@@ -71,7 +71,7 @@ func (repo *ParserRepo) normalizeURL(url string) string {
 		url = "http:" + url
 	}
 
-	if !repo.checkAllowedPrefixes(url) {
+	if !p.checkAllowedPrefixes(url) {
 		if i := strings.Index(url, ":"); i >= 0 {
 			if j := strings.IndexAny(url, "/?#"); j == -1 || i < j {
 				return ""
@@ -95,7 +95,7 @@ func (repo *ParserRepo) normalizeURL(url string) string {
 	return url
 }
 
-func (repo *ParserRepo) checkAllowedPrefixes(url string) bool {
+func (p *ParserBasic) checkAllowedPrefixes(url string) bool {
 	urlLower := strings.ToLower(url)
 	allowedPrefixes := []string{"http://", "https://", "/", "./", "../"}
 	hasAllowed := false
@@ -108,7 +108,7 @@ func (repo *ParserRepo) checkAllowedPrefixes(url string) bool {
 	return hasAllowed
 }
 
-func (repo *ParserRepo) extractFromSrcset(val string, seen map[string]struct{}, base *url.URL) {
+func (p *ParserBasic) extractFromSrcset(val string, seen map[string]struct{}, base *url.URL) {
 	parts := strings.Split(val, ",")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -119,13 +119,13 @@ func (repo *ParserRepo) extractFromSrcset(val string, seen map[string]struct{}, 
 		if len(fields) == 0 {
 			continue
 		}
-		if urlNormalized := repo.normalizeURL(fields[0]); urlNormalized != "" {
-			repo.resolveAndAdd(urlNormalized, seen, base)
+		if urlNormalized := p.normalizeURL(fields[0]); urlNormalized != "" {
+			p.resolveAndAdd(urlNormalized, seen, base)
 		}
 	}
 }
 
-func (repo *ParserRepo) extractLinksFromNode(node *html.Node, seen map[string]struct{}, base *url.URL) {
+func (p *ParserBasic) extractLinksFromNode(node *html.Node, seen map[string]struct{}, base *url.URL) {
 	if node == nil {
 		return
 	}
@@ -138,21 +138,21 @@ func (repo *ParserRepo) extractLinksFromNode(node *html.Node, seen map[string]st
 
 			switch attribute.Key {
 			case "srcset", "data-srcset":
-				repo.extractFromSrcset(attribute.Val, seen, base)
+				p.extractFromSrcset(attribute.Val, seen, base)
 			default:
-				if urlNormalized := repo.normalizeURL(attribute.Val); urlNormalized != "" {
-					repo.resolveAndAdd(urlNormalized, seen, base)
+				if urlNormalized := p.normalizeURL(attribute.Val); urlNormalized != "" {
+					p.resolveAndAdd(urlNormalized, seen, base)
 				}
 			}
 		}
 	}
 
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		repo.extractLinksFromNode(child, seen, base)
+		p.extractLinksFromNode(child, seen, base)
 	}
 }
 
-func (repo *ParserRepo) regexFallback(body []byte, seen map[string]struct{}, base *url.URL) {
+func (p *ParserBasic) regexFallback(body []byte, seen map[string]struct{}, base *url.URL) {
 	for _, regexMatch := range urlRegex.FindAll(body, -1) {
 		foundURL := strings.TrimSpace(string(regexMatch))
 		for len(foundURL) > 0 {
@@ -168,15 +168,16 @@ func (repo *ParserRepo) regexFallback(body []byte, seen map[string]struct{}, bas
 			continue
 		}
 
-		if urlNormalized := repo.normalizeURL(foundURL); urlNormalized != "" {
-			repo.resolveAndAdd(urlNormalized, seen, base)
+		if urlNormalized := p.normalizeURL(foundURL); urlNormalized != "" {
+			p.resolveAndAdd(urlNormalized, seen, base)
 		}
 	}
 }
 
-func (repo *ParserRepo) resolveAndAdd(raw string, seen map[string]struct{}, base *url.URL) {
+func (p *ParserBasic) resolveAndAdd(raw string, seen map[string]struct{}, base *url.URL) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
+		p.Logger.Warnw("failed to parse url", "raw", raw, "err", err)
 		return
 	}
 
@@ -193,5 +194,6 @@ func (repo *ParserRepo) resolveAndAdd(raw string, seen map[string]struct{}, base
 	// 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	// }
 
+	p.Logger.Infow("resolved url", "url", parsed.String())
 	seen[parsed.String()] = struct{}{}
 }
