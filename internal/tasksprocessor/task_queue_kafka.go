@@ -43,13 +43,18 @@ func (p *TaskProcessorKafka) SendTask(task *Task) {
 	p.tasksProducerChan <- task
 }
 
-func (p *TaskProcessorKafka) GetTask() *Task {
-	return <-p.tasksConsumerChan
+func (p *TaskProcessorKafka) GetTask() (*Task, error) {
+	select {
+	case task := <-p.tasksConsumerChan:
+		return task, nil
+	case <-time.After(singleRequestTimeout):
+		return nil, ErrNoTasks
+	}
 }
 
 func (p *TaskProcessorKafka) StartTaskProducer() {
 	tasks := make([][]byte, 0, 50)
-	flushTicker := time.NewTicker(1 * time.Second)
+	flushTicker := time.NewTicker(tickerTimeout)
 	defer flushTicker.Stop()
 
 	for {
@@ -60,13 +65,16 @@ func (p *TaskProcessorKafka) StartTaskProducer() {
 				p.logger.Warnw("Failed to marshal task to json", "task", task)
 				continue
 			}
+
 			tasks = append(tasks, bytes)
 			if len(tasks) >= 50 {
+				p.logger.Infow("Producing tasks", "tasks", tasks)
 				p.sendTasks(tasks)
 				tasks = make([][]byte, 0, 50)
 			}
 		case <-flushTicker.C:
 			if len(tasks) > 0 {
+				p.logger.Infow("Producing tasks", "tasks", tasks)
 				p.sendTasks(tasks)
 				tasks = make([][]byte, 0, 50)
 			}
@@ -95,7 +103,7 @@ func (p *TaskProcessorKafka) sendTasks(tasks [][]byte) {
 }
 
 func (p *TaskProcessorKafka) produceRecord(record *kgo.Record, wg *sync.WaitGroup) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), singleRequestTimeout)
 	defer cancel()
 
 	p.kafkaClient.Produce(ctx, record, func(_ *kgo.Record, err error) {
@@ -107,8 +115,7 @@ func (p *TaskProcessorKafka) produceRecord(record *kgo.Record, wg *sync.WaitGrou
 }
 
 func (p *TaskProcessorKafka) StartTaskConsumer() {
-	timer := time.NewTimer(1 * time.Minute)
-
+	timer := time.NewTimer(queueTimeout)
 	utils.DrainTimer(timer)
 
 	for {
@@ -130,12 +137,12 @@ func (p *TaskProcessorKafka) StartTaskConsumer() {
 				continue
 			}
 
-			timer.Reset(1 * time.Minute)
+			timer.Reset(queueTimeout)
 
 			select {
 			case p.tasksConsumerChan <- task:
 				utils.DrainTimer(timer)
-			case <-time.After(1 * time.Minute):
+			case <-time.After(queueTimeout):
 				p.logger.Warnw("Dropping task due to slow consumer or full channel", "task", task)
 			}
 
@@ -149,7 +156,7 @@ func (p *TaskProcessorKafka) StartTaskConsumer() {
 }
 
 func (p *TaskProcessorKafka) getFetches() kgo.Fetches {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), singleRequestTimeout)
 	defer cancel()
 
 	return p.kafkaClient.PollFetches(ctx)
@@ -161,7 +168,7 @@ func (p *TaskProcessorKafka) commitRecords(records ...*kgo.Record) {
 		return
 	}
 
-	commitCtx, commitCancel := context.WithTimeout(context.Background(), 7*time.Second)
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), singleRequestTimeout)
 	defer commitCancel()
 
 	err := p.kafkaClient.CommitRecords(commitCtx, records...)

@@ -1,11 +1,20 @@
 package tasksprocessor
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // TODO
 
 var (
 	ErrNoTasks = errors.New("no tasks found")
+)
+
+const (
+	singleRequestTimeout = 5 * time.Second
+	queueTimeout         = 1 * time.Minute
+	tickerTimeout        = 1 * time.Second
 )
 
 type Task struct {
