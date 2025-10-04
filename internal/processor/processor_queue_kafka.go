@@ -22,10 +22,56 @@ func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, ru
 	}
 }
 
+func (p *QueueProcessor) StartRun(run *Run) {
+	task := &Task{
+		Run:          run,
+		URL:          run.StartURL,
+		CurrentDepth: 0,
+	}
+
+	p.SendTask(task)
+}
+
 func (p *QueueProcessor) SendTask(task *Task) {
 	bytes, err := json.Marshal(task)
 	if err != nil {
 		p.logger.Warnw("Failed to marshal task to json", "task", task)
+		return
+	}
+
+	task.Run.Lock()
+	defer task.Run.Unlock()
+
+	if task.Run.CurrentLinks >= task.Run.MaxLinks || task.CurrentDepth >= task.Run.MaxDepth {
+		p.logger.Warnw("Task limit for links or depth is reached", "RunID", task.Run.ID)
+		return
+	}
+
+	task.Run.CurrentLinks++
+
+	p.tasksQueue.GetProducerChan() <- bytes
+}
+
+func (p *QueueProcessor) GetRun() (*Run, error) {
+	select {
+	case runBytes := <-p.runQueue.GetConsumerChan():
+		run := new(Run)
+
+		if err := json.Unmarshal(runBytes, run); err != nil {
+			p.logger.Warnw("Failed to unmarshal run from kafka", "record", runBytes, "err", err)
+			return nil, err
+		}
+
+		return run, nil
+	case <-time.After(queue.SingleRequestTimeout):
+		return nil, ErrNoRuns
+	}
+}
+
+func (p *QueueProcessor) QueueRun(run *Run) {
+	bytes, err := json.Marshal(run)
+	if err != nil {
+		p.logger.Warnw("Failed to marshal task to json", "run", run)
 		return
 	}
 
