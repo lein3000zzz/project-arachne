@@ -8,33 +8,47 @@ import (
 // TODO RUN LOGIC IMPLEMENTATION. THE RUNPROCESSOR HAS TASKPROCESSOR AND EACH TASK IS REFERENCING ITS RUN
 
 var (
-	ErrNoTasks = errors.New("no tasks found")
-	ErrNoRuns  = errors.New("no runs found")
+	ErrNoTasks          = errors.New("no tasks found")
+	ErrNoRuns           = errors.New("no runs found")
+	ErrRunLimitExceeded = errors.New("run limit exceeded")
 )
 
 type Run struct {
 	ID string
 
+	UseCacheFlag bool
+	MaxDepth     int
+	MaxLinks     int
+	ExtraFlags   *ExtraTaskFlags
+
 	StartURL string
 
-	MaxDepth int
-	MaxLinks int
-
-	CurrentLinks int
+	currentLinks int
 	*sync.RWMutex
 }
 
-type Task struct {
-	URL string
+func (run *Run) IncrementLinks() {
+	run.Lock()
+	defer run.Unlock()
 
+	run.currentLinks++
+}
+
+type Task struct {
+	URL          string
 	CurrentDepth int
-	Run          *Run
+
+	Run *Run
+}
+
+type ExtraTaskFlags struct {
+	ShouldScreenshot  bool
+	ParseRenderedHTML bool
 }
 
 type Processor interface {
-	StartRun(run *Run)
-	SendTask(task *Task)
-	GetTask() *Task
-	StartTaskProducer()
-	StartTaskConsumer()
+	GetRun() (*Run, error)
+	QueueRun(run *Run)
+	SendTask(task *Task) error
+	GetTask() (*Task, error)
 }

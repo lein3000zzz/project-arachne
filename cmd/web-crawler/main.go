@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 	"web-crawler/internal/networker"
-	"web-crawler/internal/networker/extraworker"
+	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
@@ -62,7 +62,7 @@ func main() {
 	parser := pageparser.NewParserRepo(logger)
 	redisPagesCache := cache.NewRedisCache("localhost:6379", "", 0, logger)
 	redisRobotsCache := cache.NewRedisCache("localhost:6379", "", 1, logger)
-	extraWorker, errRod := extraworker.NewExtraRodParser(logger)
+	extraWorker, errRod := sugaredworker.NewExtraRodParser(logger)
 	if errRod != nil {
 		logger.Fatal("Error initializing extra worker parser:", err)
 	}
