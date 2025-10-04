@@ -138,23 +138,26 @@ func (q *KafkaQueue) sendToKafka(items [][]byte) {
 		records = append(records, record)
 	}
 
+	q.produceRecords(records)
+}
+
+func (q *KafkaQueue) produceRecords(records []*kgo.Record) {
+	ctx, cancel := context.WithTimeout(context.Background(), SingleRequestTimeout)
+	defer cancel()
+
 	var wg sync.WaitGroup
 
 	for _, record := range records {
 		wg.Add(1)
-		q.produceRecord(record, &wg)
+		q.KafkaClient.Produce(ctx, record, func(_ *kgo.Record, err error) {
+			defer wg.Done()
+			if err != nil {
+				q.logger.Warnw("Failed to produce taskBytes record in kafka", "record", record, "err", err)
+			}
+		})
 	}
+
 	wg.Wait()
-}
 
-func (q *KafkaQueue) produceRecord(record *kgo.Record, wg *sync.WaitGroup) {
-	ctx, cancel := context.WithTimeout(context.Background(), SingleRequestTimeout)
-	defer cancel()
-
-	q.KafkaClient.Produce(ctx, record, func(_ *kgo.Record, err error) {
-		wg.Done()
-		if err != nil {
-			q.logger.Warnw("Failed to produce taskBytes record in kafka", "record", record)
-		}
-	})
+	q.logger.Infow("Produced items", "items", records)
 }

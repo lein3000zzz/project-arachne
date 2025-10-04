@@ -3,7 +3,7 @@ package queue
 import "time"
 
 const (
-	SingleRequestTimeout = 5 * time.Second
+	SingleRequestTimeout = 10 * time.Second
 	queueTimeout         = 1 * time.Minute
 	tickerTimeout        = 1 * time.Second
 )

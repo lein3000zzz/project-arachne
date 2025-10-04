@@ -26,6 +26,8 @@ type CrawlerRepo struct {
 	PageRepo    pages.PageDataRepo
 	CachePages  cache.CachedStorage
 	CacheRobots cache.CachedStorage
+
+	RunLimiter chan struct{}
 }
 
 func NewCrawlerRepo(logger *zap.SugaredLogger, parser pageparser.PageParser, networker networker.Networker, extraWorker sugaredworker.SugaredWorker, pageRepo pages.PageDataRepo, cachePages cache.CachedStorage, cacheRobots cache.CachedStorage, processor processor.Processor) *CrawlerRepo {
@@ -38,10 +40,12 @@ func NewCrawlerRepo(logger *zap.SugaredLogger, parser pageparser.PageParser, net
 		Processor:   processor,
 		CachePages:  cachePages,
 		CacheRobots: cacheRobots,
+
+		// Вот эта сказка гарантирует последовательность ранов
+		RunLimiter: make(chan struct{}, ConcurrentRunsLimit),
 	}
 }
 
-// TODO Гениально. сделать ratelim. Каналы не гарантируют последовательность, но мы делаем последовательность через кафку
 func (repo *CrawlerRepo) StartCrawler() error {
 	err := repo.PageRepo.EnsureConnectivity()
 	if err != nil {
@@ -49,14 +53,15 @@ func (repo *CrawlerRepo) StartCrawler() error {
 		return err
 	}
 
-	for i := range ConcurrencyLimit {
-		go repo.Crawl(i)
+	for idx := range ConcurrentTasksLimit {
+		go repo.crawl(idx)
 	}
 
 	return nil
 }
 
-func (repo *CrawlerRepo) Crawl(index int) {
+func (repo *CrawlerRepo) crawl(index int) {
+	repo.Logger.Infof("Started Crawling goroutine %d", index)
 	for {
 		task, err := repo.Processor.GetTask()
 		if err != nil {
@@ -64,60 +69,78 @@ func (repo *CrawlerRepo) Crawl(index int) {
 			continue
 		}
 
-		canParse := repo.isAllowedByRobots(task.URL)
-		if !canParse {
-			repo.Logger.Warnw("Skipping link because of robots.txt", "url", task.URL, "goroutine index", index)
-			continue
+		repo.processTask(task, index)
+	}
+}
+
+func (repo *CrawlerRepo) processTask(task *processor.Task, index int) {
+	defer repo.onTaskDone(task.Run)
+
+	canParse := repo.isAllowedByRobots(task.URL)
+	if !canParse {
+		repo.Logger.Warnw("Skipping link because of robots.txt", "url", task.URL, "goroutine index", index)
+		return
+	}
+
+	repo.Logger.Infow("Crawling link", "url", task.URL, "goroutine index", index)
+
+	if task.Run.UseCacheFlag {
+		cachedLinks, errCachedLinks := repo.getCachedLinks(task)
+		if errCachedLinks == nil {
+			repo.sendNewTasksFromLinks(task, cachedLinks)
+			return
 		}
+	}
 
-		repo.Logger.Infow("Crawling link", "url", task.URL, "goroutine index", index)
+	fetchRes, errFetch := repo.Networker.Fetch(task.URL)
+	if errFetch != nil {
+		repo.Logger.Warnw("Failed to fetch link", "url", task.URL, "depth", task.CurrentDepth, "err", errFetch, "goroutine index", index)
+		return
+	}
 
-		if task.Run.UseCacheFlag {
-			cachedLinks, errCachedLinks := repo.getCachedLinks(task)
-			if errCachedLinks == nil {
-				repo.sendNewTasksFromLinks(task, cachedLinks)
-				continue
-			}
+	if task.Run.ExtraFlags != nil {
+		extra := repo.ExtraWorker.PerformExtraTask(task.URL, task.Run.ExtraFlags)
+
+		if task.Run.ExtraFlags.ParseRenderedHTML {
+			fetchRes.Body = extra.HTMLTask
 		}
+	}
 
-		fetchRes, errFetch := repo.Networker.Fetch(task.URL)
-		if errFetch != nil {
-			repo.Logger.Warnw("Failed to fetch link", "url", task.URL, "depth", task.CurrentDepth, "err", errFetch, "goroutine index", index)
-			continue
+	linksFromThePage := repo.Parser.ParseLinks(fetchRes.Body, task.URL)
+
+	pageData := &pages.PageData{
+		URL:           task.URL,
+		Status:        fetchRes.Status,
+		Links:         linksFromThePage,
+		LastRunID:     task.Run.ID,
+		LastUpdatedAt: time.Now(),
+		FoundAt:       time.Now(),
+		ContentType:   fetchRes.ContentType,
+	}
+
+	errSaving := repo.PageRepo.SavePage(pageData)
+
+	if errSaving != nil {
+		repo.Logger.Warnw("Failed to save page", "url", task.URL, "depth", task.CurrentDepth, "err", errSaving, "goroutine index", index)
+	}
+
+	errCache := repo.CachePages.Set(task.URL, pageData, cache.BaseTTL)
+	if errCache != nil {
+		repo.Logger.Warnw("Failed to cache page", "url", task.URL, "depth", task.CurrentDepth, "err", errCache, "goroutine index", index)
+	}
+
+	repo.sendNewTasksFromLinks(task, linksFromThePage)
+}
+
+func (repo *CrawlerRepo) onTaskDone(run *processor.Run) {
+	left := run.DecrementActiveWithMutex()
+	if left == 0 {
+		select {
+		case <-repo.RunLimiter:
+			repo.Logger.Infow("Run finished; released run slot", "runID", run.ID)
+		default:
+			repo.Logger.Infow("Run finished, but the run slot was already empty for some reason", "runID", run.ID)
 		}
-
-		if task.Run.ExtraFlags != nil {
-			extra := repo.ExtraWorker.PerformExtraTask(task.URL, task.Run.ExtraFlags)
-
-			if task.Run.ExtraFlags.ParseRenderedHTML {
-				fetchRes.Body = extra.HTMLTask
-			}
-		}
-
-		linksFromThePage := repo.Parser.ParseLinks(fetchRes.Body, task.URL)
-
-		pageData := &pages.PageData{
-			URL:           task.URL,
-			Status:        fetchRes.Status,
-			Links:         linksFromThePage,
-			LastRunID:     task.Run.ID,
-			LastUpdatedAt: time.Now(),
-			FoundAt:       time.Now(),
-			ContentType:   fetchRes.ContentType,
-		}
-
-		errSaving := repo.PageRepo.SavePage(pageData)
-
-		if errSaving != nil {
-			repo.Logger.Warnw("Failed to save page", "url", task.URL, "depth", task.CurrentDepth, "err", errSaving, "goroutine index", index)
-		}
-
-		errCache := repo.CachePages.Set(task.URL, pageData, cache.BaseTTL)
-		if errCache != nil {
-			repo.Logger.Warnw("Failed to cache page", "url", task.URL, "depth", task.CurrentDepth, "err", errCache, "goroutine index", index)
-		}
-
-		repo.sendNewTasksFromLinks(task, linksFromThePage)
 	}
 }
 
@@ -150,15 +173,18 @@ func (repo *CrawlerRepo) sendNewTasksFromLinks(prevTask *processor.Task, links [
 	}
 }
 
-func (repo *CrawlerRepo) StartRun(run *processor.Run) error {
+func (repo *CrawlerRepo) StartRun() error {
+	repo.RunLimiter <- struct{}{}
+
 	run, err := repo.Processor.GetRun()
 	if err != nil {
 		repo.Logger.Errorf("Error getting run: %v", err)
+		<-repo.RunLimiter
 		return err
 	}
 
 	firstTask := &processor.Task{
-		URL:          run.StartURL,
+		URL:          utils.CorrectURLScheme(run.StartURL),
 		Run:          run,
 		CurrentDepth: 0,
 	}
@@ -166,81 +192,12 @@ func (repo *CrawlerRepo) StartRun(run *processor.Run) error {
 	err = repo.Processor.SendTask(firstTask)
 	if err != nil {
 		repo.Logger.Errorf("Error sending task: %v", err)
+		<-repo.RunLimiter
 		return err
 	}
 
 	return nil
 }
-
-//func (repo *CrawlerRepo) StartCrawler(url string, depth int, extra bool) error {
-//	err := repo.PageRepo.EnsureConnectivity()
-//	if err != nil {
-//		repo.Logger.Errorf("Error ensuring connectivity: %v", err)
-//		return err
-//	}
-//
-//	currDepth := 0
-//	links := []string{url}
-//	for currDepth < depth {
-//		var newLinks []string
-//		for _, link := range links {
-//			canParse := repo.isAllowedByRobots(link)
-//			repo.Logger.Infow("link %")
-//			if !canParse {
-//				repo.Logger.Warnw("Skipping link because of robots.txt", "url", link)
-//				continue
-//			}
-//
-//			cachedPageRaw, errCache := repo.CachePages.Get(link)
-//
-//			var cachedPageData pages.PageData
-//			errUnmarshal := json.Unmarshal([]byte(cachedPageRaw), &cachedPageData)
-//
-//			if errCache == nil && errUnmarshal == nil {
-//				repo.Logger.Infof("using cached page: %s", link)
-//				newLinks = append(newLinks, cachedPageData.Links...)
-//				continue
-//			}
-//
-//			fetchRes, errFetch := repo.Networker.Fetch(link)
-//			if errFetch != nil {
-//				repo.Logger.Warnw("Failed to fetch link", "url", link, "depth", currDepth, "err", errFetch)
-//				continue
-//			}
-//
-//			linksFromThePage := repo.Parser.ParseLinks(fetchRes.Body, link)
-//
-//			pageData := &pages.PageData{
-//				URL:           link,
-//				Status:        fetchRes.Status,
-//				Links:         linksFromThePage,
-//				LastRunID:     "to_be_implemented",
-//				LastUpdatedAt: time.Now(),
-//				FoundAt:       time.Now(),
-//				ContentType:   fetchRes.ContentType,
-//			}
-//
-//			errSaving := repo.PageRepo.SavePage(pageData)
-//
-//			if errSaving != nil {
-//				repo.Logger.Warnw("Failed to save page", "url", link, "depth", currDepth, "err", errCache)
-//			}
-//
-//			//repo.takeScreenshot(link)
-//
-//			errCache = repo.CachePages.Set(link, pageData, cache.BaseTTL)
-//			if errCache != nil {
-//				repo.Logger.Warnw("Failed to cache page", "url", link, "depth", currDepth, "err", errCache)
-//			}
-//
-//			newLinks = append(newLinks, linksFromThePage...)
-//		}
-//		links = newLinks
-//		currDepth++
-//	}
-//
-//	return nil
-//}
 
 func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 	baseURL, err := utils.GetBaseURL(urlToCheck)

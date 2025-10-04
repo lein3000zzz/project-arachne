@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
+	"net/http"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
+	"web-crawler/internal/processor/queue"
+	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
 
@@ -54,9 +56,22 @@ func main() {
 	// TODO закрывать кафку в дефере
 	seeds := []string{"localhost:9092"}
 
-	kafkaManager := processor.NewTaskProcessorKafka(logger, seeds)
+	tasksQueue, errTQ := queue.NewKafkaQueue(logger, seeds, "tasks")
+	runsQueue, errRQ := queue.NewKafkaQueue(logger, seeds, "runs")
 
-	defer kafkaManager.KafkaClient.Close()
+	if errTQ != nil || errRQ != nil {
+		logger.Fatal("Error initializing tasks queue:", errTQ, errRQ)
+	}
+
+	defer tasksQueue.KafkaClient.Close()
+	defer runsQueue.KafkaClient.Close()
+
+	go tasksQueue.StartQueueProducer()
+	go tasksQueue.StartQueueConsumer()
+	go runsQueue.StartQueueProducer()
+	go runsQueue.StartQueueConsumer()
+
+	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue)
 
 	fetcher := networker.NewNetworker(logger)
 	parser := pageparser.NewParserRepo(logger)
@@ -67,23 +82,51 @@ func main() {
 		logger.Fatal("Error initializing extra worker parser:", err)
 	}
 
-	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, pageRepo, redisPagesCache, redisRobotsCache)
+	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, pageRepo, redisPagesCache, redisRobotsCache, processorQueue)
 
-	errCrawl := crawler.StartCrawler("https://github.com", 2, false)
+	errCrawl := crawler.StartCrawler()
 	if errCrawl != nil {
 		logger.Fatal("Error starting crawler:", err)
 	}
 
-	return
-	s := pages.PageData{
-		URL:           "asd.com",
-		Status:        500,
-		Links:         []string{"https://asdik.com"},
-		LastRunID:     "asdasdasd",
-		LastUpdatedAt: time.Now(),
-		FoundAt:       time.Now(),
-		ContentType:   "text/html",
+	id, _ := utils.GenerateID()
+
+	newRun := &processor.Run{
+		ID: id,
+
+		UseCacheFlag: true,
+		MaxDepth:     2,
+		MaxLinks:     100,
+		ExtraFlags:   nil,
+
+		StartURL: "lein3000.live",
+
+		CurrentLinks: 0,
+		ActiveTasks:  0,
 	}
+
+	processorQueue.QueueRun(newRun)
+
+	//time.Sleep(15 * time.Second)
+
+	err = crawler.StartRun()
+	if err != nil {
+		logger.Fatal("Error starting crawler:", err)
+	}
+
+	http.Handle("/asd", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, newRun.ID)
+	}))
+	//return
+	//s := pages.PageData{
+	//	URL:           "asd.com",
+	//	Status:        500,
+	//	Links:         []string{"https://asdik.com"},
+	//	LastRunID:     "asdasdasd",
+	//	LastUpdatedAt: time.Now(),
+	//	FoundAt:       time.Now(),
+	//	ContentType:   "text/html",
+	//}
 
 	//s2 := pages.PageData{
 	//	URL:           "asdik.com",
@@ -95,8 +138,8 @@ func main() {
 	//	ContentType:   "text/html",
 	//}
 
-	errPage := pageRepo.SavePage(&s)
+	//errPage := pageRepo.SavePage(&s)
 	//errPage2 := pageRepo.SavePage(s2)
-	logger.Fatal(errPage)
+	//logger.Fatal(errPage)
 	//logger.Fatal(errPage2)
 }

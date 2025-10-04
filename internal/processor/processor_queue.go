@@ -29,27 +29,28 @@ func (p *QueueProcessor) SendTask(task *Task) error {
 		return err
 	}
 
-	if p.IsRunLimitExceeded(task) {
-		p.logger.Warnw("Task limit exceeded", "task", task)
-		return ErrRunLimitExceeded
+	err = p.updateRunInfo(task)
+	if err != nil {
+		p.logger.Warnw("Failed to update run info", "task", task)
+		return err
 	}
-
-	task.Run.IncrementLinks()
 
 	p.tasksQueue.GetProducerChan() <- bytes
 	return nil
 }
 
-func (p *QueueProcessor) IsRunLimitExceeded(task *Task) bool {
-	task.Run.RLock()
-	defer task.Run.RUnlock()
+func (p *QueueProcessor) updateRunInfo(task *Task) error {
+	task.Run.Lock()
+	defer task.Run.Unlock()
 
-	if task.Run.currentLinks >= task.Run.MaxLinks || task.CurrentDepth >= task.Run.MaxDepth {
+	if task.Run.CurrentLinks >= task.Run.MaxLinks || task.CurrentDepth >= task.Run.MaxDepth {
 		p.logger.Warnw("Task limit for links or depth is reached", "RunID", task.Run.ID)
-		return true
+		return ErrRunLimitExceeded
 	}
 
-	return false
+	task.Run.ActiveTasks++
+	task.Run.CurrentLinks++
+	return nil
 }
 
 func (p *QueueProcessor) GetRun() (*Run, error) {
@@ -61,6 +62,8 @@ func (p *QueueProcessor) GetRun() (*Run, error) {
 			p.logger.Warnw("Failed to unmarshal run from kafka", "record", runBytes, "err", err)
 			return nil, err
 		}
+
+		run.EnsureMutex()
 
 		return run, nil
 	case <-time.After(queue.SingleRequestTimeout):
@@ -75,7 +78,7 @@ func (p *QueueProcessor) QueueRun(run *Run) {
 		return
 	}
 
-	p.tasksQueue.GetProducerChan() <- bytes
+	p.runQueue.GetProducerChan() <- bytes
 }
 
 func (p *QueueProcessor) GetTask() (*Task, error) {

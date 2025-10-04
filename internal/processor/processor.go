@@ -23,15 +23,31 @@ type Run struct {
 
 	StartURL string
 
-	currentLinks int
+	CurrentLinks int
+	ActiveTasks  int
 	*sync.RWMutex
 }
 
-func (run *Run) IncrementLinks() {
+func (run *Run) IncrementActiveWithMutex() int {
 	run.Lock()
 	defer run.Unlock()
 
-	run.currentLinks++
+	run.ActiveTasks++
+	return run.ActiveTasks
+}
+
+func (run *Run) DecrementActiveWithMutex() int {
+	run.Lock()
+	defer run.Unlock()
+
+	run.ActiveTasks--
+	return run.ActiveTasks
+}
+
+func (run *Run) EnsureMutex() {
+	if run.RWMutex == nil {
+		run.RWMutex = &sync.RWMutex{}
+	}
 }
 
 type Task struct {

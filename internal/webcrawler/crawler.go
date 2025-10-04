@@ -1,9 +1,10 @@
 package webcrawler
 
 const (
-	ConcurrencyLimit = 20
+	ConcurrentTasksLimit = 20
+	ConcurrentRunsLimit  = 1
 )
 
 type Crawler interface {
-	//Fetch(url string) ([]byte, error)
+	StartCrawler() error
 }
