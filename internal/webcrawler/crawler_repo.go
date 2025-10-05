@@ -229,7 +229,7 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 
 	robots = string(responseData.Body)
 
-	errSaveCache := repo.CacheRobots.Set(urlToCheck, string(responseData.Body), cache.BaseTTL)
+	errSaveCache := repo.CacheRobots.Set(baseURL, string(responseData.Body), cache.BaseTTL)
 	if errSaveCache != nil {
 		repo.Logger.Warnw("failed to save cache", "url", baseURL, "err", errSaveCache)
 	}
