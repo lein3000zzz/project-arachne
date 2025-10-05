@@ -3,6 +3,7 @@ package processor
 import (
 	"encoding/json"
 	"time"
+	"web-crawler/internal/config"
 	"web-crawler/internal/processor/queue"
 
 	"go.uber.org/zap"
@@ -22,7 +23,7 @@ func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, ru
 	}
 }
 
-func (p *QueueProcessor) SendTask(task *Task) error {
+func (p *QueueProcessor) SendTask(task *config.Task) error {
 	bytes, err := json.Marshal(task)
 	if err != nil {
 		p.logger.Warnw("Failed to marshal task to json", "task", task)
@@ -39,7 +40,7 @@ func (p *QueueProcessor) SendTask(task *Task) error {
 	return nil
 }
 
-func (p *QueueProcessor) updateRunInfo(task *Task) error {
+func (p *QueueProcessor) updateRunInfo(task *config.Task) error {
 	task.Run.Lock()
 	defer task.Run.Unlock()
 
@@ -53,10 +54,10 @@ func (p *QueueProcessor) updateRunInfo(task *Task) error {
 	return nil
 }
 
-func (p *QueueProcessor) GetRun() (*Run, error) {
+func (p *QueueProcessor) GetRun() (*config.Run, error) {
 	select {
 	case runBytes := <-p.runQueue.GetConsumerChan():
-		run := new(Run)
+		run := new(config.Run)
 
 		if err := json.Unmarshal(runBytes, run); err != nil {
 			p.logger.Warnw("Failed to unmarshal run from kafka", "record", runBytes, "err", err)
@@ -69,7 +70,7 @@ func (p *QueueProcessor) GetRun() (*Run, error) {
 	}
 }
 
-func (p *QueueProcessor) QueueRun(run *Run) {
+func (p *QueueProcessor) QueueRun(run *config.Run) {
 	bytes, err := json.Marshal(run)
 	if err != nil {
 		p.logger.Warnw("Failed to marshal task to json", "run", run)
@@ -79,10 +80,10 @@ func (p *QueueProcessor) QueueRun(run *Run) {
 	p.runQueue.GetProducerChan() <- bytes
 }
 
-func (p *QueueProcessor) GetTask() (*Task, error) {
+func (p *QueueProcessor) GetTask() (*config.Task, error) {
 	select {
 	case taskBytes := <-p.tasksQueue.GetConsumerChan():
-		task := new(Task)
+		task := new(config.Task)
 
 		if err := json.Unmarshal(taskBytes, task); err != nil {
 			p.logger.Warnw("Failed to unmarshal task from kafka", "record", taskBytes, "err", err)

@@ -3,7 +3,7 @@ package sugaredworker
 import (
 	"fmt"
 	"net/url"
-	"web-crawler/internal/processor"
+	"web-crawler/internal/config"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -59,7 +59,7 @@ func (p *ExtraRodWorker) RestartBrowserAndLauncher() error {
 	return nil
 }
 
-func (p *ExtraRodWorker) PerformExtraTask(pageURL string, flags *processor.ExtraTaskFlags) *ExtraTaskRes {
+func (p *ExtraRodWorker) PerformExtraTask(pageURL string, flags *config.ExtraTaskFlags) *ExtraTaskRes {
 	page := p.getPageFromURL(pageURL)
 
 	res := new(ExtraTaskRes)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"time"
+	"web-crawler/internal/config"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
@@ -75,7 +76,7 @@ func (repo *CrawlerRepo) crawl(index int) {
 	}
 }
 
-func (repo *CrawlerRepo) processTask(task *processor.Task, index int) {
+func (repo *CrawlerRepo) processTask(task *config.Task, index int) {
 	defer repo.onTaskDone(task.Run)
 
 	canParse := repo.isAllowedByRobots(task.URL)
@@ -134,7 +135,7 @@ func (repo *CrawlerRepo) processTask(task *processor.Task, index int) {
 	repo.sendNewTasksFromLinks(task, linksFromThePage)
 }
 
-func (repo *CrawlerRepo) onTaskDone(run *processor.Run) {
+func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
 	left := run.DecrementActiveWithMutex()
 	if left == 0 {
 		select {
@@ -146,7 +147,7 @@ func (repo *CrawlerRepo) onTaskDone(run *processor.Run) {
 	}
 }
 
-func (repo *CrawlerRepo) getCachedLinks(task *processor.Task) ([]string, error) {
+func (repo *CrawlerRepo) getCachedLinks(task *config.Task) ([]string, error) {
 	cachedPageRaw, errCache := repo.CachePages.Get(task.URL)
 
 	var cachedPageData pages.PageData
@@ -160,9 +161,9 @@ func (repo *CrawlerRepo) getCachedLinks(task *processor.Task) ([]string, error) 
 	return nil, errors.Join(errCache, errUnmarshal)
 }
 
-func (repo *CrawlerRepo) sendNewTasksFromLinks(prevTask *processor.Task, links []string) {
+func (repo *CrawlerRepo) sendNewTasksFromLinks(prevTask *config.Task, links []string) {
 	for _, link := range links {
-		newTask := &processor.Task{
+		newTask := &config.Task{
 			URL:          link,
 			CurrentDepth: prevTask.CurrentDepth + 1,
 			Run:          prevTask.Run,
@@ -186,7 +187,7 @@ func (repo *CrawlerRepo) StartRunListener() {
 			continue
 		}
 
-		firstTask := &processor.Task{
+		firstTask := &config.Task{
 			URL:          utils.CorrectURLScheme(run.StartURL),
 			Run:          run,
 			CurrentDepth: 0,

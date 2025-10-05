@@ -2,8 +2,7 @@ package processor
 
 import (
 	"errors"
-	"sync"
-	"web-crawler/internal/utils"
+	"web-crawler/internal/config"
 )
 
 // TODO RUN LOGIC IMPLEMENTATION. THE RUNPROCESSOR HAS TASKPROCESSOR AND EACH TASK IS REFERENCING ITS RUN
@@ -14,68 +13,9 @@ var (
 	ErrRunLimitExceeded = errors.New("run limit exceeded")
 )
 
-type Run struct {
-	ID string
-
-	UseCacheFlag bool
-	MaxDepth     int
-	MaxLinks     int
-	ExtraFlags   *ExtraTaskFlags
-
-	StartURL string
-
-	CurrentLinks int
-	ActiveTasks  int
-
-	sync.RWMutex
-}
-
-func NewRun(URL string, maxDepth, maxLinks int, flags *ExtraTaskFlags) *Run {
-	id, _ := utils.GenerateID()
-
-	return &Run{
-		ID:           id,
-		UseCacheFlag: true,
-		MaxDepth:     maxDepth,
-		MaxLinks:     maxLinks,
-		ExtraFlags:   flags,
-		StartURL:     URL,
-		CurrentLinks: 0,
-		ActiveTasks:  0,
-	}
-}
-
-func (run *Run) IncrementActiveWithMutex() int {
-	run.Lock()
-	defer run.Unlock()
-
-	run.ActiveTasks++
-	return run.ActiveTasks
-}
-
-func (run *Run) DecrementActiveWithMutex() int {
-	run.Lock()
-	defer run.Unlock()
-
-	run.ActiveTasks--
-	return run.ActiveTasks
-}
-
-type Task struct {
-	URL          string
-	CurrentDepth int
-
-	Run *Run
-}
-
-type ExtraTaskFlags struct {
-	ShouldScreenshot  bool
-	ParseRenderedHTML bool
-}
-
 type Processor interface {
-	GetRun() (*Run, error)
-	QueueRun(run *Run)
-	SendTask(task *Task) error
-	GetTask() (*Task, error)
+	GetRun() (*config.Run, error)
+	QueueRun(run *config.Run)
+	SendTask(task *config.Task) error
+	GetTask() (*config.Task, error)
 }

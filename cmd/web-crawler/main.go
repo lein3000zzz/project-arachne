@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"web-crawler/internal/config"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
@@ -123,16 +124,16 @@ func main() {
 		makeScreenshot, _ := strconv.ParseBool(r.FormValue("makeScreenshot"))
 		useRenderedHTML, _ := strconv.ParseBool(r.FormValue("useRenderedHTML"))
 
-		var flags *processor.ExtraTaskFlags
+		var flags *config.ExtraTaskFlags
 
 		if makeScreenshot || useRenderedHTML {
-			flags = &processor.ExtraTaskFlags{
+			flags = &config.ExtraTaskFlags{
 				ShouldScreenshot:  makeScreenshot,
 				ParseRenderedHTML: useRenderedHTML,
 			}
 		}
 
-		s := processor.NewRun(val, maxDepth, maxLinks, flags)
+		s := config.NewRun(val, maxDepth, maxLinks, flags)
 
 		crawler.Processor.QueueRun(s)
 		fmt.Println(val)
