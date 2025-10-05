@@ -3,7 +3,7 @@ package queue
 import "time"
 
 const (
-	ProducedRecordsLimit = 50
+	ChannelBufferLimit = 50
 
 	SingleRequestTimeout = 5 * time.Second
 	queueTimeout         = 1 * time.Minute

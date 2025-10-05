@@ -32,8 +32,8 @@ func NewKafkaQueue(logger *zap.SugaredLogger, seeds []string, consumerGroup, top
 		logger:       logger,
 		KafkaClient:  client,
 		topic:        topic,
-		consumerChan: make(chan []byte, 50),
-		producerChan: make(chan []byte, 50),
+		consumerChan: make(chan []byte, ChannelBufferLimit),
+		producerChan: make(chan []byte, ChannelBufferLimit),
 	}, nil
 }
 
@@ -108,7 +108,7 @@ func (q *KafkaQueue) commitRecords(records ...*kgo.Record) {
 }
 
 func (q *KafkaQueue) StartQueueProducer() {
-	items := make([][]byte, 0, ProducedRecordsLimit)
+	items := make([][]byte, 0, ChannelBufferLimit)
 	flushTicker := time.NewTicker(tickerTimeout)
 	defer flushTicker.Stop()
 
@@ -117,10 +117,10 @@ func (q *KafkaQueue) StartQueueProducer() {
 		case item := <-q.producerChan:
 			items = append(items, item)
 			q.logger.Infow("Received item in the procuderChan", "item", item)
-			if len(items) >= ProducedRecordsLimit {
+			if len(items) >= ChannelBufferLimit {
 				q.logger.Infow("Producing items", "items", items)
 				q.sendToKafka(items)
-				items = make([][]byte, 0, ProducedRecordsLimit)
+				items = make([][]byte, 0, ChannelBufferLimit)
 			}
 		case <-flushTicker.C:
 			remainingCap := cap(items) - len(items)
@@ -129,7 +129,7 @@ func (q *KafkaQueue) StartQueueProducer() {
 			if len(items) > 0 {
 				q.logger.Infow("Producing items", "items", items)
 				q.sendToKafka(items)
-				items = make([][]byte, 0, ProducedRecordsLimit)
+				items = make([][]byte, 0, ChannelBufferLimit)
 			}
 		}
 	}
