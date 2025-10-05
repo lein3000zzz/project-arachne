@@ -120,8 +120,19 @@ func main() {
 		val := r.FormValue("URL")
 		maxDepth, _ := strconv.Atoi(r.FormValue("maxDepth"))
 		maxLinks, _ := strconv.Atoi(r.FormValue("maxLinks"))
+		makeScreenshot, _ := strconv.ParseBool(r.FormValue("makeScreenshot"))
+		useRenderedHTML, _ := strconv.ParseBool(r.FormValue("useRenderedHTML"))
 
-		s := processor.NewRun(val, maxDepth, maxLinks)
+		var flags *processor.ExtraTaskFlags
+
+		if makeScreenshot || useRenderedHTML {
+			flags = &processor.ExtraTaskFlags{
+				ShouldScreenshot:  makeScreenshot,
+				ParseRenderedHTML: useRenderedHTML,
+			}
+		}
+
+		s := processor.NewRun(val, maxDepth, maxLinks, flags)
 
 		crawler.Processor.QueueRun(s)
 		fmt.Println(val)

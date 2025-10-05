@@ -30,7 +30,7 @@ type Run struct {
 	sync.RWMutex
 }
 
-func NewRun(URL string, maxDepth, maxLinks int) *Run {
+func NewRun(URL string, maxDepth, maxLinks int, flags *ExtraTaskFlags) *Run {
 	id, _ := utils.GenerateID()
 
 	return &Run{
@@ -38,7 +38,7 @@ func NewRun(URL string, maxDepth, maxLinks int) *Run {
 		UseCacheFlag: true,
 		MaxDepth:     maxDepth,
 		MaxLinks:     maxLinks,
-		ExtraFlags:   nil,
+		ExtraFlags:   flags,
 		StartURL:     URL,
 		CurrentLinks: 0,
 		ActiveTasks:  0,
