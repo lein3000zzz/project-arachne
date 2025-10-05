@@ -63,8 +63,6 @@ func (p *QueueProcessor) GetRun() (*Run, error) {
 			return nil, err
 		}
 
-		run.EnsureMutex()
-
 		return run, nil
 	case <-time.After(queue.SingleRequestTimeout):
 		return nil, ErrNoRuns

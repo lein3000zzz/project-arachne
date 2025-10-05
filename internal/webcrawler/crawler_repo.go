@@ -65,7 +65,9 @@ func (repo *CrawlerRepo) crawl(index int) {
 	for {
 		task, err := repo.Processor.GetTask()
 		if err != nil {
-			repo.Logger.Errorw("Error getting task", "err", err, "goroutine index", index)
+			if !errors.Is(err, processor.ErrNoTasks) {
+				repo.Logger.Errorw("Error getting task", "err", err, "goroutine index", index)
+			}
 			continue
 		}
 
@@ -173,30 +175,29 @@ func (repo *CrawlerRepo) sendNewTasksFromLinks(prevTask *processor.Task, links [
 	}
 }
 
-func (repo *CrawlerRepo) StartRun() error {
-	repo.RunLimiter <- struct{}{}
+func (repo *CrawlerRepo) StartRunListener() {
+	for {
+		repo.RunLimiter <- struct{}{}
 
-	run, err := repo.Processor.GetRun()
-	if err != nil {
-		repo.Logger.Errorf("Error getting run: %v", err)
-		<-repo.RunLimiter
-		return err
+		run, err := repo.Processor.GetRun()
+		if err != nil {
+			repo.Logger.Errorf("Error getting run: %v", err)
+			<-repo.RunLimiter
+			continue
+		}
+
+		firstTask := &processor.Task{
+			URL:          utils.CorrectURLScheme(run.StartURL),
+			Run:          run,
+			CurrentDepth: 0,
+		}
+
+		err = repo.Processor.SendTask(firstTask)
+		if err != nil {
+			repo.Logger.Errorf("Error sending task: %v", err)
+			<-repo.RunLimiter
+		}
 	}
-
-	firstTask := &processor.Task{
-		URL:          utils.CorrectURLScheme(run.StartURL),
-		Run:          run,
-		CurrentDepth: 0,
-	}
-
-	err = repo.Processor.SendTask(firstTask)
-	if err != nil {
-		repo.Logger.Errorf("Error sending task: %v", err)
-		<-repo.RunLimiter
-		return err
-	}
-
-	return nil
 }
 
 func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {

@@ -3,6 +3,7 @@ package processor
 import (
 	"errors"
 	"sync"
+	"web-crawler/internal/utils"
 )
 
 // TODO RUN LOGIC IMPLEMENTATION. THE RUNPROCESSOR HAS TASKPROCESSOR AND EACH TASK IS REFERENCING ITS RUN
@@ -25,7 +26,23 @@ type Run struct {
 
 	CurrentLinks int
 	ActiveTasks  int
-	*sync.RWMutex
+
+	sync.RWMutex
+}
+
+func NewRun(URL string, maxDepth, maxLinks int) *Run {
+	id, _ := utils.GenerateID()
+
+	return &Run{
+		ID:           id,
+		UseCacheFlag: true,
+		MaxDepth:     maxDepth,
+		MaxLinks:     maxLinks,
+		ExtraFlags:   nil,
+		StartURL:     URL,
+		CurrentLinks: 0,
+		ActiveTasks:  0,
+	}
 }
 
 func (run *Run) IncrementActiveWithMutex() int {
@@ -42,12 +59,6 @@ func (run *Run) DecrementActiveWithMutex() int {
 
 	run.ActiveTasks--
 	return run.ActiveTasks
-}
-
-func (run *Run) EnsureMutex() {
-	if run.RWMutex == nil {
-		run.RWMutex = &sync.RWMutex{}
-	}
 }
 
 type Task struct {

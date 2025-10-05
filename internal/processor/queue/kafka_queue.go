@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"time"
-	"web-crawler/internal/utils"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
@@ -18,10 +17,10 @@ type KafkaQueue struct {
 	producerChan chan []byte
 }
 
-func NewKafkaQueue(logger *zap.SugaredLogger, seeds []string, topic string) (*KafkaQueue, error) {
+func NewKafkaQueue(logger *zap.SugaredLogger, seeds []string, consumerGroup, topic string) (*KafkaQueue, error) {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(seeds...),
-		kgo.ConsumerGroup("arachne"),
+		kgo.ConsumerGroup(consumerGroup),
 		kgo.ConsumeTopics(topic),
 	)
 
@@ -47,14 +46,13 @@ func (q *KafkaQueue) GetConsumerChan() chan []byte {
 }
 
 func (q *KafkaQueue) StartQueueConsumer() {
-	timer := time.NewTimer(queueTimeout)
-	utils.DrainTimer(timer)
-
 	for {
 		fetches := q.getFetches()
 		iter := fetches.RecordIter()
 
 		var recordsToCommit []*kgo.Record
+
+		q.logger.Infow("working with some fetches", "fetches", fetches, "iter.Done()", iter.Done())
 
 		for !iter.Done() {
 			record := iter.Next()
@@ -63,14 +61,7 @@ func (q *KafkaQueue) StartQueueConsumer() {
 				continue
 			}
 
-			timer.Reset(queueTimeout)
-
-			select {
-			case q.consumerChan <- record.Value:
-				utils.DrainTimer(timer)
-			case <-time.After(queueTimeout):
-				q.logger.Warnw("Dropping record due to slow consumer or full channel", "record", record)
-			}
+			q.processConsumedRecord(record)
 
 			recordsToCommit = append(recordsToCommit, record)
 		}
@@ -81,9 +72,22 @@ func (q *KafkaQueue) StartQueueConsumer() {
 	}
 }
 
-func (q *KafkaQueue) getFetches() kgo.Fetches {
-	ctx, cancel := context.WithTimeout(context.Background(), SingleRequestTimeout)
+// TODO сейчас те задачки, которые долго висят в очереди, просто пропускаются, то есть коммитятся как выполненные,
+// даже когда это не так, пока что так и нужно
+func (q *KafkaQueue) processConsumedRecord(record *kgo.Record) {
+	ctx, cancel := context.WithTimeout(context.Background(), queueTimeout)
 	defer cancel()
+
+	select {
+	case q.consumerChan <- record.Value:
+		q.logger.Infow("sent record into the consumerChan", "record", record)
+	case <-ctx.Done():
+		q.logger.Warnw("Dropping record due to slow consumer or full channel", "record", record)
+	}
+}
+
+func (q *KafkaQueue) getFetches() kgo.Fetches {
+	ctx := context.Background()
 
 	return q.KafkaClient.PollFetches(ctx)
 }
@@ -104,7 +108,7 @@ func (q *KafkaQueue) commitRecords(records ...*kgo.Record) {
 }
 
 func (q *KafkaQueue) StartQueueProducer() {
-	items := make([][]byte, 0, 50)
+	items := make([][]byte, 0, ProducedRecordsLimit)
 	flushTicker := time.NewTicker(tickerTimeout)
 	defer flushTicker.Stop()
 
@@ -112,17 +116,39 @@ func (q *KafkaQueue) StartQueueProducer() {
 		select {
 		case item := <-q.producerChan:
 			items = append(items, item)
-			if len(items) >= 50 {
+			q.logger.Infow("Received item in the procuderChan", "item", item)
+			if len(items) >= ProducedRecordsLimit {
 				q.logger.Infow("Producing items", "items", items)
 				q.sendToKafka(items)
-				items = make([][]byte, 0, 50)
+				items = make([][]byte, 0, ProducedRecordsLimit)
 			}
 		case <-flushTicker.C:
+			remainingCap := cap(items) - len(items)
+			items = append(items, q.drainLoop(remainingCap)...)
+
 			if len(items) > 0 {
 				q.logger.Infow("Producing items", "items", items)
 				q.sendToKafka(items)
-				items = make([][]byte, 0, 50)
+				items = make([][]byte, 0, ProducedRecordsLimit)
 			}
+		}
+	}
+}
+
+func (q *KafkaQueue) drainLoop(capacity int) [][]byte {
+	drainedItems := make([][]byte, 0, capacity)
+
+	for {
+		select {
+		case item := <-q.producerChan:
+			drainedItems = append(drainedItems, item)
+			q.logger.Infow("Received item in the procuderChan", "item", item)
+
+			if len(drainedItems) >= capacity {
+				return drainedItems
+			}
+		default:
+			return drainedItems
 		}
 	}
 }

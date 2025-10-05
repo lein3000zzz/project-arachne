@@ -3,7 +3,9 @@ package queue
 import "time"
 
 const (
-	SingleRequestTimeout = 10 * time.Second
+	ProducedRecordsLimit = 50
+
+	SingleRequestTimeout = 5 * time.Second
 	queueTimeout         = 1 * time.Minute
 	tickerTimeout        = 1 * time.Second
 )

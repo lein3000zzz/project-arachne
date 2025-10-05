@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
-	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
 
@@ -54,10 +55,10 @@ func main() {
 	}
 
 	// TODO закрывать кафку в дефере
-	seeds := []string{"localhost:9092"}
+	seeds := []string{"localhost:29092"}
 
-	tasksQueue, errTQ := queue.NewKafkaQueue(logger, seeds, "tasks")
-	runsQueue, errRQ := queue.NewKafkaQueue(logger, seeds, "runs")
+	tasksQueue, errTQ := queue.NewKafkaQueue(logger, seeds, "arachne-tasks", "tasks")
+	runsQueue, errRQ := queue.NewKafkaQueue(logger, seeds, "arachne-runs", "runs")
 
 	if errTQ != nil || errRQ != nil {
 		logger.Fatal("Error initializing tasks queue:", errTQ, errRQ)
@@ -89,34 +90,48 @@ func main() {
 		logger.Fatal("Error starting crawler:", err)
 	}
 
-	id, _ := utils.GenerateID()
+	//id, _ := utils.GenerateID()
 
-	newRun := &processor.Run{
-		ID: id,
+	//newRun := &processor.Run{
+	//	ID: id,
+	//
+	//	UseCacheFlag: true,
+	//	MaxDepth:     3,
+	//	MaxLinks:     100,
+	//	ExtraFlags:   nil,
+	//
+	//	StartURL: "example.com",
+	//
+	//	CurrentLinks: 0,
+	//	ActiveTasks:  0,
+	//}
+	//
+	//processorQueue.QueueRun(newRun)
 
-		UseCacheFlag: true,
-		MaxDepth:     2,
-		MaxLinks:     100,
-		ExtraFlags:   nil,
+	//time.Sleep(20 * time.Second) // оно может не совсем моментально быть обработано
 
-		StartURL: "lein3000.live",
+	go crawler.StartRunListener()
 
-		CurrentLinks: 0,
-		ActiveTasks:  0,
-	}
+	http.Handle("/abobus", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		val := r.FormValue("URL")
+		maxDepth, _ := strconv.Atoi(r.FormValue("maxDepth"))
+		maxLinks, _ := strconv.Atoi(r.FormValue("maxLinks"))
 
-	processorQueue.QueueRun(newRun)
+		s := processor.NewRun(val, maxDepth, maxLinks)
 
-	//time.Sleep(15 * time.Second)
-
-	err = crawler.StartRun()
-	if err != nil {
-		logger.Fatal("Error starting crawler:", err)
-	}
-
-	http.Handle("/asd", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, newRun.ID)
+		crawler.Processor.QueueRun(s)
+		fmt.Println(val)
+		w.Write([]byte("Run queued"))
 	}))
+
+	if err := http.ListenAndServe(":28181", nil); err != nil {
+		log.Fatal("HTTP server error:", err)
+	}
+
 	//return
 	//s := pages.PageData{
 	//	URL:           "asd.com",
