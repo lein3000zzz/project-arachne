@@ -1,10 +1,17 @@
 package pageparser
 
-import "regexp"
+import (
+	"errors"
+	"regexp"
+)
 
 type PageParser interface {
 	ParseLinks(body []byte, base string) []string
 }
+
+var (
+	ErrEmptyURL = errors.New("empty URL")
+)
 
 var urlRegex = regexp.MustCompile(`https?://[^\s"'<>]+`)
 

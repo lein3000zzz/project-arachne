@@ -2,26 +2,10 @@ package pageparser
 
 import (
 	"bytes"
-	"errors"
 	"net/url"
 	"strings"
 
-	"go.uber.org/zap"
 	"golang.org/x/net/html"
-)
-
-type ParserBasic struct {
-	Logger *zap.SugaredLogger
-}
-
-func NewParserRepo(logger *zap.SugaredLogger) *ParserBasic {
-	return &ParserBasic{
-		Logger: logger,
-	}
-}
-
-var (
-	ErrEmptyURL = errors.New("empty URL")
 )
 
 func (p *ParserBasic) ParseLinks(body []byte, base string) []string {
