@@ -17,7 +17,9 @@ type ExtraRodWorker struct {
 }
 
 func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
-	l := launcher.New().Headless(true)
+	tempDir := "C:\\Users\\Vladislav\\Downloads\\rodtemp"
+
+	l := launcher.New().UserDataDir(tempDir).Headless(true)
 
 	browserURL, err := l.Launch()
 	if err != nil {
@@ -61,6 +63,14 @@ func (p *ExtraRodWorker) RestartBrowserAndLauncher() error {
 
 func (p *ExtraRodWorker) PerformExtraTask(pageURL string, flags *config.ExtraTaskFlags) *ExtraTaskRes {
 	page := p.getPageFromURL(pageURL)
+	defer p.recoveryHelper()
+
+	defer func(page *rod.Page) {
+		err := page.Close()
+		if err != nil {
+			p.Logger.Warnw("failed to close page", "err", err)
+		}
+	}(page)
 
 	res := new(ExtraTaskRes)
 
@@ -83,6 +93,7 @@ func (p *ExtraRodWorker) PerformExtraTask(pageURL string, flags *config.ExtraTas
 }
 
 func (p *ExtraRodWorker) getPageFromURL(pageURL string) *rod.Page {
+	defer p.recoveryHelper()
 	return p.Browser.MustPage(pageURL)
 }
 
@@ -101,7 +112,7 @@ func (p *ExtraRodWorker) takeScreenshot(pageURL string, page *rod.Page) {
 func (p *ExtraRodWorker) getRenderedHTML(page *rod.Page) string {
 	defer p.recoveryHelper()
 
-	page.MustWaitLoad()
+	page = page.MustWaitLoad()
 
 	return page.MustHTML()
 }
