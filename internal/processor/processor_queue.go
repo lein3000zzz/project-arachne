@@ -44,7 +44,7 @@ func (p *QueueProcessor) updateRunInfo(task *config.Task) error {
 	task.Run.Lock()
 	defer task.Run.Unlock()
 
-	if task.Run.CurrentLinks >= task.Run.MaxLinks || task.CurrentDepth >= task.Run.MaxDepth {
+	if task.Run.CurrentLinks > task.Run.MaxLinks || task.CurrentDepth > task.Run.MaxDepth {
 		p.logger.Warnw("Task limit for links or depth is reached", "RunID", task.Run.ID)
 		return ErrRunLimitExceeded
 	}
