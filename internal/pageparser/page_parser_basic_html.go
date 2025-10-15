@@ -8,7 +8,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-func (p *ParserBasic) ParseLinks(body []byte, base string) []string {
+func (p *ParserBasic) ParseHTML(body []byte, base string) []string {
 	seen := map[string]struct{}{}
 	var links []string
 
@@ -115,6 +115,34 @@ func (p *ParserBasic) extractLinksFromNode(node *html.Node, seen map[string]stru
 	}
 
 	if node.Type == html.ElementNode {
+		if strings.EqualFold(node.Data, "script") {
+			scriptType := attr(node, "type")
+			if p.isJavaScriptType(scriptType) {
+				if attr(node, "src") == "" {
+					var sb strings.Builder
+					for c := node.FirstChild; c != nil; c = c.NextSibling {
+						if c.Type == html.TextNode {
+							sb.WriteString(c.Data)
+						}
+					}
+					js := strings.TrimSpace(sb.String())
+					if js != "" {
+						baseStr := ""
+						if base != nil {
+							baseStr = base.String()
+						}
+						if jsLinks, err := p.ExtractLinksFromJS(baseStr, js); err == nil {
+							for _, u := range jsLinks {
+								seen[u] = struct{}{}
+							}
+						} else if p.Logger != nil {
+							p.Logger.Debugw("inline JS parse error", "err", err)
+						}
+					}
+				}
+			}
+		}
+
 		for _, attribute := range node.Attr {
 			if _, valid := attrsWithURLs[attribute.Key]; !valid {
 				continue
@@ -134,6 +162,30 @@ func (p *ParserBasic) extractLinksFromNode(node *html.Node, seen map[string]stru
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
 		p.extractLinksFromNode(child, seen, base)
 	}
+}
+
+func (p *ParserBasic) isJavaScriptType(t string) bool {
+	t = strings.TrimSpace(strings.ToLower(t))
+	if t == "" {
+		return true
+	}
+	if t == "module" {
+		return true
+	}
+	switch t {
+	case "text/javascript", "application/javascript", "application/ecmascript", "text/ecmascript":
+		return true
+	}
+	return strings.HasSuffix(t, "javascript") || strings.HasSuffix(t, "ecmascript")
+}
+
+func attr(n *html.Node, name string) string {
+	for _, a := range n.Attr {
+		if strings.EqualFold(a.Key, name) {
+			return a.Val
+		}
+	}
+	return ""
 }
 
 func (p *ParserBasic) regexFallback(body []byte, seen map[string]struct{}, base *url.URL) {

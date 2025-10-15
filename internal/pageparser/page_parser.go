@@ -6,7 +6,9 @@ import (
 )
 
 type PageParser interface {
-	ParseLinks(body []byte, base string) []string
+	ParseHTML(body []byte, base string) []string
+	ExtractLinksFromJS(baseURL, src string) ([]string, error)
+	ExtractLinksFromJSON(baseURL string, data []byte) ([]string, error)
 }
 
 var (

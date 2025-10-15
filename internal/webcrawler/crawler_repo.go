@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 	"web-crawler/internal/config"
 	"web-crawler/internal/networker"
@@ -109,7 +110,28 @@ func (repo *CrawlerRepo) processTask(task *config.Task, index int) {
 		}
 	}
 
-	linksFromThePage := repo.Parser.ParseLinks(fetchRes.Body, task.URL)
+	var linksFromThePage []string
+	if strings.HasSuffix(strings.TrimSuffix(task.URL, "/"), ".js") {
+		baseURL, err := utils.GetBaseURL(task.URL)
+
+		if err != nil {
+			repo.Logger.Warnw("failed to get URL", "url", task.URL, "err", err, "goroutine index", index)
+		}
+
+		linksFromThePage, err = repo.Parser.ExtractLinksFromJS(baseURL, string(fetchRes.Body))
+		if err != nil {
+			repo.Logger.Warnw("failed to extract links from js", "url", task.URL, "err", err, "goroutine index", index)
+		}
+	} else {
+		linksFromThePage = repo.Parser.ParseHTML(fetchRes.Body, task.URL)
+
+		var err error
+		jsonLinks, err := repo.Parser.ExtractLinksFromJSON(task.URL, fetchRes.Body)
+		linksFromThePage = append(linksFromThePage, jsonLinks...)
+		if err != nil {
+			repo.Logger.Warnw("failed to extract links from json", "url", task.URL, "err", err, "goroutine index", index)
+		}
+	}
 
 	pageData := &pages.PageData{
 		URL:           task.URL,
@@ -178,14 +200,13 @@ func (repo *CrawlerRepo) sendNewTasksFromLinks(prevTask *config.Task, links []st
 
 func (repo *CrawlerRepo) StartRunListener() {
 	for {
-		repo.RunLimiter <- struct{}{}
-
 		run, err := repo.Processor.GetRun()
 		if err != nil {
 			repo.Logger.Errorf("Error getting run: %v", err)
-			<-repo.RunLimiter
 			continue
 		}
+
+		repo.RunLimiter <- struct{}{}
 
 		firstTask := &config.Task{
 			URL:          utils.CorrectURLScheme(run.StartURL),
