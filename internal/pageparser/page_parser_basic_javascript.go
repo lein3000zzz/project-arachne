@@ -222,13 +222,13 @@ func (p *ParserBasic) ExtractLinksFromJS(baseURL, src string) ([]string, error) 
 
 		case strings.HasSuffix(name, ".open"):
 			if dotExpression, ok := call.Callee.(*ast.DotExpression); ok {
-				if _, ok := dotExpression.Left.(*ast.NewExpression); ok && p.identIsNewXMLHttpRequest(dotExpression.Left) {
+				if p.identIsNewXMLHttpRequest(dotExpression.Left) {
 					if len(call.ArgumentList) >= 2 {
 						if stringExpr, ok := p.evalStringExpr(call.ArgumentList[1], vars, objects); ok {
 							add(stringExpr)
 						}
-						continue
 					}
+					continue
 				}
 			}
 
@@ -246,10 +246,17 @@ func (p *ParserBasic) ExtractLinksFromJS(baseURL, src string) ([]string, error) 
 		add(m)
 	}
 
+	p.walk(parsedJS, func(n ast.Node) {
+		if ex, ok := n.(ast.Expression); ok {
+			if s, ok2 := p.evalStringExpr(ex, vars, objects); ok2 && p.looksLikeRelativePath(s) {
+				add(s)
+			}
+		}
+	})
+
 	for u := range seen {
 		links = append(links, u)
 	}
-
 	return links, nil
 }
 
@@ -735,6 +742,9 @@ func (p *ParserBasic) identIs(e ast.Expression, name string) bool {
 func (p *ParserBasic) identIsNewXMLHttpRequest(e ast.Expression) bool {
 	if ne, ok := e.(*ast.NewExpression); ok {
 		return p.identIs(ne.Callee, "XMLHttpRequest")
+	}
+	if ce, ok := e.(*ast.CallExpression); ok {
+		return p.identIs(ce.Callee, "XMLHttpRequest")
 	}
 	return false
 }
