@@ -159,7 +159,7 @@ func (repo *CrawlerRepo) processTask(task *config.Task, index int) {
 
 func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
 	left := run.DecrementActiveWithMutex()
-	if left == 0 {
+	if left <= 0 {
 		select {
 		case <-repo.RunLimiter:
 			repo.Logger.Infow("Run finished; released run slot", "runID", run.ID)

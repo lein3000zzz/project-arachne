@@ -24,33 +24,33 @@ func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, ru
 }
 
 func (p *QueueProcessor) SendTask(task *config.Task) error {
+	err := p.checkRunInfo(task)
+	if err != nil {
+		p.logger.Warnw("Failed to update run info", "task", task)
+		return err
+	}
+
 	bytes, err := json.Marshal(task)
 	if err != nil {
 		p.logger.Warnw("Failed to marshal task to json", "task", task)
 		return err
 	}
 
-	err = p.updateRunInfo(task)
-	if err != nil {
-		p.logger.Warnw("Failed to update run info", "task", task)
-		return err
-	}
+	task.Run.IncrementActiveAndCurrentWithMutex()
 
 	p.tasksQueue.GetProducerChan() <- bytes
 	return nil
 }
 
-func (p *QueueProcessor) updateRunInfo(task *config.Task) error {
-	task.Run.Lock()
-	defer task.Run.Unlock()
+func (p *QueueProcessor) checkRunInfo(task *config.Task) error {
+	task.Run.RLock()
+	defer task.Run.RUnlock()
 
-	if task.Run.CurrentLinks > task.Run.MaxLinks || task.CurrentDepth > task.Run.MaxDepth {
+	if task.Run.CurrentLinks >= task.Run.MaxLinks || task.CurrentDepth >= task.Run.MaxDepth {
 		p.logger.Warnw("Task limit for links or depth is reached", "RunID", task.Run.ID)
 		return ErrRunLimitExceeded
 	}
 
-	task.Run.ActiveTasks++
-	task.Run.CurrentLinks++
 	return nil
 }
 

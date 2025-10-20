@@ -54,6 +54,14 @@ func (run *Run) DecrementActiveWithMutex() int {
 	return run.ActiveTasks
 }
 
+func (run *Run) IncrementActiveAndCurrentWithMutex() {
+	run.Lock()
+	defer run.Unlock()
+
+	run.ActiveTasks++
+	run.CurrentLinks++
+}
+
 type Task struct {
 	URL          string
 	CurrentDepth int
