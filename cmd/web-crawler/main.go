@@ -113,6 +113,7 @@ func main() {
 
 	go crawler.StartRunListener()
 
+	// will be reworked in the future ofc, just a test version, nw
 	http.Handle("/abobus", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
