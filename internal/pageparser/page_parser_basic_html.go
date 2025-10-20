@@ -63,14 +63,7 @@ func (p *ParserBasic) normalizeURL(url string) string {
 		}
 	}
 
-	for len(url) > 0 {
-		last := url[len(url)-1]
-		if strings.ContainsRune(".,;:!?)\"]}'", rune(last)) {
-			url = url[:len(url)-1]
-			continue
-		}
-		break
-	}
+	url = p.trimTrailingPunctuation(url)
 
 	url = strings.TrimSpace(url)
 	if url == "" {
@@ -79,17 +72,26 @@ func (p *ParserBasic) normalizeURL(url string) string {
 	return url
 }
 
+func (p *ParserBasic) trimTrailingPunctuation(url string) string {
+	return strings.TrimRightFunc(url, func(r rune) bool {
+		switch r {
+		case '.', ',', ';', ':', '!', '?', ')', ']', '}', '\'', '"':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
 func (p *ParserBasic) checkAllowedPrefixes(url string) bool {
 	urlLower := strings.ToLower(url)
 	allowedPrefixes := []string{"http://", "https://", "/", "./", "../"}
-	hasAllowed := false
 	for _, prefix := range allowedPrefixes {
 		if strings.HasPrefix(urlLower, prefix) {
-			hasAllowed = true
-			break
+			return true
 		}
 	}
-	return hasAllowed
+	return false
 }
 
 func (p *ParserBasic) extractFromSrcset(val string, seen map[string]struct{}, base *url.URL) {
@@ -117,27 +119,33 @@ func (p *ParserBasic) extractLinksFromNode(node *html.Node, seen map[string]stru
 	if node.Type == html.ElementNode {
 		if strings.EqualFold(node.Data, "script") {
 			scriptType := attr(node, "type")
+
 			if p.isJavaScriptType(scriptType) {
 				if attr(node, "src") == "" {
 					var sb strings.Builder
+
 					for c := node.FirstChild; c != nil; c = c.NextSibling {
 						if c.Type == html.TextNode {
 							sb.WriteString(c.Data)
 						}
 					}
+
 					js := strings.TrimSpace(sb.String())
 					if js != "" {
 						baseStr := ""
+
 						if base != nil {
 							baseStr = base.String()
 						}
+
 						if jsLinks, err := p.ExtractLinksFromJS(baseStr, js); err == nil {
 							for _, u := range jsLinks {
 								seen[u] = struct{}{}
 							}
-						} else if p.Logger != nil {
+						} else {
 							p.Logger.Debugw("inline JS parse error", "err", err)
 						}
+
 					}
 				}
 			}
@@ -166,17 +174,12 @@ func (p *ParserBasic) extractLinksFromNode(node *html.Node, seen map[string]stru
 
 func (p *ParserBasic) isJavaScriptType(t string) bool {
 	t = strings.TrimSpace(strings.ToLower(t))
-	if t == "" {
-		return true
-	}
-	if t == "module" {
-		return true
-	}
 	switch t {
-	case "text/javascript", "application/javascript", "application/ecmascript", "text/ecmascript":
+	case "", "module", "text/javascript", "application/javascript", "application/ecmascript", "text/ecmascript":
 		return true
+	default:
+		return strings.HasSuffix(t, "javascript") || strings.HasSuffix(t, "ecmascript")
 	}
-	return strings.HasSuffix(t, "javascript") || strings.HasSuffix(t, "ecmascript")
 }
 
 func attr(n *html.Node, name string) string {
@@ -191,14 +194,8 @@ func attr(n *html.Node, name string) string {
 func (p *ParserBasic) regexFallback(body []byte, seen map[string]struct{}, base *url.URL) {
 	for _, regexMatch := range urlRegex.FindAll(body, -1) {
 		foundURL := strings.TrimSpace(string(regexMatch))
-		for len(foundURL) > 0 {
-			last := foundURL[len(foundURL)-1]
-			if strings.ContainsRune(".,;:!?)\"]}'", rune(last)) {
-				foundURL = foundURL[:len(foundURL)-1]
-				continue
-			}
-			break
-		}
+
+		foundURL = p.trimTrailingPunctuation(foundURL)
 
 		if foundURL == "" {
 			continue
@@ -208,28 +205,4 @@ func (p *ParserBasic) regexFallback(body []byte, seen map[string]struct{}, base 
 			p.resolveAndAdd(urlNormalized, seen, base)
 		}
 	}
-}
-
-func (p *ParserBasic) resolveAndAdd(raw string, seen map[string]struct{}, base *url.URL) {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		p.Logger.Warnw("failed to parse url", "raw", raw, "err", err)
-		return
-	}
-
-	if !parsed.IsAbs() && base != nil {
-		parsed = base.ResolveReference(parsed)
-	}
-
-	if parsed.Path == "" {
-		parsed.Path = "/"
-	}
-
-	// Чтобы /a и /a/ считалось как одно и то же, что не совсем корректно, но у этого могут быть юзкейсы
-	// if parsed.Path != "/" && strings.HasSuffix(parsed.Path, "/") {
-	// 	parsed.Path = strings.TrimRight(parsed.Path, "/")
-	// }
-
-	p.Logger.Infow("resolved url", "url", parsed.String())
-	seen[parsed.String()] = struct{}{}
 }

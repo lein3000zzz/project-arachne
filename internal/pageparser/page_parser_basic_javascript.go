@@ -11,10 +11,102 @@ import (
 	"github.com/dop251/goja/token"
 )
 
-// TODO Я знаю, что этот код рефактора требует
-
 type stringer interface {
 	String() string
+}
+
+type nodeVisitor interface {
+	visit(ast.Node)
+}
+
+type jsCollector struct {
+	varInits    map[string]ast.Expression
+	assigns     []*ast.AssignExpression
+	calls       []*ast.CallExpression
+	objLiterals map[string]*ast.ObjectLiteral
+	xhrVars     map[string]struct{}
+}
+
+func newJSCollector() *jsCollector {
+	return &jsCollector{
+		varInits:    make(map[string]ast.Expression),
+		assigns:     make([]*ast.AssignExpression, 0),
+		calls:       make([]*ast.CallExpression, 0),
+		objLiterals: make(map[string]*ast.ObjectLiteral),
+		xhrVars:     make(map[string]struct{}),
+	}
+}
+
+func (c *jsCollector) visit(n ast.Node) {
+	switch node := n.(type) {
+	case *ast.VariableDeclaration:
+		for _, raw := range node.List {
+			name, init := varDeclNameInit(raw)
+
+			if name == "" || init == nil {
+				continue
+			}
+
+			c.varInits[name] = init
+
+			switch typedInit := init.(type) {
+			case *ast.ObjectLiteral:
+				c.objLiterals[name] = typedInit
+			case *ast.NewExpression:
+				if identIs(typedInit.Callee, "XMLHttpRequest") {
+					c.xhrVars[name] = struct{}{}
+				}
+			}
+		}
+	case *ast.AssignExpression:
+		c.assigns = append(c.assigns, node)
+		if identifier, ok := node.Left.(*ast.Identifier); ok {
+			if newExpr, ok2 := node.Right.(*ast.NewExpression); ok2 && identIs(newExpr.Callee, "XMLHttpRequest") {
+				c.xhrVars[identifier.Name.String()] = struct{}{}
+			}
+		}
+	case *ast.CallExpression:
+		c.calls = append(c.calls, node)
+	}
+}
+
+type exprURLVisitor struct {
+	p       *ParserBasic
+	vars    map[string]string
+	objects map[string]map[string]string
+	adder   *linkAdder
+}
+
+func (v *exprURLVisitor) visit(n ast.Node) {
+	if expr, ok := n.(ast.Expression); ok {
+		if s, ok2 := v.p.evalStringExpr(expr, v.vars, v.objects); ok2 && v.p.looksLikeRelativePath(s) {
+			v.adder.Add(s)
+		}
+	}
+}
+
+type linkAdder struct {
+	p    *ParserBasic
+	base *url.URL
+	seen map[string]struct{}
+}
+
+func newLinkAdder(p *ParserBasic, base *url.URL, seen map[string]struct{}) *linkAdder {
+	return &linkAdder{
+		p:    p,
+		base: base,
+		seen: seen,
+	}
+}
+
+func (a *linkAdder) Add(s string) {
+	if !a.p.isURLCandidate(s) {
+		return
+	}
+
+	if normalized := a.p.normalizeURL(s); normalized != "" {
+		a.p.resolveAndAdd(normalized, a.seen, a.base)
+	}
 }
 
 func (p *ParserBasic) ExtractLinksFromJS(baseURL, src string) ([]string, error) {
@@ -33,92 +125,59 @@ func (p *ParserBasic) ExtractLinksFromJS(baseURL, src string) ([]string, error) 
 		return nil, err
 	}
 
-	varInits := make(map[string]ast.Expression)
-	assigns := make([]*ast.AssignExpression, 0)
-	calls := make([]*ast.CallExpression, 0)
-	objLiterals := make(map[string]*ast.ObjectLiteral)
-	xhrVars := make(map[string]struct{})
-
-	p.walk(parsedJS, func(n ast.Node) {
-		switch node := n.(type) {
-		case *ast.VariableDeclaration:
-			for _, raw := range node.List {
-				name, init := p.varDeclNameInit(raw)
-				if name == "" || init == nil {
-					continue
-				}
-				varInits[name] = init
-				switch typedInit := init.(type) {
-				case *ast.ObjectLiteral:
-					objLiterals[name] = typedInit
-				case *ast.NewExpression:
-					if p.identIs(typedInit.Callee, "XMLHttpRequest") {
-						xhrVars[name] = struct{}{}
-					}
-				}
-			}
-
-		case *ast.AssignExpression:
-			assigns = append(assigns, node)
-			if id, ok := node.Left.(*ast.Identifier); ok {
-				if ne, ok := node.Right.(*ast.NewExpression); ok && p.identIs(ne.Callee, "XMLHttpRequest") {
-					xhrVars[id.Name.String()] = struct{}{}
-				}
-			}
-
-		case *ast.CallExpression:
-			calls = append(calls, node)
-		}
-	})
+	collector := newJSCollector()
+	p.walk(parsedJS, collector)
 
 	vars := make(map[string]string)
 	objects := make(map[string]map[string]string)
 
-	for name, objectLiteral := range objLiterals {
-		mapByName := objects[name]
-		if mapByName == nil {
-			mapByName = make(map[string]string)
-			objects[name] = mapByName
-		}
-		p.forEachObjectProp(objectLiteral, func(key string, val ast.Expression) {
-			if stringExpr, ok := p.evalStringExpr(val, vars, objects); ok {
-				mapByName[key] = stringExpr
-			}
-		})
+	for name, objectLiteral := range collector.objLiterals {
+		objects[name] = p.collectObjectLiteralStrings(objectLiteral, vars, objects)
 	}
 
 	changed := true
 	for changed {
 		changed = false
 
-		for name, expression := range varInits {
+		for name, expression := range collector.varInits {
 			if _, ok := vars[name]; ok {
+				if ol, ok2 := expression.(*ast.ObjectLiteral); ok2 {
+					dst := objects[name]
+					if dst == nil {
+						dst = make(map[string]string)
+						objects[name] = dst
+					}
+
+					srcMap := p.collectObjectLiteralStrings(ol, vars, objects)
+					if mergeChanged(dst, srcMap) {
+						changed = true
+					}
+				}
 				continue
 			}
-			if stringExpr, ok := p.evalStringExpr(expression, vars, objects); ok {
-				vars[name] = stringExpr
+			if s, ok := p.evalStringExpr(expression, vars, objects); ok {
+				vars[name] = s
 				changed = true
-			} else {
-				if objectLiteral, ok := expression.(*ast.ObjectLiteral); ok {
-					mapByName := objects[name]
-					if mapByName == nil {
-						mapByName = make(map[string]string)
-						objects[name] = mapByName
-					}
-					p.forEachObjectProp(objectLiteral, func(k string, v ast.Expression) {
-						if stringExpression, ok := p.evalStringExpr(v, vars, objects); ok {
-							if prev, exists := mapByName[k]; !exists || prev != stringExpression {
-								mapByName[k] = stringExpression
-								changed = true
-							}
-						}
-					})
+
+				continue
+			}
+			if ol, ok := expression.(*ast.ObjectLiteral); ok {
+				dst := objects[name]
+				if dst == nil {
+					dst = make(map[string]string)
+					objects[name] = dst
+				}
+
+				srcMap := p.collectObjectLiteralStrings(ol, vars, objects)
+				if mergeChanged(dst, srcMap) {
+					changed = true
 				}
 			}
 		}
 
-		for _, assignExpression := range assigns {
+		for _, assignExpression := range collector.assigns {
 			rightStr, rightOk := p.evalStringExpr(assignExpression.Right, vars, objects)
+
 			switch left := assignExpression.Left.(type) {
 			case *ast.Identifier:
 				if rightOk {
@@ -128,33 +187,33 @@ func (p *ParserBasic) ExtractLinksFromJS(baseURL, src string) ([]string, error) 
 						changed = true
 					}
 				}
-
 			case *ast.DotExpression:
 				if id, ok := left.Left.(*ast.Identifier); ok && rightOk {
 					idName := id.Name.String()
+
 					m := objects[idName]
 					if m == nil {
 						m = map[string]string{}
 						objects[idName] = m
 					}
+
 					prop := left.Identifier.Name.String()
 					if prev, ex := m[prop]; !ex || prev != rightStr {
 						m[prop] = rightStr
 						changed = true
 					}
 				}
-
 			case *ast.BracketExpression:
 				if id, ok := left.Left.(*ast.Identifier); ok {
 					if key, ok2 := p.evalStringExpr(left.Member, vars, objects); ok2 && rightOk {
 						idName := id.Name.String()
-						mapByName := objects[idName]
-						if mapByName == nil {
-							mapByName = map[string]string{}
-							objects[idName] = mapByName
+						m := objects[idName]
+						if m == nil {
+							m = map[string]string{}
+							objects[idName] = m
 						}
-						if prev, ex := mapByName[key]; !ex || prev != rightStr {
-							mapByName[key] = rightStr
+						if prev, ex := m[key]; !ex || prev != rightStr {
+							m[key] = rightStr
 							changed = true
 						}
 					}
@@ -163,111 +222,99 @@ func (p *ParserBasic) ExtractLinksFromJS(baseURL, src string) ([]string, error) 
 		}
 	}
 
-	links := make([]string, 0)
 	seen := make(map[string]struct{})
-	add := func(s string) {
-		if !p.isURLCandidate(s) {
-			return
-		}
-		if normalized := p.normalizeURL(s); normalized != "" {
-			p.resolveAndAdd(normalized, seen, base)
-		}
-	}
+	adder := newLinkAdder(p, base, seen)
 
-	for _, call := range calls {
+	for _, call := range collector.calls {
 		name := p.calleeName(call.Callee)
 
 		switch {
 		case name == "fetch":
-			if len(call.ArgumentList) >= 1 {
-				if stringExpr, ok := p.evalStringExpr(call.ArgumentList[0], vars, objects); ok {
-					add(stringExpr)
-				}
-			}
-
+			p.addArgURL(call, 0, adder, vars, objects)
 		case strings.HasPrefix(name, "axios"):
-			if name == "axios" && len(call.ArgumentList) >= 1 {
-				if objectLiteral, ok := call.ArgumentList[0].(*ast.ObjectLiteral); ok {
-					if urlVal := p.findObjectProp(objectLiteral, "url"); urlVal != nil {
-						if stringExpr, ok := p.evalStringExpr(urlVal, vars, objects); ok {
-							add(stringExpr)
-						}
-					}
-				}
+			if name == "axios" {
+				p.addFromObjectPropArg(call, "url", adder, vars, objects)
 			} else {
-				if len(call.ArgumentList) >= 1 {
-					if stringExpr, ok := p.evalStringExpr(call.ArgumentList[0], vars, objects); ok {
-						add(stringExpr)
-					}
-				}
+				p.addArgURL(call, 0, adder, vars, objects)
 			}
-
 		case name == "$.get" || name == "$.getJSON" || name == "$.post":
-			if len(call.ArgumentList) >= 1 {
-				if stringExpr, ok := p.evalStringExpr(call.ArgumentList[0], vars, objects); ok {
-					add(stringExpr)
-				}
-			}
-
+			p.addArgURL(call, 0, adder, vars, objects)
 		case name == "$.ajax" || name == "jQuery.ajax":
-			if len(call.ArgumentList) >= 1 {
-				if objectLiteral, ok := call.ArgumentList[0].(*ast.ObjectLiteral); ok {
-					if urlVal := p.findObjectProp(objectLiteral, "url"); urlVal != nil {
-						if stringExpr, ok := p.evalStringExpr(urlVal, vars, objects); ok {
-							add(stringExpr)
-						}
-					}
-				}
-			}
-
+			p.addFromObjectPropArg(call, "url", adder, vars, objects)
 		case strings.HasSuffix(name, ".open"):
 			if dotExpression, ok := call.Callee.(*ast.DotExpression); ok {
 				if p.identIsNewXMLHttpRequest(dotExpression.Left) {
-					if len(call.ArgumentList) >= 2 {
-						if stringExpr, ok := p.evalStringExpr(call.ArgumentList[1], vars, objects); ok {
-							add(stringExpr)
-						}
-					}
+					p.addArgURL(call, 1, adder, vars, objects)
 					continue
 				}
 			}
 
 			if idName, ok := p.leftIdentNameOfDot(call.Callee); ok {
-				if _, isXHR := xhrVars[idName]; isXHR && len(call.ArgumentList) >= 2 {
-					if stringExpr, ok := p.evalStringExpr(call.ArgumentList[1], vars, objects); ok {
-						add(stringExpr)
-					}
+				if _, isXHR := collector.xhrVars[idName]; isXHR {
+					p.addArgURL(call, 1, adder, vars, objects)
 				}
 			}
 		}
 	}
 
 	for _, m := range urlRegex.FindAllString(src, -1) {
-		add(m)
+		adder.Add(m)
 	}
 
-	p.walk(parsedJS, func(n ast.Node) {
-		if ex, ok := n.(ast.Expression); ok {
-			if s, ok2 := p.evalStringExpr(ex, vars, objects); ok2 && p.looksLikeRelativePath(s) {
-				add(s)
-			}
-		}
+	p.walk(parsedJS, &exprURLVisitor{
+		p:       p,
+		vars:    vars,
+		objects: objects,
+		adder:   adder,
 	})
 
+	links := make([]string, 0, len(seen))
 	for u := range seen {
 		links = append(links, u)
 	}
+
 	return links, nil
 }
 
-func (p *ParserBasic) findObjectProp(objectLiteral *ast.ObjectLiteral, key string) ast.Expression {
-	var found ast.Expression
-	p.forEachObjectProp(objectLiteral, func(k string, v ast.Expression) {
-		if found == nil && k == key {
-			found = v
+func (p *ParserBasic) addExprURL(ex ast.Expression, adder *linkAdder, vars map[string]string, objects map[string]map[string]string) {
+	if ex == nil {
+		return
+	}
+
+	if s, ok := p.evalStringExpr(ex, vars, objects); ok {
+		adder.Add(s)
+	}
+}
+
+func (p *ParserBasic) addArgURL(call *ast.CallExpression, idx int, adder *linkAdder, vars map[string]string, objects map[string]map[string]string) {
+	if call == nil || idx < 0 || idx >= len(call.ArgumentList) {
+		return
+	}
+
+	p.addExprURL(call.ArgumentList[idx], adder, vars, objects)
+}
+
+func (p *ParserBasic) addFromObjectPropArg(call *ast.CallExpression, prop string, adder *linkAdder, vars map[string]string, objects map[string]map[string]string) {
+	if call == nil || len(call.ArgumentList) < 1 {
+		return
+	}
+
+	if ol, ok := call.ArgumentList[0].(*ast.ObjectLiteral); ok {
+		if urlVal := p.findObjectProp(ol, prop); urlVal != nil {
+			p.addExprURL(urlVal, adder, vars, objects)
 		}
-	})
-	return found
+	}
+}
+
+func (p *ParserBasic) findObjectProp(objectLiteral *ast.ObjectLiteral, key string) ast.Expression {
+	props := p.objectProps(objectLiteral)
+	for i := 0; i < len(props); i++ {
+		if props[i].Key == key {
+			return props[i].Val
+		}
+	}
+
+	return nil
 }
 
 func (p *ParserBasic) calleeName(expression ast.Expression) string {
@@ -277,6 +324,7 @@ func (p *ParserBasic) calleeName(expression ast.Expression) string {
 	case *ast.DotExpression:
 		leftName := p.calleeName(n.Left)
 		method := n.Identifier.Name.String()
+
 		if leftName == "" {
 			return "." + method
 		}
@@ -294,24 +342,23 @@ func (p *ParserBasic) evalStringExpr(expression ast.Expression, vars map[string]
 	if expression == nil {
 		return "", false
 	}
+
 	switch n := expression.(type) {
 	case *ast.StringLiteral:
 		return n.Value.String(), true
-
 	case *ast.Identifier:
 		if v, ok := vars[n.Name.String()]; ok {
 			return v, true
 		}
 		return "", false
-
 	case *ast.NumberLiteral:
 		if s, ok := p.numberLiteralToString(n); ok {
 			return s, true
 		}
 		return "", false
-
 	case *ast.TemplateLiteral:
 		parts, exprs := p.templateCookedPartsAndExprs(n)
+
 		var b strings.Builder
 		for i := 0; i < len(parts); i++ {
 			b.WriteString(parts[i])
@@ -324,7 +371,6 @@ func (p *ParserBasic) evalStringExpr(expression ast.Expression, vars map[string]
 			}
 		}
 		return b.String(), true
-
 	case *ast.BinaryExpression:
 		if n.Operator == token.PLUS {
 			left, lok := p.evalStringExpr(n.Left, vars, objects)
@@ -334,7 +380,6 @@ func (p *ParserBasic) evalStringExpr(expression ast.Expression, vars map[string]
 			}
 		}
 		return "", false
-
 	case *ast.DotExpression:
 		if id, ok := n.Left.(*ast.Identifier); ok {
 			if m := objects[id.Name.String()]; m != nil {
@@ -345,7 +390,6 @@ func (p *ParserBasic) evalStringExpr(expression ast.Expression, vars map[string]
 			}
 		}
 		return "", false
-
 	case *ast.BracketExpression:
 		if id, ok := n.Left.(*ast.Identifier); ok {
 			if key, ok2 := p.evalStringExpr(n.Member, vars, objects); ok2 {
@@ -357,41 +401,37 @@ func (p *ParserBasic) evalStringExpr(expression ast.Expression, vars map[string]
 			}
 		}
 		return "", false
-
 	default:
 		return "", false
 	}
 }
 
-func (p *ParserBasic) walk(node ast.Node, fn func(ast.Node)) {
+func (p *ParserBasic) walk(node ast.Node, v nodeVisitor) {
 	if node == nil {
 		return
 	}
-	fn(node)
+	v.visit(node)
 
 	switch n := node.(type) {
 	case *ast.Program:
 		for _, s := range n.Body {
 			if s != nil {
-				p.walk(s, fn)
+				p.walk(s, v)
 			}
 		}
 		return
-
 	case *ast.BlockStatement:
 		for _, s := range n.List {
 			if s != nil {
-				p.walk(s, fn)
+				p.walk(s, v)
 			}
 		}
 		return
-
 	case *ast.ExpressionStatement:
 		if n.Expression != nil {
-			p.walk(n.Expression, fn)
+			p.walk(n.Expression, v)
 		}
 		return
-
 	case *ast.VariableDeclaration:
 		for _, ve := range n.List {
 			if ve == nil {
@@ -400,81 +440,75 @@ func (p *ParserBasic) walk(node ast.Node, fn func(ast.Node)) {
 			rv := reflect.ValueOf(ve)
 			if rv.IsValid() && rv.CanInterface() {
 				if inner, ok := rv.Interface().(ast.Node); ok {
-					p.walk(inner, fn)
+					p.walk(inner, v)
 				}
 			}
 		}
 		return
-
 	case *ast.AssignExpression:
 		if n.Left != nil {
-			p.walk(n.Left, fn)
+			p.walk(n.Left, v)
 		}
 		if n.Right != nil {
-			p.walk(n.Right, fn)
+			p.walk(n.Right, v)
 		}
 		return
-
 	case *ast.BinaryExpression:
 		if n.Left != nil {
-			p.walk(n.Left, fn)
+			p.walk(n.Left, v)
 		}
 		if n.Right != nil {
-			p.walk(n.Right, fn)
+			p.walk(n.Right, v)
 		}
 		return
-
 	case *ast.CallExpression:
 		if n.Callee != nil {
-			p.walk(n.Callee, fn)
+			p.walk(n.Callee, v)
 		}
 		for _, a := range n.ArgumentList {
 			if a != nil {
-				p.walk(a, fn)
+				p.walk(a, v)
 			}
 		}
 		return
-
 	case *ast.DotExpression:
 		if n.Left != nil {
-			p.walk(n.Left, fn)
+			p.walk(n.Left, v)
 		}
-		p.walk(&n.Identifier, fn)
+		p.walk(&n.Identifier, v)
 		return
-
 	case *ast.BracketExpression:
 		if n.Left != nil {
-			p.walk(n.Left, fn)
+			p.walk(n.Left, v)
 		}
 		if n.Member != nil {
-			p.walk(n.Member, fn)
+			p.walk(n.Member, v)
 		}
 		return
-
 	case *ast.FunctionLiteral:
 		if n.ParameterList != nil {
 			for _, id := range n.ParameterList.List {
 				if id != nil {
-					p.walk(id, fn)
+					p.walk(id, v)
 				}
 			}
 		}
 		if n.Body != nil {
-			p.walk(n.Body, fn)
+			p.walk(n.Body, v)
 		}
 		return
 	}
 
-	v := reflect.ValueOf(node)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
+	val := reflect.ValueOf(node)
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
 	}
-	if v.Kind() != reflect.Struct {
+	if val.Kind() != reflect.Struct {
 		return
 	}
 
-	for i := 0; i < v.NumField(); i++ {
-		f := v.Field(i)
+	for i := 0; i < val.NumField(); i++ {
+		f := val.Field(i)
 		if !f.CanInterface() {
 			continue
 		}
@@ -486,9 +520,8 @@ func (p *ParserBasic) walk(node ast.Node, fn func(ast.Node)) {
 			}
 			val := f.Interface()
 			if n2, ok := val.(ast.Node); ok {
-				p.walk(n2, fn)
+				p.walk(n2, v)
 			}
-
 		case reflect.Slice, reflect.Array:
 			for j := 0; j < f.Len(); j++ {
 				item := f.Index(j)
@@ -499,81 +532,65 @@ func (p *ParserBasic) walk(node ast.Node, fn func(ast.Node)) {
 					continue
 				}
 				if n2, ok := item.Interface().(ast.Node); ok {
-					p.walk(n2, fn)
+					p.walk(n2, v)
 					continue
 				}
-				// handle value-type identifiers by address
 				if item.CanAddr() {
 					addr := item.Addr().Interface()
 					if n2, ok := addr.(ast.Node); ok {
-						p.walk(n2, fn)
+						p.walk(n2, v)
 					}
 				}
 			}
-
 		case reflect.Struct:
 			if f.CanAddr() {
 				addr := f.Addr().Interface()
 				if n2, ok := addr.(ast.Node); ok {
-					p.walk(n2, fn)
+					p.walk(n2, v)
 				}
 			}
 		default:
-
 		}
 	}
 }
 
-func (p *ParserBasic) varDeclNameInit(raw interface{}) (string, ast.Expression) {
-	reflectVal := reflect.ValueOf(raw)
+func extractName(v reflect.Value) string {
+	idExpr := getExprByFields(v, []string{"Id", "Left", "Name"})
+	if id, ok := idExpr.(*ast.Identifier); ok {
+		return id.Name.String()
+	}
+	return ""
+}
 
+func extractInit(v reflect.Value) ast.Expression {
+	return getExprByFields(v, []string{"Init", "Initializer", "Right"})
+}
+
+func varDeclNameInit(raw interface{}) (string, ast.Expression) {
+	reflectVal := reflect.ValueOf(raw)
 	if !reflectVal.IsValid() {
 		return "", nil
 	}
-
 	if reflectVal.Kind() == reflect.Ptr && reflectVal.IsNil() {
 		return "", nil
 	}
+	reflectVal = derefValue(reflectVal)
 
-	reflectVal = p.derefValue(reflectVal)
-
-	// TODO refactor this shitty ass funny function later for the sake of humanity
-
-	getExpr := func(v reflect.Value, fieldNames []string) ast.Expression {
-		for _, fieldName := range fieldNames {
-			f := v.FieldByName(fieldName)
-			if !f.IsValid() || (f.Kind() == reflect.Interface && f.IsNil()) {
-				continue
-			}
-			if ex, ok := f.Interface().(ast.Expression); ok {
-				return ex
-			}
-			if f.CanAddr() {
-				if ex, ok := f.Addr().Interface().(ast.Expression); ok {
-					return ex
-				}
-			}
-		}
-		return nil
-	}
-
-	idExpr := getExpr(reflectVal, []string{"Id", "Left", "Name"})
-
-	name := ""
-	if id, ok := idExpr.(*ast.Identifier); ok {
-		name = id.Name.String()
-	}
-
-	init := getExpr(reflectVal, []string{"Init", "Initializer", "Right"})
-
+	name := extractName(reflectVal)
+	init := extractInit(reflectVal)
 	return name, init
 }
 
-func (p *ParserBasic) forEachObjectProp(ol *ast.ObjectLiteral, fn func(key string, val ast.Expression)) {
-	if ol == nil || fn == nil {
-		return
+type objKV struct {
+	Key string
+	Val ast.Expression
+}
+
+func (p *ParserBasic) objectProps(ol *ast.ObjectLiteral) []objKV {
+	if ol == nil {
+		return nil
 	}
-	v := p.derefValue(reflect.ValueOf(ol))
+	v := derefValue(reflect.ValueOf(ol))
 
 	var list reflect.Value
 	if f := v.FieldByName("Value"); f.IsValid() {
@@ -582,13 +599,14 @@ func (p *ParserBasic) forEachObjectProp(ol *ast.ObjectLiteral, fn func(key strin
 		list = f
 	}
 	if !list.IsValid() || (list.Kind() != reflect.Slice && list.Kind() != reflect.Array) {
-		return
+		return nil
 	}
 
+	out := make([]objKV, 0, list.Len())
 	for i := 0; i < list.Len(); i++ {
-		pv := p.derefValue(list.Index(i))
-
+		pv := derefValue(list.Index(i))
 		keyF := pv.FieldByName("Key")
+
 		key, ok := p.propKeyFromAny(keyF)
 		if !ok {
 			continue
@@ -598,22 +616,40 @@ func (p *ParserBasic) forEachObjectProp(ol *ast.ObjectLiteral, fn func(key strin
 		if !valF.IsValid() || (valF.Kind() == reflect.Interface && valF.IsNil()) {
 			continue
 		}
+
 		if ex, ok := valF.Interface().(ast.Expression); ok {
-			fn(key, ex)
+			out = append(out, objKV{Key: key, Val: ex})
 			continue
 		}
+
 		if valF.CanAddr() {
 			if ex, ok := valF.Addr().Interface().(ast.Expression); ok {
-				fn(key, ex)
+				out = append(out, objKV{Key: key, Val: ex})
 			}
 		}
 	}
+
+	return out
+}
+
+func (p *ParserBasic) collectObjectLiteralStrings(ol *ast.ObjectLiteral, vars map[string]string, objects map[string]map[string]string) map[string]string {
+	res := make(map[string]string)
+
+	props := p.objectProps(ol)
+	for i := 0; i < len(props); i++ {
+		if s, ok := p.evalStringExpr(props[i].Val, vars, objects); ok {
+			res[props[i].Key] = s
+		}
+	}
+
+	return res
 }
 
 func (p *ParserBasic) propKeyFromAny(v reflect.Value) (string, bool) {
 	if !v.IsValid() {
 		return "", false
 	}
+
 	iv := v.Interface()
 	switch k := iv.(type) {
 	case *ast.Identifier:
@@ -636,11 +672,6 @@ func (p *ParserBasic) propKeyFromAny(v reflect.Value) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func (p *ParserBasic) isURLCandidate(s string) bool {
-	s = strings.TrimSpace(s)
-	return s != ""
 }
 
 func (p *ParserBasic) numberLiteralToString(n *ast.NumberLiteral) (string, bool) {
@@ -673,7 +704,8 @@ func (p *ParserBasic) templateCookedPartsAndExprs(tl *ast.TemplateLiteral) (part
 	if tl == nil {
 		return nil, nil
 	}
-	v := p.derefValue(reflect.ValueOf(tl))
+
+	v := derefValue(reflect.ValueOf(tl))
 
 	var list reflect.Value
 	if f := v.FieldByName("List"); f.IsValid() {
@@ -681,18 +713,21 @@ func (p *ParserBasic) templateCookedPartsAndExprs(tl *ast.TemplateLiteral) (part
 	} else if f := v.FieldByName("Elements"); f.IsValid() {
 		list = f
 	}
+
 	if list.IsValid() && (list.Kind() == reflect.Slice || list.Kind() == reflect.Array) {
 		for i := 0; i < list.Len(); i++ {
-			el := p.derefValue(list.Index(i))
+			el := derefValue(list.Index(i))
 			valF := el.FieldByName("Value")
 			cooked := ""
+
 			if valF.IsValid() {
-				cv := p.derefValue(valF).FieldByName("Cooked")
-				cooked = p.uniToString(cv)
+				cv := derefValue(valF).FieldByName("Cooked")
+				cooked = uniToString(cv)
 			} else {
 				cv := el.FieldByName("Cooked")
-				cooked = p.uniToString(cv)
+				cooked = uniToString(cv)
 			}
+
 			parts = append(parts, cooked)
 		}
 	}
@@ -708,31 +743,33 @@ func (p *ParserBasic) templateCookedPartsAndExprs(tl *ast.TemplateLiteral) (part
 	return parts, exprs
 }
 
-func (p *ParserBasic) derefValue(v reflect.Value) reflect.Value {
+func derefValue(v reflect.Value) reflect.Value {
 	for v.IsValid() && (v.Kind() == reflect.Interface || v.Kind() == reflect.Ptr) {
 		if v.IsNil() {
 			return v
 		}
+
 		v = v.Elem()
 	}
 	return v
 }
 
-func (p *ParserBasic) uniToString(v reflect.Value) string {
+func uniToString(v reflect.Value) string {
 	if !v.IsValid() {
 		return ""
 	}
+
 	if s, ok := v.Interface().(string); ok {
 		return s
 	}
-
 	if s, ok := v.Interface().(stringer); ok {
 		return s.String()
 	}
+
 	return ""
 }
 
-func (p *ParserBasic) identIs(e ast.Expression, name string) bool {
+func identIs(e ast.Expression, name string) bool {
 	if id, ok := e.(*ast.Identifier); ok {
 		return id.Name.String() == name
 	}
@@ -741,10 +778,10 @@ func (p *ParserBasic) identIs(e ast.Expression, name string) bool {
 
 func (p *ParserBasic) identIsNewXMLHttpRequest(e ast.Expression) bool {
 	if ne, ok := e.(*ast.NewExpression); ok {
-		return p.identIs(ne.Callee, "XMLHttpRequest")
+		return identIs(ne.Callee, "XMLHttpRequest")
 	}
 	if ce, ok := e.(*ast.CallExpression); ok {
-		return p.identIs(ce.Callee, "XMLHttpRequest")
+		return identIs(ce.Callee, "XMLHttpRequest")
 	}
 	return false
 }
@@ -756,4 +793,36 @@ func (p *ParserBasic) leftIdentNameOfDot(e ast.Expression) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func mergeChanged(dst, src map[string]string) bool {
+	changed := false
+	for k, v := range src {
+		if prev, ok := dst[k]; !ok || prev != v {
+			dst[k] = v
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func getExprByFields(v reflect.Value, fieldNames []string) ast.Expression {
+	for i := 0; i < len(fieldNames); i++ {
+		f := v.FieldByName(fieldNames[i])
+		if !f.IsValid() || (f.Kind() == reflect.Interface && f.IsNil()) {
+			continue
+		}
+
+		if ex, ok := f.Interface().(ast.Expression); ok {
+			return ex
+		}
+
+		if f.CanAddr() {
+			if ex, ok := f.Addr().Interface().(ast.Expression); ok {
+				return ex
+			}
+		}
+	}
+	return nil
 }
