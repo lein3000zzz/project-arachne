@@ -1,43 +1,39 @@
 version: '3.8'
 services:
+  crawler:
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile
+    env_file:
+      - main.env
+    #    ports:
+    #      - "36767:36767"
+    restart: always
+
   neo4j:
     image: neo4j:5-enterprise
-    environment:
-      NEO4J_AUTH: neo4j/testtest
-      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+    env_file:
+      - deployments/neo4j/neo4j.env
     ports:
       - '7687:7687'
       - '7474:7474'
     volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
+      - ./deployments/opt/neo4j_data:/data
+      - ./deployments/opt/neo4j_logs:/logs
 
   redis:
     image: 'redis'
     command: [ "sh", "-c", "redis-server --requirepass \"$REDIS_PASSWORD\"" ]
     ports:
       - '6379:6379'
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    env_file:
+      - main.env
 
   broker:
     image: apache/kafka:latest
     container_name: broker
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker:9092,EXTERNAL://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_PARTITIONS: 3
-#      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    env_file:
+      - deployments/kafka/kafka.env
     ports:
       - "29092:29092"
 
@@ -45,14 +41,7 @@ services:
     image: provectuslabs/kafka-ui:latest
     depends_on:
       - broker
-    environment:
-      KAFKA_CLUSTERS_0_NAME: "local"
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "broker:9092"
+    env_file:
+      - deployments/kafka/kafkaui.env
     ports:
       - "8080:8080"
-
-volumes:
-  neo4j_data:
-    driver: local
-  neo4j_logs:
-    driver: local

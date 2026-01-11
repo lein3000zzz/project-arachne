@@ -1,84 +1,38 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"web-crawler/internal/config"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
-	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
-	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
-
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
-	"go.uber.org/zap"
 )
 
 func main() {
-	zapLogger, err := zap.NewProduction()
-	if err != nil {
-		fmt.Println("Error initializing zap logger:", err)
-		return
-	}
+	// TODO добавить всё это чудо
+	//defer neo4jDriver.Close(ctx)
 
-	defer func(zapLogger *zap.Logger) {
-		err := zapLogger.Sync()
-		if err != nil {
-			fmt.Println("Error syncing zap logger:", err)
-		}
-	}(zapLogger)
-
-	logger := zapLogger.Sugar()
-
-	neo4jURI := "neo4j://localhost:7687"
-	neo4jUser := "neo4j"
-	neo4jPassword := "testtest"
-	ctx := context.Background()
-	neo4jDriver, err := neo4j.NewDriverWithContext(neo4jURI, neo4j.BasicAuth(neo4jUser, neo4jPassword, ""))
-
-	if err != nil {
-		logger.Fatal("Error initializing neo4j:", err)
-	}
-
-	defer neo4jDriver.Close(ctx)
-
-	pageRepo := pages.NewNeo4jRepo(logger, neo4jDriver)
-
-	err = pageRepo.EnsureConnectivity()
-	if err != nil {
-		logger.Fatal("Error connecting to neo4j:", err)
-	}
-
-	// TODO закрывать кафку в дефере
-	seeds := []string{"localhost:29092"}
-
-	tasksQueue, errTQ := queue.NewKafkaQueue(logger, seeds, "arachne-tasks", "tasks")
-	runsQueue, errRQ := queue.NewKafkaQueue(logger, seeds, "arachne-runs", "runs")
-
-	if errTQ != nil || errRQ != nil {
-		logger.Fatal("Error initializing tasks queue:", errTQ, errRQ)
-	}
-
-	defer tasksQueue.KafkaClient.Close()
-	defer runsQueue.KafkaClient.Close()
-
-	go tasksQueue.StartQueueProducer()
-	go tasksQueue.StartQueueConsumer()
-	go runsQueue.StartQueueProducer()
-	go runsQueue.StartQueueConsumer()
+	//defer tasksQueue.CloseQueue()
+	//defer runsQueue.CloseQueue()
+	//
+	//go tasksQueue.StartQueueProducer()
+	//go tasksQueue.StartQueueConsumer()
+	//go runsQueue.StartQueueProducer()
+	//go runsQueue.StartQueueConsumer()
 
 	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue)
 
 	fetcher := networker.NewNetworker(logger)
 	parser := pageparser.NewParserRepo(logger)
-	redisPagesCache := cache.NewRedisCache("localhost:6379", "", 0, logger)
-	redisRobotsCache := cache.NewRedisCache("localhost:6379", "", 1, logger)
+	redisPagesCache := cache.NewRedisCache(os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 0, logger)
+	redisRobotsCache := cache.NewRedisCache(os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 1, logger)
 	extraWorker, errRod := sugaredworker.NewExtraRodParser(logger)
 	if errRod != nil {
 		logger.Fatal("Error initializing extra worker parser:", err)
@@ -86,10 +40,11 @@ func main() {
 
 	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, pageRepo, redisPagesCache, redisRobotsCache, processorQueue)
 
-	errCrawl := crawler.StartCrawler()
-	if errCrawl != nil {
-		logger.Fatal("Error starting crawler:", err)
-	}
+	// TODO старт кроулер
+	//errCrawl := crawler.StartCrawler()
+	//if errCrawl != nil {
+	//	logger.Fatal("Error starting crawler:", err)
+	//}
 
 	//id, _ := utils.GenerateID()
 

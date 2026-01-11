@@ -1,10 +1,9 @@
 package webcrawler
 
-const (
-	ConcurrentTasksLimit = 20
-	ConcurrentRunsLimit  = 1
+import (
+	"web-crawler/internal/config"
 )
 
 type Crawler interface {
-	StartCrawler() error
+	StartCrawler(tChan <-chan *config.Task, workersNum int)
 }

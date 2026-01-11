@@ -11,7 +11,6 @@ import (
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
-	"web-crawler/internal/processor"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler/cache"
 
@@ -24,55 +23,31 @@ type CrawlerRepo struct {
 	Parser      pageparser.PageParser
 	Networker   networker.Networker
 	ExtraWorker sugaredworker.SugaredWorker
-	Processor   processor.Processor
-	PageRepo    pages.PageDataRepo
 	CachePages  cache.CachedStorage
 	CacheRobots cache.CachedStorage
-
-	RunLimiter chan struct{}
 }
 
-func NewCrawlerRepo(logger *zap.SugaredLogger, parser pageparser.PageParser, networker networker.Networker, extraWorker sugaredworker.SugaredWorker, pageRepo pages.PageDataRepo, cachePages cache.CachedStorage, cacheRobots cache.CachedStorage, processor processor.Processor) *CrawlerRepo {
+func NewCrawlerRepo(logger *zap.SugaredLogger, parser pageparser.PageParser, networker networker.Networker, extraWorker sugaredworker.SugaredWorker, cachePages cache.CachedStorage, cacheRobots cache.CachedStorage) *CrawlerRepo {
 	return &CrawlerRepo{
 		Logger:      logger,
 		Parser:      parser,
 		Networker:   networker,
 		ExtraWorker: extraWorker,
-		PageRepo:    pageRepo,
-		Processor:   processor,
 		CachePages:  cachePages,
 		CacheRobots: cacheRobots,
-
-		// Вот эта сказка гарантирует последовательность ранов
-		RunLimiter: make(chan struct{}, ConcurrentRunsLimit),
 	}
 }
 
-func (repo *CrawlerRepo) StartCrawler() error {
-	err := repo.PageRepo.EnsureConnectivity()
-	if err != nil {
-		repo.Logger.Errorf("Error ensuring connectivity: %v", err)
-		return err
+func (repo *CrawlerRepo) StartCrawler(tChan <-chan *config.Task, workersNum int) {
+	for idx := range workersNum {
+		go repo.crawl(tChan, idx)
 	}
-
-	for idx := range ConcurrentTasksLimit {
-		go repo.crawl(idx)
-	}
-
-	return nil
 }
 
-func (repo *CrawlerRepo) crawl(index int) {
+func (repo *CrawlerRepo) crawl(tChan <-chan *config.Task, index int) {
 	repo.Logger.Infof("Started Crawling goroutine %d", index)
-	for {
-		task, err := repo.Processor.GetTask()
-		if err != nil {
-			if !errors.Is(err, processor.ErrNoTasks) {
-				repo.Logger.Errorw("Error getting task", "err", err, "goroutine index", index)
-			}
-			continue
-		}
 
+	for task := range tChan {
 		repo.processTask(task, index)
 	}
 }

@@ -17,5 +17,6 @@ type Processor interface {
 	GetRun() (*config.Run, error)
 	QueueRun(run *config.Run)
 	SendTask(task *config.Task) error
-	GetTask() (*config.Task, error)
+	StartTaskConsumer()
+	GetTasksChan() <-chan *config.Task
 }

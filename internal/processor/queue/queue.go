@@ -15,4 +15,5 @@ type Queue interface {
 	GetConsumerChan() chan []byte
 	StartQueueConsumer()
 	StartQueueProducer()
+	CloseQueue()
 }
