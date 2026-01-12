@@ -20,6 +20,8 @@ type Run struct {
 	CurrentLinks int
 	ActiveTasks  int
 
+	sync.Once
+
 	sync.RWMutex
 }
 

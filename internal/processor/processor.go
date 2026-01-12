@@ -19,4 +19,6 @@ type Processor interface {
 	SendTask(task *config.Task) error
 	StartTaskConsumer()
 	GetTasksChan() <-chan *config.Task
+	StartRunConsumer()
+	GetRunsChan() <-chan *config.Run
 }

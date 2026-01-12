@@ -15,6 +15,7 @@ type QueueProcessor struct {
 	runQueue   queue.Queue
 
 	tasksConsumer chan *config.Task
+	runsConsumer  chan *config.Run
 }
 
 func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, runQueue queue.Queue) *QueueProcessor {
@@ -97,4 +98,21 @@ func (p *QueueProcessor) StartTaskConsumer() {
 
 func (p *QueueProcessor) GetTasksChan() <-chan *config.Task {
 	return p.tasksConsumer
+}
+
+func (p *QueueProcessor) StartRunConsumer() {
+	for runBytes := range p.runQueue.GetConsumerChan() {
+		run := new(config.Run)
+
+		if err := json.Unmarshal(runBytes, run); err != nil {
+			p.logger.Warnw("Failed to unmarshal run from kafka", "run", run)
+			continue
+		}
+
+		p.runsConsumer <- run
+	}
+}
+
+func (p *QueueProcessor) GetRunsChan() <-chan *config.Run {
+	return p.runsConsumer
 }

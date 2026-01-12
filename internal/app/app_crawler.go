@@ -1,8 +1,10 @@
 package app
 
 import (
+	"web-crawler/internal/domain/config"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
+	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler"
 
 	"go.uber.org/zap"
@@ -37,5 +39,39 @@ func (app *CrawlerApp) StartApp() error {
 	}
 
 	tChan := app.processorQueue.GetTasksChan()
+
 	app.crawler.StartCrawler(tChan, ConcurrentTasksWorkers)
+}
+
+func (app *CrawlerApp) startRunListener() {
+	runsChan := app.processorQueue.GetRunsChan()
+
+	for run := range runsChan {
+		app.runLimiter <- struct{}{}
+
+		firstTask := &config.Task{
+			URL:          utils.CorrectURLScheme(run.StartURL),
+			Run:          run,
+			CurrentDepth: 0,
+		}
+
+		err := app.processorQueue.SendTask(firstTask)
+		if err != nil {
+			app.logger.Errorf("Error sending task: %v", err)
+			<-app.runLimiter
+			continue
+		}
+	}
+}
+
+func (app *CrawlerApp) startCrawlerCallbackListener(sigChan <-chan struct{}) {
+	for range sigChan {
+		app.logger.Infof("Received crawler callback signal, run ended")
+		select {
+		case <-app.runLimiter:
+			app.logger.Infof("semaphore released")
+		default:
+			app.logger.Warnw("tried to release runs semaphore yet it had already been released")
+		}
+	}
 }

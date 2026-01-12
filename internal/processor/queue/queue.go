@@ -11,8 +11,8 @@ const (
 )
 
 type Queue interface {
-	GetProducerChan() chan []byte
-	GetConsumerChan() chan []byte
+	GetProducerChan() chan<- []byte
+	GetConsumerChan() <-chan []byte
 	StartQueueConsumer()
 	StartQueueProducer()
 	CloseQueue()

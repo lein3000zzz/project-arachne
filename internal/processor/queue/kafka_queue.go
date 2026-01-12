@@ -51,11 +51,11 @@ func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue,
 	}, nil
 }
 
-func (q *KafkaQueue) GetProducerChan() chan []byte {
+func (q *KafkaQueue) GetProducerChan() chan<- []byte {
 	return q.producerChan
 }
 
-func (q *KafkaQueue) GetConsumerChan() chan []byte {
+func (q *KafkaQueue) GetConsumerChan() <-chan []byte {
 	return q.consumerChan
 }
 

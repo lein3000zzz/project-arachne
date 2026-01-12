@@ -10,6 +10,8 @@ type CrawlerConfig struct {
 	SaverChan        chan<- *data.PageData
 	TaskProducerChan chan<- []*config.Task
 
+	CrawlCallbackChan chan struct{}
+
 	WorkersNumber int
 }
 
