@@ -1,7 +1,7 @@
 package sugaredworker
 
 import (
-	"web-crawler/internal/config"
+	"web-crawler/internal/domain/config"
 )
 
 const outDir = "output/screenshots"

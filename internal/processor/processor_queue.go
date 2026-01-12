@@ -3,7 +3,7 @@ package processor
 import (
 	"encoding/json"
 	"time"
-	"web-crawler/internal/config"
+	"web-crawler/internal/domain/config"
 	"web-crawler/internal/processor/queue"
 
 	"go.uber.org/zap"

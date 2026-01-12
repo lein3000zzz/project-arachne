@@ -94,7 +94,7 @@ func initRunsQueue(logger *zap.SugaredLogger) queue.Queue {
 	return runsQueue
 }
 
-func initPageRepo(logger *zap.SugaredLogger, neo4jDriver neo4j.DriverWithContext) pages.PageDataRepo {
+func initPageRepo(logger *zap.SugaredLogger, neo4jDriver neo4j.DriverWithContext) pages.PageRepo {
 	pageRepo := pages.NewNeo4jRepo(logger, neo4jDriver)
 
 	err := pageRepo.EnsureConnectivity()

@@ -2,7 +2,7 @@ package processor
 
 import (
 	"errors"
-	"web-crawler/internal/config"
+	"web-crawler/internal/domain/config"
 )
 
 // TODO RUN LOGIC IMPLEMENTATION. THE RUNPROCESSOR HAS TASKPROCESSOR AND EACH TASK IS REFERENCING ITS RUN

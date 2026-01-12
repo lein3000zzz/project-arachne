@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"web-crawler/internal/config"
+	"web-crawler/internal/domain/config"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"

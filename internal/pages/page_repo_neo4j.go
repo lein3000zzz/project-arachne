@@ -3,24 +3,28 @@ package pages
 import (
 	"context"
 	"time"
+	"web-crawler/internal/domain/data"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"go.uber.org/zap"
 )
 
-type PageDataNeo4jRepo struct {
+type PageNeo4jRepo struct {
 	driver neo4j.DriverWithContext
 	logger *zap.SugaredLogger
+
+	saverChan chan *data.PageData
 }
 
-func NewNeo4jRepo(logger *zap.SugaredLogger, driver neo4j.DriverWithContext) *PageDataNeo4jRepo {
-	return &PageDataNeo4jRepo{
-		driver: driver,
-		logger: logger,
+func NewNeo4jRepo(logger *zap.SugaredLogger, driver neo4j.DriverWithContext) *PageNeo4jRepo {
+	return &PageNeo4jRepo{
+		driver:    driver,
+		logger:    logger,
+		saverChan: make(chan *data.PageData),
 	}
 }
 
-func (repo *PageDataNeo4jRepo) EnsureConnectivity() error {
+func (repo *PageNeo4jRepo) EnsureConnectivity() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -30,11 +34,11 @@ func (repo *PageDataNeo4jRepo) EnsureConnectivity() error {
 	return err
 }
 
-func (repo *PageDataNeo4jRepo) SavePage(page *PageData) error {
+func (repo *PageNeo4jRepo) SavePage(page *data.PageData) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	params, errParams := page.toParams()
+	params, errParams := page.ToParams()
 	if errParams != nil {
 		repo.logger.Errorf("failed to parse params: %v", errParams)
 		return errParams
@@ -63,4 +67,25 @@ func (repo *PageDataNeo4jRepo) SavePage(page *PageData) error {
 	repo.logger.Debugw("page saved pages number: %d", queryRes.Summary.ResultAvailableAfter())
 
 	return nil
+}
+
+func (repo *PageNeo4jRepo) GetSaverChan() chan<- *data.PageData {
+	return repo.saverChan
+}
+
+func (repo *PageNeo4jRepo) StartSaverWorkers(workers int) {
+	for i := 0; i < workers; i++ {
+		go repo.startSaverWorker()
+	}
+}
+
+func (repo *PageNeo4jRepo) startSaverWorker() {
+	for pageData := range repo.saverChan {
+		err := repo.SavePage(pageData)
+
+		if err != nil {
+			repo.logger.Errorf("failed to save page: %v", err)
+			continue
+		}
+	}
 }

@@ -3,7 +3,7 @@ package sugaredworker
 import (
 	"fmt"
 	"net/url"
-	"web-crawler/internal/config"
+	"web-crawler/internal/domain/config"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"

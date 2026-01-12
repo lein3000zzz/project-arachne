@@ -12,12 +12,12 @@ type CrawlerApp struct {
 	logger         *zap.SugaredLogger
 	crawler        webcrawler.Crawler
 	processorQueue processor.Processor
-	pageRepo       pages.PageDataRepo
+	pageRepo       pages.PageRepo
 
 	runLimiter chan struct{}
 }
 
-func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageDataRepo, processorQueue processor.Processor) *CrawlerApp {
+func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageRepo, processorQueue processor.Processor) *CrawlerApp {
 	return &CrawlerApp{
 		logger:         logger,
 		crawler:        crawler,
@@ -38,5 +38,4 @@ func (app *CrawlerApp) StartApp() error {
 
 	tChan := app.processorQueue.GetTasksChan()
 	app.crawler.StartCrawler(tChan, ConcurrentTasksWorkers)
-
 }

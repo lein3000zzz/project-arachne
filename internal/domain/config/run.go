@@ -61,15 +61,3 @@ func (run *Run) IncrementActiveAndCurrentWithMutex() {
 	run.ActiveTasks++
 	run.CurrentLinks++
 }
-
-type Task struct {
-	URL          string
-	CurrentDepth int
-
-	Run *Run
-}
-
-type ExtraTaskFlags struct {
-	ShouldScreenshot  bool
-	ParseRenderedHTML bool
-}
