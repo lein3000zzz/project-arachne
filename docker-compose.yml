@@ -8,6 +8,8 @@ services:
       - main.env
     #    ports:
     #      - "36767:36767"
+    volumes:
+      - ./output/screenshots:/app/output/screenshots
     restart: always
 
   neo4j:

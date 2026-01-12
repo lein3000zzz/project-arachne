@@ -1,7 +1,6 @@
 package pageparser
 
 import (
-	"errors"
 	"regexp"
 )
 
@@ -10,10 +9,6 @@ type PageParser interface {
 	ExtractLinksFromJS(baseURL, src string) ([]string, error)
 	ExtractLinksFromJSON(baseURL string, data []byte) ([]string, error)
 }
-
-var (
-	ErrEmptyURL = errors.New("empty URL")
-)
 
 var urlRegex = regexp.MustCompile(`https?://[^\s"'<>]+`)
 

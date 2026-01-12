@@ -16,5 +16,6 @@ type CrawlerConfig struct {
 }
 
 type Crawler interface {
-	StartCrawler(crawlerConfig *CrawlerConfig)
+	StartCrawler()
+	GetCallbackChan() <-chan struct{}
 }

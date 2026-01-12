@@ -101,7 +101,7 @@ func (p *ExtraRodWorker) takeScreenshot(pageURL string, page *rod.Page) {
 	defer p.recoveryHelper()
 
 	safeName := url.QueryEscape(pageURL)
-	outPath := fmt.Sprintf("%s/%s.png", outDir, safeName)
+	outPath := fmt.Sprintf("%s/%s.png", defaultOutDir, safeName)
 
 	page.MustWaitLoad()
 	page.MustScreenshot(outPath)

@@ -267,3 +267,7 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 
 	return grobotstxt.AgentAllowed(robots, "project-arachne", urlToCheck)
 }
+
+func (repo *CrawlerRepo) GetCallbackChan() <-chan struct{} {
+	return repo.cfg.CrawlCallbackChan
+}

@@ -27,7 +27,7 @@ func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesR
 		pageRepo:       pagesRepo,
 
 		// Вот эта сказка гарантирует последовательность ранов
-		runLimiter: make(chan struct{}, ConcurrentRunsWorkers),
+		runLimiter: make(chan struct{}, DefaultConcurrentRunsWorkers),
 	}
 }
 
@@ -38,9 +38,17 @@ func (app *CrawlerApp) StartApp() error {
 		return err
 	}
 
-	tChan := app.processorQueue.GetTasksChan()
+	callbackChan := app.crawler.GetCallbackChan()
 
-	app.crawler.StartCrawler(tChan, ConcurrentTasksWorkers)
+	go app.processorQueue.StartRunConsumer()
+	go app.processorQueue.StartTaskConsumer()
+
+	go app.crawler.StartCrawler()
+
+	go app.startCrawlerCallbackListener(callbackChan)
+	go app.startRunListener()
+
+	return nil
 }
 
 func (app *CrawlerApp) startRunListener() {
@@ -67,6 +75,7 @@ func (app *CrawlerApp) startRunListener() {
 func (app *CrawlerApp) startCrawlerCallbackListener(sigChan <-chan struct{}) {
 	for range sigChan {
 		app.logger.Infof("Received crawler callback signal, run ended")
+		
 		select {
 		case <-app.runLimiter:
 			app.logger.Infof("semaphore released")

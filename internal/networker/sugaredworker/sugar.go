@@ -4,7 +4,7 @@ import (
 	"web-crawler/internal/domain/config"
 )
 
-const outDir = "output/screenshots"
+const defaultOutDir = "output/screenshots"
 
 type ExtraTaskRes struct {
 	HTMLTask []byte
