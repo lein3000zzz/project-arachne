@@ -3,10 +3,11 @@ package sugaredworker
 import (
 	"fmt"
 	"net/url"
-	"web-crawler/internal/config"
+	"web-crawler/internal/domain/config"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
 	"go.uber.org/zap"
 )
 
@@ -17,9 +18,12 @@ type ExtraRodWorker struct {
 }
 
 func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
-	tempDir := "C:\\Users\\Vladislav\\Downloads\\rodtemp"
-
-	l := launcher.New().UserDataDir(tempDir).Headless(true)
+	l := launcher.New().
+		Bin("/usr/bin/chromium-browser").
+		Headless(true).
+		Set("no-sandbox").
+		Set("disable-gpu").
+		Set("disable-dev-shm-usage")
 
 	browserURL, err := l.Launch()
 	if err != nil {
@@ -33,6 +37,13 @@ func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
 		return nil, errConnect
 	}
 
+	err = proto.BrowserSetDownloadBehavior{
+		Behavior: proto.BrowserSetDownloadBehaviorBehaviorDeny,
+	}.Call(browser)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ExtraRodWorker{
 		Logger:           logger,
 		LauncherInstance: l,
@@ -42,7 +53,12 @@ func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
 
 func (p *ExtraRodWorker) RestartBrowserAndLauncher() error {
 	if p.LauncherInstance == nil {
-		p.LauncherInstance = launcher.New().Headless(true)
+		p.LauncherInstance = launcher.New().
+			Bin("/usr/bin/chromium-browser").
+			Headless(true).
+			Set("no-sandbox").
+			Set("disable-gpu").
+			Set("disable-dev-shm-usage")
 	}
 
 	browserURL, err := p.LauncherInstance.Launch()
@@ -64,13 +80,6 @@ func (p *ExtraRodWorker) RestartBrowserAndLauncher() error {
 func (p *ExtraRodWorker) PerformExtraTask(pageURL string, flags *config.ExtraTaskFlags) *ExtraTaskRes {
 	page := p.getPageFromURL(pageURL)
 	defer p.recoveryHelper()
-
-	defer func(page *rod.Page) {
-		err := page.Close()
-		if err != nil {
-			p.Logger.Warnw("failed to close page", "err", err)
-		}
-	}(page)
 
 	res := new(ExtraTaskRes)
 
@@ -101,7 +110,7 @@ func (p *ExtraRodWorker) takeScreenshot(pageURL string, page *rod.Page) {
 	defer p.recoveryHelper()
 
 	safeName := url.QueryEscape(pageURL)
-	outPath := fmt.Sprintf("%s/%s.png", outDir, safeName)
+	outPath := fmt.Sprintf("%s/%s.png", defaultOutDir, safeName)
 
 	page.MustWaitLoad()
 	page.MustScreenshot(outPath)

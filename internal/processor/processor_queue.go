@@ -3,7 +3,7 @@ package processor
 import (
 	"encoding/json"
 	"time"
-	"web-crawler/internal/config"
+	"web-crawler/internal/domain/config"
 	"web-crawler/internal/processor/queue"
 
 	"go.uber.org/zap"
@@ -13,6 +13,9 @@ type QueueProcessor struct {
 	logger     *zap.SugaredLogger
 	tasksQueue queue.Queue
 	runQueue   queue.Queue
+
+	tasksConsumer chan *config.Task
+	runsConsumer  chan *config.Run
 }
 
 func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, runQueue queue.Queue) *QueueProcessor {
@@ -20,6 +23,9 @@ func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, ru
 		logger:     logger,
 		tasksQueue: tasksQueue,
 		runQueue:   runQueue,
+
+		tasksConsumer: make(chan *config.Task, 100),
+		runsConsumer:  make(chan *config.Run, 100),
 	}
 }
 
@@ -80,18 +86,36 @@ func (p *QueueProcessor) QueueRun(run *config.Run) {
 	p.runQueue.GetProducerChan() <- bytes
 }
 
-func (p *QueueProcessor) GetTask() (*config.Task, error) {
-	select {
-	case taskBytes := <-p.tasksQueue.GetConsumerChan():
+func (p *QueueProcessor) StartTaskConsumer() {
+	for taskBytes := range p.tasksQueue.GetConsumerChan() {
 		task := new(config.Task)
 
 		if err := json.Unmarshal(taskBytes, task); err != nil {
-			p.logger.Warnw("Failed to unmarshal task from kafka", "record", taskBytes, "err", err)
-			return nil, err
+			p.logger.Warnw("Failed to unmarshal task to json", "task", task)
+			continue
 		}
 
-		return task, nil
-	case <-time.After(queue.SingleRequestTimeout):
-		return nil, ErrNoTasks
+		p.tasksConsumer <- task
 	}
+}
+
+func (p *QueueProcessor) GetTasksChan() <-chan *config.Task {
+	return p.tasksConsumer
+}
+
+func (p *QueueProcessor) StartRunConsumer() {
+	for runBytes := range p.runQueue.GetConsumerChan() {
+		run := new(config.Run)
+
+		if err := json.Unmarshal(runBytes, run); err != nil {
+			p.logger.Warnw("Failed to unmarshal run from kafka", "run", run)
+			continue
+		}
+
+		p.runsConsumer <- run
+	}
+}
+
+func (p *QueueProcessor) GetRunsChan() <-chan *config.Run {
+	return p.runsConsumer
 }

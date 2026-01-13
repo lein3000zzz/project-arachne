@@ -5,8 +5,6 @@ import (
 	"web-crawler/internal/utils"
 )
 
-// TODO юзер-специфик конфиги и прочие чудеса
-
 type Run struct {
 	ID string
 
@@ -19,6 +17,8 @@ type Run struct {
 
 	CurrentLinks int
 	ActiveTasks  int
+
+	sync.Once
 
 	sync.RWMutex
 }
@@ -60,16 +60,4 @@ func (run *Run) IncrementActiveAndCurrentWithMutex() {
 
 	run.ActiveTasks++
 	run.CurrentLinks++
-}
-
-type Task struct {
-	URL          string
-	CurrentDepth int
-
-	Run *Run
-}
-
-type ExtraTaskFlags struct {
-	ShouldScreenshot  bool
-	ParseRenderedHTML bool
 }

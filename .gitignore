@@ -1,3 +1,6 @@
+deployments/opt
+
+
 # Ultimate Go gitignore
 *.exe
 *.exe~

@@ -10,10 +10,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	ErrCacheMiss = errors.New("cache miss")
-)
-
 type RedisCachedStorage struct {
 	Logger *zap.SugaredLogger
 	Client *redis.Client
