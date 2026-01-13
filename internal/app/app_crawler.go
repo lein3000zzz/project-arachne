@@ -38,14 +38,20 @@ func (app *CrawlerApp) StartApp() error {
 		return err
 	}
 
-	callbackChan := app.crawler.GetCallbackChan()
+	crawlerCBChan := make(chan struct{}, 1)
+	taskProducerChan := make(chan []*config.Task, 100)
+
+	crawlerCfg := app.buildCrawlerConfig(crawlerCBChan, taskProducerChan)
 
 	go app.processorQueue.StartRunConsumer()
 	go app.processorQueue.StartTaskConsumer()
+	go app.startTaskProducer(taskProducerChan)
 
-	go app.crawler.StartCrawler()
+	go app.startCrawlerCallbackListener(crawlerCBChan)
+	go app.pageRepo.StartSaverWorkers(DefaultConcurrentTasksWorkers)
 
-	go app.startCrawlerCallbackListener(callbackChan)
+	go app.crawler.StartCrawler(&crawlerCfg)
+
 	go app.startRunListener()
 
 	return nil
@@ -75,12 +81,35 @@ func (app *CrawlerApp) startRunListener() {
 func (app *CrawlerApp) startCrawlerCallbackListener(sigChan <-chan struct{}) {
 	for range sigChan {
 		app.logger.Infof("Received crawler callback signal, run ended")
-		
+
 		select {
 		case <-app.runLimiter:
 			app.logger.Infof("semaphore released")
 		default:
 			app.logger.Warnw("tried to release runs semaphore yet it had already been released")
+		}
+	}
+}
+
+func (app *CrawlerApp) buildCrawlerConfig(crawlerCBChan chan<- struct{}, tpChan chan<- []*config.Task) webcrawler.CrawlerConfig {
+	crawlerCfg := webcrawler.CrawlerConfig{
+		TaskConsumerChan:  app.processorQueue.GetTasksChan(),
+		SaverChan:         app.pageRepo.GetSaverChan(),
+		TaskProducerChan:  tpChan,
+		CrawlCallbackChan: crawlerCBChan,
+		WorkersNumber:     DefaultConcurrentTasksWorkers,
+	}
+
+	return crawlerCfg
+}
+
+func (app *CrawlerApp) startTaskProducer(tpChan <-chan []*config.Task) {
+	for tasks := range tpChan {
+		for _, task := range tasks {
+			err := app.processorQueue.SendTask(task)
+			if err != nil {
+				return
+			}
 		}
 	}
 }

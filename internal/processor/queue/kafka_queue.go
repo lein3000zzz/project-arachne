@@ -35,7 +35,6 @@ func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue,
 			User: config.User,
 			Pass: config.Password,
 		}.AsMechanism()),
-		kgo.DisableAutoCommit(),
 	)
 
 	if err != nil {

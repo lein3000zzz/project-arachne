@@ -37,7 +37,6 @@ func NewCrawlerRepo(
 	extraWorker sugaredworker.SugaredWorker,
 	cachePages cache.CachedStorage,
 	cacheRobots cache.CachedStorage,
-	cfg *CrawlerConfig,
 ) *CrawlerRepo {
 	return &CrawlerRepo{
 		logger:      logger,
@@ -46,11 +45,12 @@ func NewCrawlerRepo(
 		extraWorker: extraWorker,
 		cachePages:  cachePages,
 		cacheRobots: cacheRobots,
-		cfg:         cfg,
 	}
 }
 
-func (repo *CrawlerRepo) StartCrawler() {
+func (repo *CrawlerRepo) StartCrawler(cfg *CrawlerConfig) {
+	repo.cfg = cfg
+
 	for range repo.cfg.WorkersNumber {
 		go repo.crawlWorker(repo.cfg.TaskConsumerChan, repo.cfg.TaskProducerChan, repo.cfg.SaverChan)
 	}
@@ -61,7 +61,7 @@ func (repo *CrawlerRepo) crawlWorker(tcChan <-chan *config.Task, tpChan chan<- [
 
 	for task := range tcChan {
 		err := repo.processTask(task, tpChan, saverChan)
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrCacheHit) {
 			repo.logger.Warnf("Error processing task: %s", err)
 			continue
 		}
@@ -130,14 +130,13 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		return nil, ErrFetching
 	}
 
-	// TODO: fix and refactor
-	//if task.Run.ExtraFlags != nil {
-	//	extra := repo.extraWorker.PerformExtraTask(task.URL, task.Run.ExtraFlags)
-	//
-	//	if task.Run.ExtraFlags.ParseRenderedHTML {
-	//		fetchRes.Body = extra.HTMLTask
-	//	}
-	//}
+	if task.Run.ExtraFlags != nil {
+		extra := repo.extraWorker.PerformExtraTask(task.URL, task.Run.ExtraFlags)
+
+		if task.Run.ExtraFlags.ParseRenderedHTML {
+			fetchRes.Body = extra.HTMLTask
+		}
+	}
 
 	linksFromThePage, errExtract := repo.extractLinksFromPage(task, fetchRes.Body)
 	if errExtract != nil {
@@ -185,7 +184,7 @@ func (repo *CrawlerRepo) extractLinksFromPage(task *config.Task, body []byte) ([
 
 func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
 	left := run.DecrementActiveWithMutex()
-	// вообще тут было раньше <= 0, и я хз, почему оно не вызывало несколько раз освобождение семафора, но теперь
+	// вообще тут было раньше <= 0 (мне очень стыдно), и я хз, почему оно не вызывало несколько раз освобождение семафора, но теперь
 	// логика адекватна, да и я еще Run делаю с Once, гарантируя всего ОДНО освобождение семафора ранов
 	if left == 0 {
 		// run.Do - вызов к once.Do из sync.Once
@@ -218,14 +217,14 @@ func (repo *CrawlerRepo) createNewTasksFromLinks(prevTask *config.Task, links []
 	newTasks := make([]*config.Task, len(links))
 	newDepth := prevTask.CurrentDepth + 1
 
-	for _, link := range links {
+	for i, link := range links {
 		newTask := &config.Task{
 			URL:          link,
 			CurrentDepth: newDepth,
 			Run:          prevTask.Run,
 		}
 
-		newTasks = append(newTasks, newTask)
+		newTasks[i] = newTask
 	}
 
 	return newTasks
@@ -266,8 +265,4 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 	}
 
 	return grobotstxt.AgentAllowed(robots, "project-arachne", urlToCheck)
-}
-
-func (repo *CrawlerRepo) GetCallbackChan() <-chan struct{} {
-	return repo.cfg.CrawlCallbackChan
 }

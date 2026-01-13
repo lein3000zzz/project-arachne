@@ -11,10 +11,6 @@ import (
 	"github.com/dop251/goja/token"
 )
 
-type stringer interface {
-	String() string
-}
-
 type nodeVisitor interface {
 	visit(ast.Node)
 }
@@ -762,6 +758,11 @@ func uniToString(v reflect.Value) string {
 	if s, ok := v.Interface().(string); ok {
 		return s
 	}
+
+	type stringer interface {
+		String() string
+	}
+
 	if s, ok := v.Interface().(stringer); ok {
 		return s.String()
 	}

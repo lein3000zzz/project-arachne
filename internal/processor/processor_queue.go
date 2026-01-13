@@ -23,6 +23,9 @@ func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, ru
 		logger:     logger,
 		tasksQueue: tasksQueue,
 		runQueue:   runQueue,
+
+		tasksConsumer: make(chan *config.Task, 100),
+		runsConsumer:  make(chan *config.Run, 100),
 	}
 }
 

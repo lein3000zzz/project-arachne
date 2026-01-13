@@ -18,11 +18,10 @@ import (
 	"go.uber.org/zap"
 )
 
-func initApp() *CrawlerApp {
+func InitApp() *CrawlerApp {
 	initEnv()
 
 	logger := initLogger()
-	defer logger.Sync()
 
 	neo4jDriver := initNeo4jDriver()
 	pageRepo := initPageRepo(logger, neo4jDriver)
@@ -110,10 +109,9 @@ func initNeo4jDriver() neo4j.DriverWithContext {
 	neo4jUser := os.Getenv("NEO4J_USER")
 	neo4jPassword := os.Getenv("NEO4J_PASSWORD")
 
-	config := neoconfig.Config{
-		MaxConnectionPoolSize: 100,
-	}
-	neo4jDriver, err := neo4j.NewDriverWithContext(neo4jURI, neo4j.BasicAuth(neo4jUser, neo4jPassword, ""), &config)
+	neo4jDriver, err := neo4j.NewDriverWithContext(neo4jURI, neo4j.BasicAuth(neo4jUser, neo4jPassword, ""), func(config *neoconfig.Config) {
+		config.MaxConnectionPoolSize = DefaultConcurrentTasksWorkers
+	})
 
 	if err != nil {
 		log.Fatal("Error initializing neo4j:", err)

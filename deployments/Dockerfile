@@ -6,7 +6,14 @@ COPY . .
 RUN go build -o web-crawler ./cmd/web-crawler
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add \
+    ca-certificates \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ttf-freefont \
+    font-noto-emoji
 WORKDIR /root/
 COPY --from=builder /app/web-crawler .
 COPY --from=builder /app/main.env ./main.env

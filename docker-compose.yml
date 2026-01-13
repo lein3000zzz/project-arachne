@@ -10,7 +10,15 @@ services:
     #      - "36767:36767"
     volumes:
       - ./output/screenshots:/app/output/screenshots
+      - ./deployments/opt/rod/cache:/root/.cache/rod
     restart: always
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      broker:
+        condition: service_started
 
   neo4j:
     image: neo4j:5-enterprise
@@ -22,27 +30,39 @@ services:
     volumes:
       - ./deployments/opt/neo4j_data:/data
       - ./deployments/opt/neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   redis:
     image: 'redis'
-    command: [ "sh", "-c", "redis-server --requirepass \"$REDIS_PASSWORD\"" ]
+    command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\""]
     ports:
       - '6379:6379'
     env_file:
       - main.env
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   broker:
     image: apache/kafka:latest
     container_name: broker
     env_file:
       - deployments/kafka/kafka.env
+    volumes:
+      - ./deployments/kafka/kafka_server_jaas.conf:/etc/kafka/kafka_server_jaas.conf
     ports:
       - "29092:29092"
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    depends_on:
-      - broker
     env_file:
       - deployments/kafka/kafkaui.env
     ports:

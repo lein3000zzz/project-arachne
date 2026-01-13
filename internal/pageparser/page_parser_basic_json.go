@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-// TODO Я знаю, что этот код рефактора требует
-
 func (p *ParserBasic) ExtractLinksFromJSON(baseURL string, data []byte) ([]string, error) {
 	var root any
 	if err := json.Unmarshal(data, &root); err != nil {

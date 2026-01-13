@@ -5,8 +5,6 @@ import (
 	"web-crawler/internal/utils"
 )
 
-// TODO юзер-специфик конфиги и прочие чудеса
-
 type Run struct {
 	ID string
 

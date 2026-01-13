@@ -10,12 +10,11 @@ type CrawlerConfig struct {
 	SaverChan        chan<- *data.PageData
 	TaskProducerChan chan<- []*config.Task
 
-	CrawlCallbackChan chan struct{}
+	CrawlCallbackChan chan<- struct{}
 
 	WorkersNumber int
 }
 
 type Crawler interface {
-	StartCrawler()
-	GetCallbackChan() <-chan struct{}
+	StartCrawler(cfg *CrawlerConfig)
 }
