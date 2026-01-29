@@ -3,7 +3,6 @@ package cache
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,23 +14,9 @@ type RedisCachedStorage struct {
 	Client *redis.Client
 }
 
-func NewRedisCache(addr, password string, db int, logger *zap.SugaredLogger) *RedisCachedStorage {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: password,
-		DB:       db,
-	})
-
-	if err := rdb.ConfigSet(context.Background(), "maxmemory", "512mb").Err(); err != nil {
-		log.Fatalf("failed to set redis maxmemory: %v", err)
-	}
-
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		log.Fatalf("failed to connect to redis: %v", err)
-	}
-
+func NewRedisCache(client *redis.Client, logger *zap.SugaredLogger) *RedisCachedStorage {
 	return &RedisCachedStorage{
-		Client: rdb,
+		Client: client,
 		Logger: logger,
 	}
 }

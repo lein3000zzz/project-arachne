@@ -1,13 +1,13 @@
 package config
 
 type Task struct {
-	URL          string
-	CurrentDepth int
+	URL          string `json:"url"`
+	CurrentDepth int    `json:"current_depth"`
 
-	Run *Run
+	Run *Run `json:"run"`
 }
 
 type ExtraTaskFlags struct {
-	ShouldScreenshot  bool
-	ParseRenderedHTML bool
+	ShouldScreenshot  bool `json:"should_screenshot"`
+	ParseRenderedHTML bool `json:"parse_rendered_html"`
 }

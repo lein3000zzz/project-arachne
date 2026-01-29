@@ -1,6 +1,7 @@
 package webcrawler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,18 +15,20 @@ import (
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler/cache"
+	"web-crawler/internal/webcrawler/runstates"
 
 	"github.com/jimsmart/grobotstxt"
 	"go.uber.org/zap"
 )
 
 type CrawlerRepo struct {
-	logger      *zap.SugaredLogger
-	parser      pageparser.PageParser
-	networker   networker.Networker
-	extraWorker sugaredworker.SugaredWorker
-	cachePages  cache.CachedStorage
-	cacheRobots cache.CachedStorage
+	logger          *zap.SugaredLogger
+	parser          pageparser.PageParser
+	networker       networker.Networker
+	extraWorker     sugaredworker.SugaredWorker
+	cachePages      cache.CachedStorage
+	cacheRobots     cache.CachedStorage
+	runStateManager runstates.RunStateManager
 
 	cfg *CrawlerConfig
 }
@@ -37,14 +40,16 @@ func NewCrawlerRepo(
 	extraWorker sugaredworker.SugaredWorker,
 	cachePages cache.CachedStorage,
 	cacheRobots cache.CachedStorage,
+	runStateManager runstates.RunStateManager,
 ) *CrawlerRepo {
 	return &CrawlerRepo{
-		logger:      logger,
-		parser:      parser,
-		networker:   networker,
-		extraWorker: extraWorker,
-		cachePages:  cachePages,
-		cacheRobots: cacheRobots,
+		logger:          logger,
+		parser:          parser,
+		networker:       networker,
+		extraWorker:     extraWorker,
+		cachePages:      cachePages,
+		cacheRobots:     cacheRobots,
+		runStateManager: runStateManager,
 	}
 }
 
@@ -175,7 +180,7 @@ func (repo *CrawlerRepo) extractLinksFromPage(task *config.Task, body []byte) ([
 	links := repo.parser.ParseHTML(body, task.URL)
 	jsonLinks, err := repo.parser.ExtractLinksFromJSON(task.URL, body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract links from JSON: %w", err)
+		repo.logger.Warnw("error extracting json links", "url", task.URL, "err", err)
 	}
 
 	links = append(links, jsonLinks...)
@@ -183,19 +188,39 @@ func (repo *CrawlerRepo) extractLinksFromPage(task *config.Task, body []byte) ([
 }
 
 func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
-	left := run.DecrementActiveWithMutex()
-	// вообще тут было раньше <= 0 (мне очень стыдно), и я хз, почему оно не вызывало несколько раз освобождение семафора, но теперь
-	// логика адекватна, да и я еще Run делаю с Once, гарантируя всего ОДНО освобождение семафора ранов
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	left, err := repo.runStateManager.DecrementActiveTasks(ctx, run.ID)
+	if err != nil {
+		repo.logger.Errorw("Failed to decrement active tasks in Redis", "runID", run.ID, "error", err)
+		return
+	}
+
 	if left == 0 {
-		// run.Do - вызов к once.Do из sync.Once
-		run.Do(func() {
+		acquired, lockErr := repo.runStateManager.AcquireRunCompletionLock(ctx, run.ID, runstates.LockTTL)
+		if lockErr != nil {
+			repo.logger.Errorw("Failed to acquire completion lock", "runID", run.ID, "error", lockErr)
+			return
+		}
+
+		if acquired {
 			select {
 			case repo.cfg.CrawlCallbackChan <- struct{}{}:
 				repo.logger.Infow("Run finished; released run slot", "runID", run.ID)
 			default:
 				repo.logger.Infow("Run finished, but the run slot was already empty for some reason", "runID", run.ID)
 			}
-		})
+
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+
+			if cleanupErr := repo.runStateManager.CleanupRun(cleanupCtx, run.ID); cleanupErr != nil {
+				repo.logger.Warnw("Failed to cleanup run state", "runID", run.ID, "error", cleanupErr)
+			}
+		} else {
+			repo.logger.Debugw("Another node is handling run completion", "runID", run.ID)
+		}
 	}
 }
 
