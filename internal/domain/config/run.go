@@ -1,26 +1,20 @@
 package config
 
 import (
-	"sync"
 	"web-crawler/internal/utils"
 )
 
+// Run - конфиг "забега"
+// State в редисе (дб 2) для координации между нодами
 type Run struct {
-	ID string
+	ID string `json:"id"`
 
-	UseCacheFlag bool
-	MaxDepth     int
-	MaxLinks     int
-	ExtraFlags   *ExtraTaskFlags
+	UseCacheFlag bool            `json:"use_cache_flag"`
+	MaxDepth     int             `json:"max_depth"`
+	MaxLinks     int             `json:"max_links"`
+	ExtraFlags   *ExtraTaskFlags `json:"extra_flags,omitempty"`
 
-	StartURL string
-
-	CurrentLinks int
-	ActiveTasks  int
-
-	sync.Once
-
-	sync.RWMutex
+	StartURL string `json:"start_url"`
 }
 
 func NewRun(URL string, maxDepth, maxLinks int, flags *ExtraTaskFlags) *Run {
@@ -33,31 +27,5 @@ func NewRun(URL string, maxDepth, maxLinks int, flags *ExtraTaskFlags) *Run {
 		MaxLinks:     maxLinks,
 		ExtraFlags:   flags,
 		StartURL:     URL,
-		CurrentLinks: 0,
-		ActiveTasks:  0,
 	}
-}
-
-func (run *Run) IncrementActiveWithMutex() int {
-	run.Lock()
-	defer run.Unlock()
-
-	run.ActiveTasks++
-	return run.ActiveTasks
-}
-
-func (run *Run) DecrementActiveWithMutex() int {
-	run.Lock()
-	defer run.Unlock()
-
-	run.ActiveTasks--
-	return run.ActiveTasks
-}
-
-func (run *Run) IncrementActiveAndCurrentWithMutex() {
-	run.Lock()
-	defer run.Unlock()
-
-	run.ActiveTasks++
-	run.CurrentLinks++
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"log"
 	"os"
 	"web-crawler/internal/networker"
@@ -9,12 +10,15 @@ import (
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
+	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
+	"web-crawler/internal/webcrawler/runstates"
 
 	"github.com/joho/godotenv"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	neoconfig "github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -29,22 +33,54 @@ func InitApp() *CrawlerApp {
 	tasksQueue := initTasksQueue(logger)
 	runsQueue := initRunsQueue(logger)
 
-	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue)
+	redisRunStateClient := initRedisClient(logger, os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 2)
+
+	nodeID, err := utils.GenerateID()
+	if err != nil {
+		logger.Fatal("Error generating node ID:", err)
+	}
+
+	runStateManager := runstates.NewRedisRunStateManager(redisRunStateClient, logger, nodeID)
+
+	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue, runStateManager)
 
 	fetcher := networker.NewNetworker(logger)
 	parser := pageparser.NewParserRepo(logger)
 
-	redisPagesCache := cache.NewRedisCache(os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 0, logger)
-	redisRobotsCache := cache.NewRedisCache(os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 1, logger)
+	redisPagesCacheClient := initRedisClient(logger, os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 0)
+	redisRobotsCacheClient := initRedisClient(logger, os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 1)
+
+	redisPagesCache := cache.NewRedisCache(redisPagesCacheClient, logger)
+	redisRobotsCache := cache.NewRedisCache(redisRobotsCacheClient, logger)
 
 	extraWorker, errRod := sugaredworker.NewExtraRodParser(logger)
 	if errRod != nil {
 		logger.Fatal("Error initializing extra worker parser:", errRod)
 	}
 
-	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, redisPagesCache, redisRobotsCache)
+	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager)
 
-	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue)
+	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager)
+}
+
+func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int) *redis.Client {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     uri,
+		Password: password,
+		DB:       db,
+	})
+
+	if err := rdb.ConfigSet(context.Background(), "maxmemory", "512mb").Err(); err != nil {
+		log.Fatalf("failed to set redis maxmemory: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Fatal("Failed to connect to Redis for run state:", err)
+	}
+
+	logger.Infow("Connected to Redis for run state management", "addr", uri)
+	return rdb
 }
 
 func initTasksQueue(logger *zap.SugaredLogger) queue.Queue {
@@ -52,7 +88,7 @@ func initTasksQueue(logger *zap.SugaredLogger) queue.Queue {
 	kafkaUser := os.Getenv("KAFKA_USERNAME")
 	kafkaPassword := os.Getenv("KAFKA_PASSWORD")
 	tasksConsumerGroup := os.Getenv("KAFKA_TASKS_CONSUMER_GROUP")
-	tasksConsumerTopic := os.Getenv("KAFKA_TASKS_CONSUMER_TOPIC")
+	tasksConsumerTopic := os.Getenv("KAFKA_TOPIC_TASKS")
 
 	kafkaTasksCfg := queue.KafkaConfig{
 		Seeds:         []string{addr},
@@ -75,7 +111,7 @@ func initRunsQueue(logger *zap.SugaredLogger) queue.Queue {
 	kafkaUser := os.Getenv("KAFKA_USERNAME")
 	kafkaPassword := os.Getenv("KAFKA_PASSWORD")
 	runsConsumerGroup := os.Getenv("KAFKA_RUNS_CONSUMER_GROUP")
-	runsConsumerTopic := os.Getenv("KAFKA_RUNS_CONSUMER_TOPIC")
+	runsConsumerTopic := os.Getenv("KAFKA_TOPIC_RUNS")
 
 	kafkaRunsCfg := queue.KafkaConfig{
 		Seeds:         []string{addr},
