@@ -141,18 +141,17 @@ func (p *QueueProcessor) StartRunConsumer() {
 }
 
 func (p *QueueProcessor) GetRunsChan() <-chan *config.Run {
-	go func() {
-		run := config.Run{
-			ID:           "test",
-			UseCacheFlag: true,
-			MaxDepth:     3,
-			MaxLinks:     15,
-			ExtraFlags:   nil,
-			StartURL:     "https://example.com/",
-		}
-
-		p.runsConsumer <- &run
-	}()
-
+	//go func() {
+	//	run := config.Run{
+	//		ID:           "test",
+	//		UseCacheFlag: true,
+	//		MaxDepth:     3,
+	//		MaxLinks:     15,
+	//		ExtraFlags:   nil,
+	//		StartURL:     "https://example.com/",
+	//	}
+	//
+	//	p.runsConsumer <- &run
+	//}()
 	return p.runsConsumer
 }

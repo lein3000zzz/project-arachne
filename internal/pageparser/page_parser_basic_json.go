@@ -9,9 +9,7 @@ import (
 func (p *ParserBasic) ExtractLinksFromJSON(baseURL string, data []byte) ([]string, error) {
 	var root any
 	if err := json.Unmarshal(data, &root); err != nil {
-		if p.Logger != nil {
-			p.Logger.Errorw("json parse error", "err", err)
-		}
+		p.Logger.Errorw("json parse error", "err", err)
 		return nil, err
 	}
 
@@ -19,7 +17,7 @@ func (p *ParserBasic) ExtractLinksFromJSON(baseURL string, data []byte) ([]strin
 	if baseURL != "" {
 		if u, err := url.Parse(baseURL); err == nil {
 			base = u
-		} else if p.Logger != nil {
+		} else {
 			p.Logger.Warnw("invalid base URL, skipping resolution", "base", baseURL, "err", err)
 		}
 	}
