@@ -6,6 +6,9 @@ import (
 	"web-crawler/internal/domain/data"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 )
 
@@ -38,6 +41,17 @@ func (repo *PageNeo4jRepo) SavePage(page *data.PageData) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	tracer := otel.Tracer("neo4j")
+	_, span := tracer.Start(ctx, "SavePage")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("page.url", page.URL),
+		attribute.Int("page.lastRunID", len(page.LastRunID)),
+		attribute.Int("page.status", page.Status),
+		attribute.Int("page.linksNum", len(page.Links)),
+	)
+
 	params, errParams := page.ToParams()
 	if errParams != nil {
 		repo.logger.Errorf("failed to parse params: %v", errParams)
@@ -58,12 +72,14 @@ func (repo *PageNeo4jRepo) SavePage(page *data.PageData) error {
 		neo4j.EagerResultTransformer,
 		neo4j.ExecuteQueryWithDatabase("pages"),
 	)
-
 	if errQuery != nil {
+		span.RecordError(errQuery)
+		span.SetStatus(codes.Error, "Save failed")
 		repo.logger.Errorf("failed to execute query: %v", errQuery)
 		return errQuery
 	}
 
+	span.SetStatus(codes.Ok, "Page saved")
 	repo.logger.Debugw("page saved pages number: %d", queryRes.Summary.ResultAvailableAfter())
 
 	return nil
@@ -75,6 +91,7 @@ func (repo *PageNeo4jRepo) GetSaverChan() chan<- *data.PageData {
 
 func (repo *PageNeo4jRepo) StartSaverWorkers(workers int) {
 	for i := 0; i < workers; i++ {
+		// TODO переписать под логику батчей.
 		go repo.startSaverWorker()
 	}
 }

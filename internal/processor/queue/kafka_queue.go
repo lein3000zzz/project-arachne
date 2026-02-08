@@ -7,6 +7,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
+	"github.com/twmb/franz-go/plugin/kotel"
 	"go.uber.org/zap"
 )
 
@@ -26,6 +27,8 @@ type KafkaQueue struct {
 }
 
 func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue, error) {
+	kotelClient := kotel.NewKotel()
+
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(config.Seeds...),
 		kgo.ConsumerGroup(config.ConsumerGroup),
@@ -38,6 +41,7 @@ func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue,
 			User: config.User,
 			Pass: config.Password,
 		}.AsMechanism()),
+		kgo.WithHooks(kotelClient.Hooks()),
 	)
 
 	if err != nil {

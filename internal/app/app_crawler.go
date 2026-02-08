@@ -10,6 +10,10 @@ import (
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/runstates"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/trace"
 	"go.uber.org/zap"
 )
 
@@ -19,11 +23,12 @@ type CrawlerApp struct {
 	processorQueue  processor.Processor
 	pageRepo        pages.PageRepo
 	runStateManager runstates.RunStateManager
+	tracer          *trace.TracerProvider
 
 	maxConcurrentRuns int
 }
 
-func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageRepo, processorQueue processor.Processor, runStateManager runstates.RunStateManager) *CrawlerApp {
+func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageRepo, processorQueue processor.Processor, runStateManager runstates.RunStateManager, tp *trace.TracerProvider) *CrawlerApp {
 	return &CrawlerApp{
 		logger:            logger,
 		crawler:           crawler,
@@ -31,6 +36,7 @@ func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesR
 		pageRepo:          pagesRepo,
 		runStateManager:   runStateManager,
 		maxConcurrentRuns: DefaultConcurrentRunsWorkers,
+		tracer:            tp,
 	}
 }
 
@@ -51,7 +57,7 @@ func (app *CrawlerApp) StartApp() error {
 	go app.startTaskProducer(taskProducerChan)
 
 	go app.startCrawlerCallbackListener(crawlerCBChan)
-	go app.pageRepo.StartSaverWorkers(DefaultConcurrentTasksWorkers)
+	go app.pageRepo.StartSaverWorkers(DefaultConcurrentTasksWorkers / 2)
 
 	go app.crawler.StartCrawler(&crawlerCfg)
 
@@ -61,6 +67,16 @@ func (app *CrawlerApp) StartApp() error {
 }
 
 func (app *CrawlerApp) startRunListener() {
+	// TODO сделать нормальный flow с graceful shutdown'ами, блекджеком и тд
+	// TODO сделать StopApp!!
+	defer app.tracer.Shutdown(context.Background())
+
+	tracer := otel.Tracer("app")
+	_, span := tracer.Start(context.Background(), "RunListener")
+	defer span.End()
+
+	span.SetAttributes(attribute.Int("max_concurrent_runs", app.maxConcurrentRuns))
+
 	runsChan := app.processorQueue.GetRunsChan()
 
 	for run := range runsChan {
@@ -69,12 +85,24 @@ func (app *CrawlerApp) startRunListener() {
 		acquired := false
 		for !acquired {
 			var err error
+			_, subSpan := tracer.Start(ctx, "AcquireSlot")
+			subSpan.SetAttributes(
+				attribute.String("run_id", run.ID),
+				attribute.Int("max_concurrent_runs", app.maxConcurrentRuns),
+			)
 			acquired, err = app.runStateManager.AcquireRunSlot(ctx, app.maxConcurrentRuns)
+			subSpan.SetAttributes(attribute.Bool("acquired", acquired))
 			if err != nil {
+				// мне не нравится, но пока сойдет, не забыть переделать TODO
+				subSpan.RecordError(err)
+				subSpan.SetStatus(codes.Error, "Slot acquisition failed")
 				app.logger.Errorw("Error acquiring run slot", "error", err)
+				subSpan.End()
 				cancel()
 				continue
 			}
+			subSpan.SetStatus(codes.Ok, "Slot checked")
+			subSpan.End()
 
 			if !acquired {
 				select {
@@ -100,6 +128,9 @@ func (app *CrawlerApp) startRunListener() {
 		if err != nil {
 			app.logger.Errorf("Error sending task: %v", err)
 
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Run's first task send failed")
+
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if releaseErr := app.runStateManager.ReleaseRunSlot(releaseCtx); releaseErr != nil {
 				app.logger.Errorw("Failed to release run slot", "error", releaseErr)
@@ -109,6 +140,8 @@ func (app *CrawlerApp) startRunListener() {
 			continue
 		}
 	}
+
+	span.SetStatus(codes.Ok, "Run listener exited")
 }
 
 func (app *CrawlerApp) startCrawlerCallbackListener(sigChan <-chan struct{}) {

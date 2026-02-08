@@ -18,12 +18,20 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	neoconfig "github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.uber.org/zap"
 )
 
 func InitApp() *CrawlerApp {
 	initEnv()
+
+	tp := initTracing()
 
 	logger := initLogger()
 
@@ -60,7 +68,7 @@ func InitApp() *CrawlerApp {
 
 	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager)
 
-	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager)
+	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp)
 }
 
 func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int) *redis.Client {
@@ -69,6 +77,14 @@ func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int) *r
 		Password: password,
 		DB:       db,
 	})
+
+	if err := redisotel.InstrumentTracing(rdb); err != nil {
+		log.Fatalf("redisotel tracing err: %v", err)
+	}
+
+	if err := redisotel.InstrumentMetrics(rdb); err != nil {
+		log.Fatalf("redisotel metrics err: %v", err)
+	}
 
 	if err := rdb.ConfigSet(context.Background(), "maxmemory", "512mb").Err(); err != nil {
 		log.Fatalf("failed to set redis maxmemory: %v", err)
@@ -154,6 +170,29 @@ func initNeo4jDriver() neo4j.DriverWithContext {
 	}
 
 	return neo4jDriver
+}
+
+func initTracing() *trace.TracerProvider {
+	exp, err := otlptracehttp.New(context.Background(), otlptracehttp.WithEndpoint(os.Getenv("OTLP_ENDPOINT")), otlptracehttp.WithInsecure())
+	if err != nil {
+		log.Fatalf("Error initializing jaeger: %v", err)
+	}
+
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(semconv.ServiceNameKey.String("project-arachne")),
+	)
+	if err != nil {
+		log.Fatal("Error initializing otel resource:", err)
+	}
+
+	tracerProvider := trace.NewTracerProvider(
+		trace.WithBatcher(exp),
+		trace.WithResource(res),
+	)
+
+	otel.SetTracerProvider(tracerProvider)
+
+	return tracerProvider
 }
 
 func initLogger() *zap.SugaredLogger {
