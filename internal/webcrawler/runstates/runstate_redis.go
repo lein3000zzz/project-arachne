@@ -251,3 +251,17 @@ func (m *RedisRunStateManager) CheckRunLimits(ctx context.Context, runID string,
 
 	return currentLinks < int64(maxLinks), nil
 }
+
+func (m *RedisRunStateManager) Stop(ctx context.Context) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- m.client.Close()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

@@ -7,5 +7,6 @@ type FetchResult struct {
 }
 
 type Networker interface {
+	Stop()
 	Fetch(url string) (*FetchResult, error)
 }

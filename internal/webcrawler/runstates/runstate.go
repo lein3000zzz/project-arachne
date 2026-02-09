@@ -20,4 +20,5 @@ type RunStateManager interface {
 	ReleaseRunSlot(ctx context.Context) error
 	CleanupRun(ctx context.Context, runID string) error
 	SetRunTTL(ctx context.Context, runID string, ttl time.Duration) error
+	Stop(ctx context.Context) error
 }

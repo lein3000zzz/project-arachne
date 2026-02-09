@@ -39,3 +39,17 @@ func (c *RedisCachedStorage) Get(key string) (string, error) {
 
 	return val, err
 }
+
+func (c *RedisCachedStorage) Stop(ctx context.Context) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Client.Close()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

@@ -87,3 +87,7 @@ func (nw *NetworkWorker) withSpan(name string, f func(context.Context, trace.Spa
 
 	return result, err
 }
+
+func (nw *NetworkWorker) Stop() {
+	nw.httpClient.CloseIdleConnections()
+}

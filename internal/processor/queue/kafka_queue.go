@@ -9,6 +9,7 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/plugin/kotel"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type KafkaConfig struct {
@@ -211,9 +212,21 @@ func (q *KafkaQueue) produceRecords(records []*kgo.Record) {
 	q.logger.Infow("Produced items", "items", records)
 }
 
-func (q *KafkaQueue) CloseQueue() {
-	drainAncCloseChannel(q.consumerChan)
-	drainAncCloseChannel(q.producerChan)
+func (q *KafkaQueue) CloseQueue(ctx context.Context) error {
+	eg := &errgroup.Group{}
+
+	eg.SetLimit(2)
+	eg.Go(func() error {
+		return drainAncCloseChannel(ctx, q.consumerChan)
+	})
+
+	eg.Go(func() error {
+		return drainAncCloseChannel(ctx, q.producerChan)
+	})
+
+	err := eg.Wait()
 
 	q.kafkaClient.Close()
+
+	return err
 }

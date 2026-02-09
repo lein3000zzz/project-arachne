@@ -9,6 +9,7 @@ import (
 	"web-crawler/internal/webcrawler/runstates"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type QueueProcessor struct {
@@ -138,6 +139,24 @@ func (p *QueueProcessor) StartRunConsumer() {
 
 		p.runsConsumer <- run
 	}
+}
+
+func (p *QueueProcessor) StopProcessor(ctx context.Context) error {
+	eg := &errgroup.Group{}
+	eg.Go(func() error {
+		return p.runQueue.CloseQueue(ctx)
+	})
+
+	eg.Go(func() error {
+		return p.tasksQueue.CloseQueue(ctx)
+	})
+
+	err := eg.Wait()
+
+	close(p.runsConsumer)
+	close(p.tasksConsumer)
+
+	return err
 }
 
 func (p *QueueProcessor) GetRunsChan() <-chan *config.Run {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/jimsmart/grobotstxt"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type CrawlerRepo struct {
@@ -290,4 +291,30 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 	}
 
 	return grobotstxt.AgentAllowed(robots, "project-arachne", urlToCheck)
+}
+
+func (repo *CrawlerRepo) Shutdown(ctx context.Context) error {
+	go repo.networker.Stop()
+
+	shutdowns := []func(context.Context) error{
+		repo.extraWorker.Shutdown,
+		repo.cachePages.Stop,
+		repo.cacheRobots.Stop,
+	}
+
+	eg := &errgroup.Group{}
+	for _, shutdown := range shutdowns {
+		// shutdown := shutdown // птср после старых версий гошки
+		eg.Go(func() error {
+			subCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+
+			return shutdown(subCtx)
+		})
+	}
+
+	close(repo.cfg.CrawlCallbackChan)
+	close(repo.cfg.TaskProducerChan)
+
+	return eg.Wait()
 }

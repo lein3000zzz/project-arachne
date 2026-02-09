@@ -1,6 +1,7 @@
 package sugaredworker
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"web-crawler/internal/domain/config"
@@ -134,5 +135,19 @@ func (p *ExtraRodWorker) recoveryHelper() {
 			p.Logger.Warnw("failed to restart launcher and browser", "err", err)
 			return
 		}
+	}
+}
+
+func (p *ExtraRodWorker) Shutdown(ctx context.Context) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Browser.Close()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

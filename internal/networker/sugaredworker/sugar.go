@@ -1,6 +1,7 @@
 package sugaredworker
 
 import (
+	"context"
 	"web-crawler/internal/domain/config"
 )
 
@@ -13,4 +14,5 @@ type ExtraTaskRes struct {
 type SugaredWorker interface {
 	RestartBrowserAndLauncher() error
 	PerformExtraTask(pageURL string, flags *config.ExtraTaskFlags) *ExtraTaskRes
+	Shutdown(ctx context.Context) error
 }

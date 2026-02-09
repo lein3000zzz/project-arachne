@@ -1,9 +1,16 @@
 package queue
 
-func drainAncCloseChannel[T interface{}](channel chan T) {
+import "context"
+
+func drainAncCloseChannel[T interface{}](ctx context.Context, channel chan T) error {
 	for len(channel) > 0 {
-		<-channel
+		select {
+		case <-channel:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	close(channel)
+	return nil
 }

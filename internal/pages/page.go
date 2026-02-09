@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"context"
 	"web-crawler/internal/domain/data"
 )
 
@@ -9,4 +10,5 @@ type PageRepo interface {
 	EnsureConnectivity() error
 	GetSaverChan() chan<- *data.PageData
 	StartSaverWorkers(workers int)
+	Shutdown(ctx context.Context) error
 }

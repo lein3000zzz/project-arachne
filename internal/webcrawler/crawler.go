@@ -1,6 +1,7 @@
 package webcrawler
 
 import (
+	"context"
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/domain/data"
 )
@@ -17,4 +18,5 @@ type CrawlerConfig struct {
 
 type Crawler interface {
 	StartCrawler(cfg *CrawlerConfig)
+	Shutdown(ctx context.Context) error
 }

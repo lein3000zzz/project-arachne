@@ -1,6 +1,9 @@
 package queue
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 const (
 	ChannelBufferLimit = 50
@@ -15,5 +18,5 @@ type Queue interface {
 	GetConsumerChan() <-chan []byte
 	StartQueueConsumer()
 	StartQueueProducer()
-	CloseQueue()
+	CloseQueue(context.Context) error
 }
