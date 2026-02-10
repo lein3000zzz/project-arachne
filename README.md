@@ -1,5 +1,5 @@
 <div align="center">
-    <img src="https://github.com/lein3000zzz/project-arachne/blob/main/assets/logo.png?raw=true" height=400 width=400 alt="🦍">
+    <img src="https://github.com/lein3000zzz/project-arachne/blob/main/assets/logoTransparent.png?raw=true" height=400 width=400 alt="🦍">
 </div>
 
 # Project arachne 🕷
