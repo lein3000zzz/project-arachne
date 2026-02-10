@@ -2,7 +2,7 @@ deployments/opt
 
 
 # Ultimate Go gitignore
-#main.env
+main.env
 *.exe
 *.exe~
 *.dll
