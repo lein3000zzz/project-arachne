@@ -20,6 +20,22 @@ services:
       broker:
         condition: service_started
 
+  vault:
+    image: hashicorp/vault
+    environment:
+      # VAULT_DEV_ROOT_TOKEN_ID: 123
+#       VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      VAULT_ADDR: "http://0.0.0.0:8200"
+    volumes:
+      - ./deployments/opt/vault/data:/vault/data
+      - ./deployments/vault/config:/vault/config
+    ports:
+      - "8200:8200"
+    cap_add:
+      - IPC_LOCK
+    command: "server" # -config=/vault/config/vault.hcl # Конфиг подтягивается автоматически из файлов
+    restart: always
+
   neo4j:
     image: neo4j:5-enterprise
     env_file:

@@ -11,6 +11,7 @@ import (
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/runstates"
 
+	"github.com/lein3000zzz/vault-config-manager/pkg/manager"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
@@ -26,6 +27,7 @@ type CrawlerApp struct {
 	pageRepo        pages.PageRepo
 	runStateManager runstates.RunStateManager
 	tracerProvider  *tracesdk.TracerProvider
+	secretManager   manager.SecretManager
 
 	maxConcurrentRuns int
 	taskProducerChan  chan []*config.Task

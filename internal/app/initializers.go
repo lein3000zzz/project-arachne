@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
@@ -16,6 +17,7 @@ import (
 	"web-crawler/internal/webcrawler/runstates"
 
 	"github.com/joho/godotenv"
+	"github.com/lein3000zzz/vault-config-manager/pkg/manager"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	neoconfig "github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -31,17 +33,25 @@ import (
 func InitApp() *CrawlerApp {
 	initEnv()
 
-	tp := initTracing()
-
 	logger := initLogger()
+	sm := initSecretManager(logger)
 
-	neo4jDriver := initNeo4jDriver()
+	tp := initTracing(sm)
+
+	neo4jDriver := initNeo4jDriver(sm)
 	pageRepo := initPageRepo(logger, neo4jDriver)
 
-	tasksQueue := initTasksQueue(logger)
-	runsQueue := initRunsQueue(logger)
+	tasksQueue := initTasksQueue(logger, sm)
+	runsQueue := initRunsQueue(logger, sm)
 
-	redisRunStateClient := initRedisClient(logger, os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 2)
+	redisURI, err1 := sm.GetSecretStringFromConfig("REDIS_URI")
+	redisPassword, err2 := sm.GetSecretStringFromConfig("REDIS_PASSWORD")
+
+	if err1 != nil || err2 != nil {
+		log.Fatalf("Redis URI or password is missing")
+	}
+
+	redisRunStateClient := initRedisClient(logger, redisURI, redisPassword, 2)
 
 	nodeID, err := utils.GenerateID()
 	if err != nil {
@@ -55,8 +65,8 @@ func InitApp() *CrawlerApp {
 	fetcher := networker.NewNetworker(logger)
 	parser := pageparser.NewParserRepo(logger)
 
-	redisPagesCacheClient := initRedisClient(logger, os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 0)
-	redisRobotsCacheClient := initRedisClient(logger, os.Getenv("REDIS_URI"), os.Getenv("REDIS_PASSWORD"), 1)
+	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, 0)
+	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, 1)
 
 	redisPagesCache := cache.NewRedisCache(redisPagesCacheClient, logger)
 	redisRobotsCache := cache.NewRedisCache(redisRobotsCacheClient, logger)
@@ -99,12 +109,16 @@ func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int) *r
 	return rdb
 }
 
-func initTasksQueue(logger *zap.SugaredLogger) queue.Queue {
-	addr := os.Getenv("KAFKA_ADDR")
-	kafkaUser := os.Getenv("KAFKA_USERNAME")
-	kafkaPassword := os.Getenv("KAFKA_PASSWORD")
-	tasksConsumerGroup := os.Getenv("KAFKA_TASKS_CONSUMER_GROUP")
-	tasksConsumerTopic := os.Getenv("KAFKA_TOPIC_TASKS")
+func initTasksQueue(logger *zap.SugaredLogger, sm manager.SecretManager) queue.Queue {
+	addr, err1 := sm.GetSecretStringFromConfig("KAFKA_ADDR")
+	kafkaUser, err2 := sm.GetSecretStringFromConfig("KAFKA_USERNAME")
+	kafkaPassword, err3 := sm.GetSecretStringFromConfig("KAFKA_PASSWORD")
+	tasksConsumerGroup, err4 := sm.GetSecretStringFromConfig("KAFKA_TASKS_CONSUMER_GROUP")
+	tasksConsumerTopic, err5 := sm.GetSecretStringFromConfig("KAFKA_TOPIC_TASKS")
+
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
+		logger.Fatal("Error initializing tasks queue: one or more Kafka keys missing in Vault")
+	}
 
 	kafkaTasksCfg := queue.KafkaConfig{
 		Seeds:         []string{addr},
@@ -122,12 +136,16 @@ func initTasksQueue(logger *zap.SugaredLogger) queue.Queue {
 	return tasksQueue
 }
 
-func initRunsQueue(logger *zap.SugaredLogger) queue.Queue {
-	addr := os.Getenv("KAFKA_ADDR")
-	kafkaUser := os.Getenv("KAFKA_USERNAME")
-	kafkaPassword := os.Getenv("KAFKA_PASSWORD")
-	runsConsumerGroup := os.Getenv("KAFKA_RUNS_CONSUMER_GROUP")
-	runsConsumerTopic := os.Getenv("KAFKA_TOPIC_RUNS")
+func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager) queue.Queue {
+	addr, err1 := sm.GetSecretStringFromConfig("KAFKA_ADDR")
+	kafkaUser, err2 := sm.GetSecretStringFromConfig("KAFKA_USERNAME")
+	kafkaPassword, err3 := sm.GetSecretStringFromConfig("KAFKA_PASSWORD")
+	runsConsumerGroup, err4 := sm.GetSecretStringFromConfig("KAFKA_RUNS_CONSUMER_GROUP")
+	runsConsumerTopic, err5 := sm.GetSecretStringFromConfig("KAFKA_TOPIC_RUNS")
+
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
+		logger.Fatal("Error: One or more Kafka keys missing in Vault config")
+	}
 
 	kafkaRunsCfg := queue.KafkaConfig{
 		Seeds:         []string{addr},
@@ -156,10 +174,14 @@ func initPageRepo(logger *zap.SugaredLogger, neo4jDriver neo4j.DriverWithContext
 	return pageRepo
 }
 
-func initNeo4jDriver() neo4j.DriverWithContext {
-	neo4jURI := os.Getenv("NEO4J_URI")
-	neo4jUser := os.Getenv("NEO4J_USER")
-	neo4jPassword := os.Getenv("NEO4J_PASSWORD")
+func initNeo4jDriver(sm manager.SecretManager) neo4j.DriverWithContext {
+	neo4jURI, err1 := sm.GetSecretStringFromConfig("NEO4J_URI")
+	neo4jUser, err2 := sm.GetSecretStringFromConfig("NEO4J_USER")
+	neo4jPassword, err3 := sm.GetSecretStringFromConfig("NEO4J_PASSWORD")
+
+	if err1 != nil || err2 != nil || err3 != nil {
+		log.Fatalf("Error initializing neo4j driver, some key is not found")
+	}
 
 	neo4jDriver, err := neo4j.NewDriverWithContext(neo4jURI, neo4j.BasicAuth(neo4jUser, neo4jPassword, ""), func(config *neoconfig.Config) {
 		config.MaxConnectionPoolSize = DefaultConcurrentTasksWorkers
@@ -172,8 +194,13 @@ func initNeo4jDriver() neo4j.DriverWithContext {
 	return neo4jDriver
 }
 
-func initTracing() *trace.TracerProvider {
-	exp, err := otlptracehttp.New(context.Background(), otlptracehttp.WithEndpoint(os.Getenv("OTLP_ENDPOINT")), otlptracehttp.WithInsecure())
+func initTracing(sm manager.SecretManager) *trace.TracerProvider {
+	oltpString, err := sm.GetSecretStringFromConfig("OTLP_ENDPOINT")
+	if err != nil {
+		log.Fatalf("Error initializing tracing: %v", err)
+	}
+
+	exp, err := otlptracehttp.New(context.Background(), otlptracehttp.WithEndpoint(oltpString), otlptracehttp.WithInsecure())
 	if err != nil {
 		log.Fatalf("Error initializing jaeger: %v", err)
 	}
@@ -193,6 +220,30 @@ func initTracing() *trace.TracerProvider {
 	otel.SetTracerProvider(tracerProvider)
 
 	return tracerProvider
+}
+
+func initSecretManager(logger *zap.SugaredLogger) manager.SecretManager {
+	sm, err := manager.NewSecretManager(
+		os.Getenv("VAULT_ADDRESS"),
+		os.Getenv("VAULT_TOKEN"),
+		manager.DefaultBasePathData+"main/",
+		manager.DefaultBasePathMetaData+"main/",
+		logger,
+	)
+	if err != nil {
+		logger.Fatalf("Error initializing secret manager: %v", err)
+	}
+
+	keys := strings.Split(os.Getenv("VAULT_KEYS"), ",")
+
+	sm.UnsealVault(keys)
+
+	err = sm.ResetConfig()
+	if err != nil {
+		logger.Fatalw("failed to update config on start", "error", err)
+	}
+
+	return sm
 }
 
 func initLogger() *zap.SugaredLogger {
