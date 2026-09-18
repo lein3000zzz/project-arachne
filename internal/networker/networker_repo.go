@@ -61,10 +61,15 @@ func (nw *NetworkWorker) Fetch(url string) (*FetchResult, error) {
 			return nil, err
 		}
 
-		if len(fetchResult.Body) > 0 {
-			fetchResult.ContentType = http.DetectContentType(fetchResult.Body)
-		} else {
-			fetchResult.ContentType = "application/octet-stream"
+		// Header first: DetectContentType has no JavaScript verdict and reports
+		// JS source as text/plain, which routes it away from the JS parsers.
+		fetchResult.ContentType = resp.Header.Get("Content-Type")
+		if fetchResult.ContentType == "" {
+			if len(fetchResult.Body) > 0 {
+				fetchResult.ContentType = http.DetectContentType(fetchResult.Body)
+			} else {
+				fetchResult.ContentType = "application/octet-stream"
+			}
 		}
 
 		fetchResult.Status = resp.StatusCode

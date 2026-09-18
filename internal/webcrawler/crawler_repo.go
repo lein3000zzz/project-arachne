@@ -4,15 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
+	"web-crawler/internal/documents"
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/domain/data"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
-	"web-crawler/internal/pageparser"
+	"web-crawler/internal/parser"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
@@ -24,33 +24,36 @@ import (
 
 type CrawlerRepo struct {
 	logger          *zap.SugaredLogger
-	parser          pageparser.PageParser
+	parser          parser.Parser
 	networker       networker.Networker
 	extraWorker     sugaredworker.SugaredWorker
 	cachePages      cache.CachedStorage
 	cacheRobots     cache.CachedStorage
 	runStateManager runstates.RunStateManager
+	documents       documents.Sink
 
 	cfg *CrawlerConfig
 }
 
 func NewCrawlerRepo(
 	logger *zap.SugaredLogger,
-	parser pageparser.PageParser,
+	pageParser parser.Parser,
 	networker networker.Networker,
 	extraWorker sugaredworker.SugaredWorker,
 	cachePages cache.CachedStorage,
 	cacheRobots cache.CachedStorage,
 	runStateManager runstates.RunStateManager,
+	documentSink documents.Sink,
 ) *CrawlerRepo {
 	return &CrawlerRepo{
 		logger:          logger,
-		parser:          parser,
+		parser:          pageParser,
 		networker:       networker,
 		extraWorker:     extraWorker,
 		cachePages:      cachePages,
 		cacheRobots:     cacheRobots,
 		runStateManager: runStateManager,
+		documents:       documentSink,
 	}
 }
 
@@ -78,10 +81,10 @@ func (repo *CrawlerRepo) processTask(task *config.Task, tpChan chan<- []*config.
 	defer repo.onTaskDone(task.Run)
 
 	if task.Run.UseCacheFlag {
-		cachedLinks, errCachedLinks := repo.getCachedLinks(task)
+		cached, errCached := repo.getCachedPage(task)
 
-		if errCachedLinks == nil {
-			repo.createNewTasksFromLinks(task, cachedLinks)
+		if errCached == nil {
+			tpChan <- repo.createNewTasksFromLinks(task, cached.PageLinks)
 			return ErrCacheHit
 		}
 	}
@@ -104,7 +107,7 @@ func (repo *CrawlerRepo) processTask(task *config.Task, tpChan chan<- []*config.
 		repo.logger.Warnw("Failed to cache page", "url", task.URL, "depth", task.CurrentDepth, "err", errCache)
 	}
 
-	newTasks := repo.createNewTasksFromLinks(task, pd.Links)
+	newTasks := repo.createNewTasksFromLinks(task, pd.PageLinks)
 
 	tpChan <- newTasks
 
@@ -144,16 +147,27 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		}
 	}
 
-	linksFromThePage, errExtract := repo.extractLinksFromPage(task, fetchRes.Body)
-	if errExtract != nil {
-		repo.logger.Warnw("Failed to extract links", "url", task.URL, "err", errExtract)
-		linksFromThePage = []string{}
+	ctx := context.Background()
+
+	parsed, errParse := repo.parser.Parse(ctx, &parser.ParseParams{
+		Body:        fetchRes.Body,
+		BaseURL:     task.URL,
+		ContentType: fetchRes.ContentType,
+	})
+	if errParse != nil {
+		repo.logger.Warnw("Failed to parse page", "url", task.URL, "err", errParse)
+
+		parsed = &parser.ParseResult{}
 	}
+
+	repo.submitDocument(ctx, task, fetchRes.ContentType, parsed)
 
 	pageData := &data.PageData{
 		URL:           task.URL,
 		Status:        fetchRes.Status,
-		Links:         linksFromThePage,
+		Title:         parsed.Title,
+		Links:         parsed.AllURLs(),
+		PageLinks:     parsed.URLsOfKind(parser.LinkPage),
 		LastRunID:     task.Run.ID,
 		LastUpdatedAt: time.Now(),
 		FoundAt:       time.Now(),
@@ -163,29 +177,22 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 	return pageData, nil
 }
 
-func (repo *CrawlerRepo) extractLinksFromPage(task *config.Task, body []byte) ([]string, error) {
-	if strings.HasSuffix(strings.TrimSuffix(task.URL, "/"), ".js") {
-		baseURL, err := utils.GetBaseURL(task.URL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get base URL: %w", err)
-		}
-
-		links, err := repo.parser.ExtractLinksFromJS(baseURL, string(body))
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract links from JS: %w", err)
-		}
-
-		return links, nil
+func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, contentType string, parsed *parser.ParseResult) {
+	if strings.TrimSpace(parsed.Content) == "" {
+		return
 	}
 
-	links := repo.parser.ParseHTML(body, task.URL)
-	jsonLinks, err := repo.parser.ExtractLinksFromJSON(task.URL, body)
+	err := repo.documents.Submit(ctx, &documents.Document{
+		URL:         task.URL,
+		Title:       parsed.Title,
+		Content:     parsed.Content,
+		ContentType: contentType,
+		RunID:       task.Run.ID,
+		FetchedAt:   time.Now(),
+	})
 	if err != nil {
-		repo.logger.Warnw("error extracting json links", "url", task.URL, "err", err)
+		repo.logger.Warnw("Failed to submit document", "url", task.URL, "err", err)
 	}
-
-	links = append(links, jsonLinks...)
-	return links, nil
 }
 
 func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
@@ -225,18 +232,20 @@ func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
 	}
 }
 
-func (repo *CrawlerRepo) getCachedLinks(task *config.Task) ([]string, error) {
-	cachedPageRaw, errCache := repo.cachePages.Get(task.URL)
-
-	var cachedPageData data.PageData
-	errUnmarshal := json.Unmarshal([]byte(cachedPageRaw), &cachedPageData)
-
-	if errCache == nil && errUnmarshal == nil {
-		repo.logger.Infow("using cached page", "url", task.URL)
-		return cachedPageData.Links, nil
+func (repo *CrawlerRepo) getCachedPage(task *config.Task) (*data.PageData, error) {
+	cachedRaw, errCache := repo.cachePages.Get(task.URL)
+	if errCache != nil {
+		return nil, errCache
 	}
 
-	return nil, errors.Join(errCache, errUnmarshal)
+	cached := new(data.PageData)
+	if errUnmarshal := json.Unmarshal([]byte(cachedRaw), cached); errUnmarshal != nil {
+		return nil, errUnmarshal
+	}
+
+	repo.logger.Infow("using cached page", "url", task.URL)
+
+	return cached, nil
 }
 
 func (repo *CrawlerRepo) createNewTasksFromLinks(prevTask *config.Task, links []string) []*config.Task {
@@ -298,6 +307,7 @@ func (repo *CrawlerRepo) Shutdown(ctx context.Context) error {
 
 	shutdowns := []func(context.Context) error{
 		repo.extraWorker.Shutdown,
+		repo.documents.Shutdown,
 		repo.cachePages.Stop,
 		repo.cacheRobots.Stop,
 	}

@@ -65,8 +65,8 @@ func (repo *PageNeo4jRepo) SavePage(page *data.PageData) error {
 
 	queryRes, errQuery := neo4j.ExecuteQuery(ctx, repo.driver, `
 		MERGE (p:Page {url: $url})
-		ON CREATE SET p.foundAt = $foundAt, p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType 
-		ON MATCH SET p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType
+		ON CREATE SET p.foundAt = $foundAt, p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType, p.title = $title 
+		ON MATCH SET p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType, p.title = $title
 		WITH p
 		UNWIND $links AS linkUrl
 		MERGE (l:Page {url: linkUrl})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"web-crawler/internal/domain/config"
 
 	"github.com/go-rod/rod"
@@ -19,12 +20,7 @@ type ExtraRodWorker struct {
 }
 
 func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
-	l := launcher.New().
-		Bin("/usr/bin/chromium-browser").
-		Headless(true).
-		Set("no-sandbox").
-		Set("disable-gpu").
-		Set("disable-dev-shm-usage")
+	l := newLauncher()
 
 	browserURL, err := l.Launch()
 	if err != nil {
@@ -52,14 +48,25 @@ func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
 	}, nil
 }
 
+// The container ships chromium at a fixed path; off it, leaving Bin unset lets
+// rod find or fetch a browser instead of failing on a path that cannot exist.
+func newLauncher() *launcher.Launcher {
+	l := launcher.New().
+		Headless(true).
+		Set("no-sandbox").
+		Set("disable-gpu").
+		Set("disable-dev-shm-usage")
+
+	if _, err := os.Stat(containerChromiumPath); err == nil {
+		l = l.Bin(containerChromiumPath)
+	}
+
+	return l
+}
+
 func (p *ExtraRodWorker) RestartBrowserAndLauncher() error {
 	if p.LauncherInstance == nil {
-		p.LauncherInstance = launcher.New().
-			Bin("/usr/bin/chromium-browser").
-			Headless(true).
-			Set("no-sandbox").
-			Set("disable-gpu").
-			Set("disable-dev-shm-usage")
+		p.LauncherInstance = newLauncher()
 	}
 
 	browserURL, err := p.LauncherInstance.Launch()

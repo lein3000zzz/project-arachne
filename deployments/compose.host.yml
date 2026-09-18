@@ -1,0 +1,6 @@
+services:
+  broker:
+    environment:
+      # The committed env advertises host.docker.internal, which does not resolve
+      # from a macOS host, so a host-run crawler cannot follow the metadata.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker:9092,EXTERNAL://localhost:29092

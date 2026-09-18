@@ -5,10 +5,11 @@ import (
 	"log"
 	"os"
 	"strings"
+	"web-crawler/internal/documents"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
-	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
+	"web-crawler/internal/parser"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/utils"
@@ -63,7 +64,13 @@ func InitApp() *CrawlerApp {
 	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue, runStateManager)
 
 	fetcher := networker.NewNetworker(logger)
-	parser := pageparser.NewParserRepo(logger)
+
+	contentParser, errParser := parser.NewKatanaParser(logger)
+	if errParser != nil {
+		logger.Fatal("Error initializing parser:", errParser)
+	}
+
+	documentSink := documents.NewLogSink(logger)
 
 	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, 0)
 	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, 1)
@@ -76,7 +83,7 @@ func InitApp() *CrawlerApp {
 		logger.Fatal("Error initializing extra worker parser:", errRod)
 	}
 
-	crawler := webcrawler.NewCrawlerRepo(logger, parser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager)
+	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink)
 
 	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp)
 }

@@ -36,6 +36,19 @@ type Warning struct {
 	Message string
 }
 
+func (r *ParseResult) AllURLs() []string {
+	if r == nil {
+		return nil
+	}
+
+	out := make([]string, 0, len(r.Links))
+	for _, link := range r.Links {
+		out = append(out, link.URL)
+	}
+
+	return out
+}
+
 func (r *ParseResult) URLsOfKind(kind LinkKind) []string {
 	if r == nil {
 		return nil

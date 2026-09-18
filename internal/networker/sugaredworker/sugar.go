@@ -5,7 +5,10 @@ import (
 	"web-crawler/internal/domain/config"
 )
 
-const defaultOutDir = "output/screenshots"
+const (
+	defaultOutDir         = "output/screenshots"
+	containerChromiumPath = "/usr/bin/chromium-browser"
+)
 
 type ExtraTaskRes struct {
 	HTMLTask []byte
