@@ -10,6 +10,8 @@ services:
     volumes:
       - ./output/screenshots:/app/output/screenshots
       - ./deployments/opt/rod/cache:/root/.cache/rod
+      # mounted so config edits need a restart, not a rebuild
+      - ./configs:/root/configs:ro
     restart: always
     depends_on:
       neo4j:

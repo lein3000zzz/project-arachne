@@ -17,4 +17,5 @@ RUN apk --no-cache add \
 WORKDIR /root/
 COPY --from=builder /app/web-crawler .
 COPY --from=builder /app/main.env ./main.env
+COPY --from=builder /app/configs ./configs
 CMD ["./web-crawler"]

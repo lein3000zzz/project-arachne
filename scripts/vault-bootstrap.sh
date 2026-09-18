@@ -19,6 +19,7 @@ KAFKA_TOPIC_TASKS="${KAFKA_TOPIC_TASKS:-arachne.tasks}"
 KAFKA_TOPIC_RUNS="${KAFKA_TOPIC_RUNS:-arachne.runs}"
 KAFKA_TASKS_CONSUMER_GROUP="${KAFKA_TASKS_CONSUMER_GROUP:-arachne-tasks}"
 KAFKA_RUNS_CONSUMER_GROUP="${KAFKA_RUNS_CONSUMER_GROUP:-arachne-runs}"
+CONFIG_PATH="${CONFIG_PATH:-configs/config.yml}"
 
 case "$PROFILE" in
   docker)
@@ -153,5 +154,6 @@ vault_auth kv put kv/main/otel \
 set_env APP_ENV "$APP_ENV"
 set_env VAULT_ADDRESS "$VAULT_ADDRESS"
 set_env REDIS_PASSWORD "$REDIS_PASSWORD"
+set_env CONFIG_PATH "$CONFIG_PATH"
 
 echo "==> vault ready"

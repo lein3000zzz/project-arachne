@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"time"
+	"web-crawler/internal/appconfig"
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
@@ -31,18 +32,20 @@ type CrawlerApp struct {
 
 	maxConcurrentRuns int
 	taskProducerChan  chan []*config.Task
+	cfg               appconfig.Config
 }
 
-func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageRepo, processorQueue processor.Processor, runStateManager runstates.RunStateManager, tp *tracesdk.TracerProvider) *CrawlerApp {
+func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageRepo, processorQueue processor.Processor, runStateManager runstates.RunStateManager, tp *tracesdk.TracerProvider, cfg appconfig.Config) *CrawlerApp {
 	return &CrawlerApp{
 		logger:            logger,
 		crawler:           crawler,
 		processorQueue:    processorQueue,
 		pageRepo:          pagesRepo,
 		runStateManager:   runStateManager,
-		maxConcurrentRuns: DefaultConcurrentRunsWorkers,
-		taskProducerChan:  make(chan []*config.Task, 100),
+		maxConcurrentRuns: cfg.Crawler.RunWorkers,
+		taskProducerChan:  make(chan []*config.Task, cfg.Crawler.TaskBuffer),
 		tracerProvider:    tp,
+		cfg:               cfg,
 	}
 }
 
@@ -62,7 +65,7 @@ func (app *CrawlerApp) StartApp(ctx context.Context) error {
 	go app.startTaskProducer()
 
 	go app.startCrawlerCallbackListener(crawlerCBChan)
-	go app.pageRepo.StartSaverWorkers(DefaultConcurrentTasksWorkers / 2)
+	go app.pageRepo.StartSaverWorkers(app.cfg.Crawler.SaverWorkers)
 
 	go app.crawler.StartCrawler(crawlerCfg)
 
@@ -206,7 +209,7 @@ func (app *CrawlerApp) buildCrawlerConfig(crawlerCBChan chan<- struct{}) *webcra
 		SaverChan:         app.pageRepo.GetSaverChan(),
 		TaskProducerChan:  app.taskProducerChan,
 		CrawlCallbackChan: crawlerCBChan,
-		WorkersNumber:     DefaultConcurrentTasksWorkers,
+		WorkersNumber:     app.cfg.Crawler.TaskWorkers,
 	}
 
 	return crawlerCfg
@@ -221,6 +224,10 @@ func (app *CrawlerApp) startTaskProducer() {
 			}
 		}
 	}
+}
+
+func (app *CrawlerApp) ShutdownTimeout() time.Duration {
+	return app.cfg.Shutdown.Timeout.Std()
 }
 
 func (app *CrawlerApp) StopApp(ctx context.Context) error {
@@ -238,7 +245,7 @@ func (app *CrawlerApp) StopApp(ctx context.Context) error {
 	for _, shutdown := range shutdowns {
 		// shutdown := shutdown // если я когда-то зачем-то решу пойти на более старую версию гошки
 		eg.Go(func() error {
-			subCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			subCtx, cancel := context.WithTimeout(ctx, app.cfg.Shutdown.ComponentTimeout.Std())
 			defer cancel()
 
 			return shutdown(subCtx)

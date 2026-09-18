@@ -20,6 +20,7 @@ KAFKA_TOPIC_TASKS          ?= arachne.tasks
 KAFKA_TOPIC_RUNS           ?= arachne.runs
 KAFKA_TASKS_CONSUMER_GROUP ?= arachne-tasks
 KAFKA_RUNS_CONSUMER_GROUP  ?= arachne-runs
+CONFIG_PATH                ?= configs/config.yml
 
 BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	REDIS_PASSWORD=$(REDIS_PASSWORD) \
@@ -28,6 +29,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	KAFKA_TOPIC_TASKS=$(KAFKA_TOPIC_TASKS) KAFKA_TOPIC_RUNS=$(KAFKA_TOPIC_RUNS) \
 	KAFKA_TASKS_CONSUMER_GROUP=$(KAFKA_TASKS_CONSUMER_GROUP) \
 	KAFKA_RUNS_CONSUMER_GROUP=$(KAFKA_RUNS_CONSUMER_GROUP) \
+	CONFIG_PATH=$(CONFIG_PATH) \
 	scripts/vault-bootstrap.sh
 
 .PHONY: help up dev run crawl down reset restart logs ps env vault-bootstrap neo4j-init build test vet tidy
@@ -44,6 +46,9 @@ help:
 	@echo ""
 	@echo "make build / test / vet / tidy"
 	@echo ""
+	@echo "tuning:  configs/config.yml  (workers, TTLs, parser engine)"
+	@echo "         make up CONFIG_PATH=configs/other.yml to use another file"
+	@echo ""
 	@echo "UI: kafka-ui http://localhost:8080  jaeger http://localhost:16686"
 	@echo "    neo4j    http://localhost:7474  vault  http://localhost:8200"
 
@@ -55,7 +60,8 @@ $(ENV_FILE):
 		'VAULT_ADDRESS=http://127.0.0.1:8200' \
 		'VAULT_TOKEN=' \
 		'VAULT_KEYS=' \
-		'REDIS_PASSWORD=$(REDIS_PASSWORD)' > $(ENV_FILE)
+		'REDIS_PASSWORD=$(REDIS_PASSWORD)' \
+		'CONFIG_PATH=$(CONFIG_PATH)' > $(ENV_FILE)
 	@echo "wrote $(ENV_FILE)"
 
 up: env

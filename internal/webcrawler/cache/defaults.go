@@ -1,7 +1,3 @@
 package cache
 
-import "time"
-
-const (
-	BaseTTL = time.Hour * 12
-)
+// TTLs come from appconfig; nothing lives here any more.

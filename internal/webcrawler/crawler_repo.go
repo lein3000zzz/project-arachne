@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"web-crawler/internal/appconfig"
 	"web-crawler/internal/documents"
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/domain/data"
@@ -31,6 +32,7 @@ type CrawlerRepo struct {
 	cacheRobots     cache.CachedStorage
 	runStateManager runstates.RunStateManager
 	documents       documents.Sink
+	settings        appconfig.Config
 
 	cfg *CrawlerConfig
 }
@@ -44,6 +46,7 @@ func NewCrawlerRepo(
 	cacheRobots cache.CachedStorage,
 	runStateManager runstates.RunStateManager,
 	documentSink documents.Sink,
+	settings appconfig.Config,
 ) *CrawlerRepo {
 	return &CrawlerRepo{
 		logger:          logger,
@@ -54,6 +57,7 @@ func NewCrawlerRepo(
 		cacheRobots:     cacheRobots,
 		runStateManager: runStateManager,
 		documents:       documentSink,
+		settings:        settings,
 	}
 }
 
@@ -98,11 +102,11 @@ func (repo *CrawlerRepo) processTask(task *config.Task, tpChan chan<- []*config.
 	select {
 	case saverChan <- pd:
 		repo.logger.Debugw("Sent pageData to saverChan", "pd", pd)
-	case <-time.After(3 * time.Second):
+	case <-time.After(repo.settings.Crawler.SaverSendTimeout.Std()):
 		repo.logger.Warnw("Saver channel full, dropping page data", "url", task.URL)
 	}
 
-	errCache := repo.cachePages.Set(task.URL, pd, cache.BaseTTL)
+	errCache := repo.cachePages.Set(task.URL, pd, repo.settings.Cache.PageTTL.Std())
 	if errCache != nil {
 		repo.logger.Warnw("Failed to cache page", "url", task.URL, "depth", task.CurrentDepth, "err", errCache)
 	}
@@ -206,7 +210,7 @@ func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
 	}
 
 	if left == 0 {
-		acquired, lockErr := repo.runStateManager.AcquireRunCompletionLock(ctx, run.ID, runstates.LockTTL)
+		acquired, lockErr := repo.runStateManager.AcquireRunCompletionLock(ctx, run.ID, repo.settings.RunState.LockTTL.Std())
 		if lockErr != nil {
 			repo.logger.Errorw("Failed to acquire completion lock", "runID", run.ID, "error", lockErr)
 			return
@@ -294,7 +298,7 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 
 	robots = string(responseData.Body)
 
-	errSaveCache := repo.cacheRobots.Set(baseURL, string(responseData.Body), cache.BaseTTL)
+	errSaveCache := repo.cacheRobots.Set(baseURL, string(responseData.Body), repo.settings.Cache.RobotsTTL.Std())
 	if errSaveCache != nil {
 		repo.logger.Warnw("failed to save cache", "url", baseURL, "err", errSaveCache)
 	}

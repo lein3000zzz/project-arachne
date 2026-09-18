@@ -15,22 +15,21 @@ const (
 	currentLinksKeyPrefix      = "run:current_links:"
 	runCompletionLockKeyPrefix = "run:completion_lock:"
 	runSemaphoreKey            = "crawler:run_semaphore"
-
-	DefaultRunStateTTL = 24 * time.Hour
-	LockTTL            = 30 * time.Second
 )
 
 type RedisRunStateManager struct {
 	client *redis.Client
 	logger *zap.SugaredLogger
 	nodeID string
+	ttl    time.Duration
 }
 
-func NewRedisRunStateManager(client *redis.Client, logger *zap.SugaredLogger, nodeID string) *RedisRunStateManager {
+func NewRedisRunStateManager(client *redis.Client, logger *zap.SugaredLogger, nodeID string, ttl time.Duration) *RedisRunStateManager {
 	return &RedisRunStateManager{
 		client: client,
 		logger: logger,
 		nodeID: nodeID,
+		ttl:    ttl,
 	}
 }
 
@@ -54,7 +53,7 @@ func (m *RedisRunStateManager) IncrementActiveTasks(ctx context.Context, runID s
 	}
 
 	if val == 1 {
-		m.client.Expire(ctx, key, DefaultRunStateTTL)
+		m.client.Expire(ctx, key, m.ttl)
 	}
 
 	return val, nil
@@ -77,7 +76,7 @@ func (m *RedisRunStateManager) IncrementCurrentLinks(ctx context.Context, runID 
 	}
 
 	if val == 1 {
-		m.client.Expire(ctx, key, DefaultRunStateTTL)
+		m.client.Expire(ctx, key, m.ttl)
 	}
 
 	return val, nil
@@ -119,8 +118,8 @@ func (m *RedisRunStateManager) IncrementActiveAndCurrentLinks(ctx context.Contex
 
 	pipe.Incr(ctx, activeKey)
 	pipe.Incr(ctx, linksKey)
-	pipe.Expire(ctx, activeKey, DefaultRunStateTTL)
-	pipe.Expire(ctx, linksKey, DefaultRunStateTTL)
+	pipe.Expire(ctx, activeKey, m.ttl)
+	pipe.Expire(ctx, linksKey, m.ttl)
 
 	_, err := pipe.Exec(ctx)
 	if err != nil {

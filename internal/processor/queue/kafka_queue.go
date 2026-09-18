@@ -18,6 +18,11 @@ type KafkaConfig struct {
 	Topic         string
 	User          string
 	Password      string
+
+	ChannelBuffer   int
+	RequestTimeout  time.Duration
+	ConsumerTimeout time.Duration
+	FlushInterval   time.Duration
 }
 
 type KafkaQueue struct {
@@ -25,6 +30,7 @@ type KafkaQueue struct {
 	kafkaClient  *kgo.Client
 	consumerChan chan []byte
 	producerChan chan []byte
+	cfg          *KafkaConfig
 }
 
 func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue, error) {
@@ -36,7 +42,7 @@ func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue,
 		kgo.ConsumeTopics(config.Topic),
 		kgo.DefaultProduceTopic(config.Topic),
 		kgo.AllowAutoTopicCreation(),
-		kgo.ProduceRequestTimeout(30*time.Second),
+		kgo.ProduceRequestTimeout(config.RequestTimeout),
 		kgo.RecordDeliveryTimeout(60*time.Second),
 		kgo.SASL(plain.Auth{
 			User: config.User,
@@ -53,8 +59,9 @@ func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue,
 	return &KafkaQueue{
 		logger:       logger,
 		kafkaClient:  client,
-		consumerChan: make(chan []byte, ChannelBufferLimit),
-		producerChan: make(chan []byte, ChannelBufferLimit),
+		consumerChan: make(chan []byte, config.ChannelBuffer),
+		producerChan: make(chan []byte, config.ChannelBuffer),
+		cfg:          config,
 	}, nil
 }
 
@@ -98,7 +105,7 @@ func (q *KafkaQueue) StartQueueConsumer() {
 // TODO potential improvement: возвращать bool, чтобы в консьюмере коммитить только то, что было отправлено в канал,
 // но не коммитить то, что ушло в таймаут
 func (q *KafkaQueue) processConsumedRecord(record *kgo.Record) {
-	ctx, cancel := context.WithTimeout(context.Background(), queueTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.ConsumerTimeout)
 	defer cancel()
 
 	select {
@@ -121,7 +128,7 @@ func (q *KafkaQueue) commitRecords(records ...*kgo.Record) {
 		return
 	}
 
-	commitCtx, commitCancel := context.WithTimeout(context.Background(), SingleRequestTimeout)
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), q.cfg.RequestTimeout)
 	defer commitCancel()
 
 	err := q.kafkaClient.CommitRecords(commitCtx, records...)
@@ -131,8 +138,8 @@ func (q *KafkaQueue) commitRecords(records ...*kgo.Record) {
 }
 
 func (q *KafkaQueue) StartQueueProducer() {
-	items := make([][]byte, 0, ChannelBufferLimit)
-	flushTicker := time.NewTicker(tickerTimeout)
+	items := make([][]byte, 0, q.cfg.ChannelBuffer)
+	flushTicker := time.NewTicker(q.cfg.FlushInterval)
 	defer flushTicker.Stop()
 
 	for {
@@ -141,7 +148,7 @@ func (q *KafkaQueue) StartQueueProducer() {
 			items = append(items, item)
 			q.logger.Debugw("Received item in the producerChan", "item", item)
 
-			if len(items) >= ChannelBufferLimit {
+			if len(items) >= q.cfg.ChannelBuffer {
 				q.flushItems(&items)
 			}
 		case <-flushTicker.C:
@@ -192,7 +199,7 @@ func (q *KafkaQueue) sendToKafka(items [][]byte) {
 }
 
 func (q *KafkaQueue) produceRecords(records []*kgo.Record) {
-	ctx, cancel := context.WithTimeout(context.Background(), SingleRequestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.RequestTimeout)
 	defer cancel()
 
 	var wg sync.WaitGroup

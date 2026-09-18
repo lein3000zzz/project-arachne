@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 	"web-crawler/internal/app"
 )
 
@@ -26,7 +25,7 @@ func main() {
 
 	log.Println("Shutting down the crawler...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), crawlerApp.ShutdownTimeout())
 	defer cancel()
 
 	if err := crawlerApp.StopApp(shutdownCtx); err != nil {

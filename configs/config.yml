@@ -1,0 +1,27 @@
+crawler:
+  task_workers: 20
+  run_workers: 1
+  saver_workers: 10
+  task_buffer: 100
+  # katana (readability text + jsluice links) or legacy (links only, no text)
+  parser_engine: katana
+  saver_send_timeout: 3s
+
+cache:
+  page_ttl: 12h
+  robots_ttl: 12h
+  redis_max_memory: 512mb
+
+queue:
+  channel_buffer: 50
+  request_timeout: 30s
+  consumer_timeout: 1m
+  flush_interval: 1s
+
+run_state:
+  ttl: 24h
+  lock_ttl: 30s
+
+shutdown:
+  timeout: 30s
+  component_timeout: 10s

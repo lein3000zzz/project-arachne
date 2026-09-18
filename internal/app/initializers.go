@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"strings"
+	"web-crawler/internal/appconfig"
 	"web-crawler/internal/documents"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
+	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/parser"
 	"web-crawler/internal/processor"
@@ -35,15 +38,16 @@ func InitApp() *CrawlerApp {
 	initEnv()
 
 	logger := initLogger()
+	cfg := initConfig(logger)
 	sm := initSecretManager(logger)
 
 	tp := initTracing(sm)
 
-	neo4jDriver := initNeo4jDriver(sm)
+	neo4jDriver := initNeo4jDriver(sm, cfg)
 	pageRepo := initPageRepo(logger, neo4jDriver)
 
-	tasksQueue := initTasksQueue(logger, sm)
-	runsQueue := initRunsQueue(logger, sm)
+	tasksQueue := initTasksQueue(logger, sm, cfg)
+	runsQueue := initRunsQueue(logger, sm, cfg)
 
 	redisURI, err1 := sm.GetSecretStringFromConfig("REDIS_URI")
 	redisPassword, err2 := sm.GetSecretStringFromConfig("REDIS_PASSWORD")
@@ -52,28 +56,25 @@ func InitApp() *CrawlerApp {
 		log.Fatalf("Redis URI or password is missing")
 	}
 
-	redisRunStateClient := initRedisClient(logger, redisURI, redisPassword, 2)
+	redisRunStateClient := initRedisClient(logger, redisURI, redisPassword, 2, cfg)
 
 	nodeID, err := utils.GenerateID()
 	if err != nil {
 		logger.Fatal("Error generating node ID:", err)
 	}
 
-	runStateManager := runstates.NewRedisRunStateManager(redisRunStateClient, logger, nodeID)
+	runStateManager := runstates.NewRedisRunStateManager(redisRunStateClient, logger, nodeID, cfg.RunState.TTL.Std())
 
 	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue, runStateManager)
 
 	fetcher := networker.NewNetworker(logger)
 
-	contentParser, errParser := parser.NewKatanaParser(logger)
-	if errParser != nil {
-		logger.Fatal("Error initializing parser:", errParser)
-	}
+	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
 	documentSink := documents.NewLogSink(logger)
 
-	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, 0)
-	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, 1)
+	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, 0, cfg)
+	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, 1, cfg)
 
 	redisPagesCache := cache.NewRedisCache(redisPagesCacheClient, logger)
 	redisRobotsCache := cache.NewRedisCache(redisRobotsCacheClient, logger)
@@ -83,12 +84,45 @@ func InitApp() *CrawlerApp {
 		logger.Fatal("Error initializing extra worker parser:", errRod)
 	}
 
-	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink)
+	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, cfg)
 
-	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp)
+	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp, cfg)
 }
 
-func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int) *redis.Client {
+func initConfig(logger *zap.SugaredLogger) appconfig.Config {
+	path, explicit := appconfig.Path()
+
+	cfg, err := appconfig.Load(path)
+
+	switch {
+	case err == nil:
+		logger.Infow("Loaded config", "path", path)
+	case errors.Is(err, appconfig.ErrNotFound) && !explicit:
+		logger.Warnw("No config file found, using defaults", "path", path)
+	default:
+		logger.Fatalf("Error loading config from %s: %v", path, err)
+	}
+
+	return cfg
+}
+
+func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
+	logger.Infow("Selected parser engine", "engine", engine)
+
+	// Validate() already rejected anything else.
+	if engine == appconfig.ParserEngineLegacy {
+		return pageparser.NewLegacyAdapter(logger)
+	}
+
+	katana, err := parser.NewKatanaParser(logger)
+	if err != nil {
+		logger.Fatal("Error initializing katana parser:", err)
+	}
+
+	return katana
+}
+
+func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int, cfg appconfig.Config) *redis.Client {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     uri,
 		Password: password,
@@ -103,7 +137,7 @@ func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int) *r
 		log.Fatalf("redisotel metrics err: %v", err)
 	}
 
-	if err := rdb.ConfigSet(context.Background(), "maxmemory", "512mb").Err(); err != nil {
+	if err := rdb.ConfigSet(context.Background(), "maxmemory", cfg.Cache.RedisMaxMemory).Err(); err != nil {
 		log.Fatalf("failed to set redis maxmemory: %v", err)
 	}
 
@@ -116,7 +150,7 @@ func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int) *r
 	return rdb
 }
 
-func initTasksQueue(logger *zap.SugaredLogger, sm manager.SecretManager) queue.Queue {
+func initTasksQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appconfig.Config) queue.Queue {
 	addr, err1 := sm.GetSecretStringFromConfig("KAFKA_ADDR")
 	kafkaUser, err2 := sm.GetSecretStringFromConfig("KAFKA_USERNAME")
 	kafkaPassword, err3 := sm.GetSecretStringFromConfig("KAFKA_PASSWORD")
@@ -133,6 +167,11 @@ func initTasksQueue(logger *zap.SugaredLogger, sm manager.SecretManager) queue.Q
 		Topic:         tasksConsumerTopic,
 		User:          kafkaUser,
 		Password:      kafkaPassword,
+
+		ChannelBuffer:   cfg.Queue.ChannelBuffer,
+		RequestTimeout:  cfg.Queue.RequestTimeout.Std(),
+		ConsumerTimeout: cfg.Queue.ConsumerTimeout.Std(),
+		FlushInterval:   cfg.Queue.FlushInterval.Std(),
 	}
 
 	tasksQueue, err := queue.NewKafkaQueue(logger, &kafkaTasksCfg)
@@ -143,7 +182,7 @@ func initTasksQueue(logger *zap.SugaredLogger, sm manager.SecretManager) queue.Q
 	return tasksQueue
 }
 
-func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager) queue.Queue {
+func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appconfig.Config) queue.Queue {
 	addr, err1 := sm.GetSecretStringFromConfig("KAFKA_ADDR")
 	kafkaUser, err2 := sm.GetSecretStringFromConfig("KAFKA_USERNAME")
 	kafkaPassword, err3 := sm.GetSecretStringFromConfig("KAFKA_PASSWORD")
@@ -160,6 +199,11 @@ func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager) queue.Qu
 		Topic:         runsConsumerTopic,
 		User:          kafkaUser,
 		Password:      kafkaPassword,
+
+		ChannelBuffer:   cfg.Queue.ChannelBuffer,
+		RequestTimeout:  cfg.Queue.RequestTimeout.Std(),
+		ConsumerTimeout: cfg.Queue.ConsumerTimeout.Std(),
+		FlushInterval:   cfg.Queue.FlushInterval.Std(),
 	}
 
 	runsQueue, err := queue.NewKafkaQueue(logger, &kafkaRunsCfg)
@@ -181,7 +225,7 @@ func initPageRepo(logger *zap.SugaredLogger, neo4jDriver neo4j.DriverWithContext
 	return pageRepo
 }
 
-func initNeo4jDriver(sm manager.SecretManager) neo4j.DriverWithContext {
+func initNeo4jDriver(sm manager.SecretManager, cfg appconfig.Config) neo4j.DriverWithContext {
 	neo4jURI, err1 := sm.GetSecretStringFromConfig("NEO4J_URI")
 	neo4jUser, err2 := sm.GetSecretStringFromConfig("NEO4J_USER")
 	neo4jPassword, err3 := sm.GetSecretStringFromConfig("NEO4J_PASSWORD")
@@ -191,7 +235,7 @@ func initNeo4jDriver(sm manager.SecretManager) neo4j.DriverWithContext {
 	}
 
 	neo4jDriver, err := neo4j.NewDriverWithContext(neo4jURI, neo4j.BasicAuth(neo4jUser, neo4jPassword, ""), func(config *neoconfig.Config) {
-		config.MaxConnectionPoolSize = DefaultConcurrentTasksWorkers
+		config.MaxConnectionPoolSize = cfg.Crawler.TaskWorkers
 	})
 
 	if err != nil {
