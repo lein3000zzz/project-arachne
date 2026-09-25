@@ -164,7 +164,7 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		parsed = &parser.ParseResult{}
 	}
 
-	repo.submitDocument(ctx, task, fetchRes.ContentType, parsed)
+	repo.submitDocument(ctx, task, fetchRes, parsed)
 
 	pageData := &data.PageData{
 		URL:           task.URL,
@@ -181,8 +181,8 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 	return pageData, nil
 }
 
-func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, contentType string, parsed *parser.ParseResult) {
-	if strings.TrimSpace(parsed.Content) == "" {
+func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, fetchRes *networker.FetchResult, parsed *parser.ParseResult) {
+	if fetchRes.Status < 200 || fetchRes.Status >= 300 || strings.TrimSpace(parsed.Content) == "" {
 		return
 	}
 
@@ -190,7 +190,7 @@ func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, 
 		URL:         task.URL,
 		Title:       parsed.Title,
 		Content:     parsed.Content,
-		ContentType: contentType,
+		ContentType: fetchRes.ContentType,
 		RunID:       task.Run.ID,
 		FetchedAt:   time.Now(),
 	})

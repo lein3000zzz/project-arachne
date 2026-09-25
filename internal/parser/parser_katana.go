@@ -77,7 +77,7 @@ func (p *KatanaParser) parse(body []byte, base *url.URL, mediaType string) *Pars
 	case kindJS:
 		p.extractLinks(body, base, mediaType, nil, acc)
 	case kindText:
-		content = normalizeWhitespace(string(body))
+		content = normalizeBlocks(string(body))
 		p.extractLinks(body, base, mediaType, nil, acc)
 	}
 

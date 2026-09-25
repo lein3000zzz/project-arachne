@@ -7,9 +7,35 @@ crawler:
   parser_engine: katana
   saver_send_timeout: 3s
 
+chunker:
+  max_runes: 1200
+  overlap_runes: 150
+  min_document_runes: 80
+
+embedding:
+  # served over the OpenAI /v1/embeddings API; the endpoint itself is in Vault
+  model: qwen3-embedding:0.6b
+  # 0 = the model's native size; a smaller value truncates (Matryoshka models only)
+  dimensions: 0
+  batch_size: 32
+  request_timeout: 2m
+  max_retries: 4
+
+vector_store:
+  # collection name = <prefix>_<schema version>_<model>_<dimensions>
+  collection_prefix: chunks
+
+indexer:
+  # embedding runs on these workers, never on the crawl workers
+  workers: 4
+  queue_size: 64
+  # a page that can't be queued in time is skipped and indexed on its next crawl
+  enqueue_timeout: 5s
+
 cache:
   page_ttl: 12h
   robots_ttl: 12h
+  document_hash_ttl: 720h
   redis_max_memory: 512mb
 
 queue:
