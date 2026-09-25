@@ -20,6 +20,10 @@ services:
         condition: service_healthy
       broker:
         condition: service_started
+      milvus:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
 
   vault:
     image: hashicorp/vault
@@ -84,6 +88,9 @@ services:
       - deployments/kafka/kafkaui.env
     ports:
       - "8080:8080"
+    depends_on:
+      - broker
+    restart: unless-stopped
 
   jaeger:
     image: jaegertracing/jaeger:latest
@@ -93,3 +100,45 @@ services:
       - "4318:4318"
     environment:
       - LOG_LEVEL=debug
+
+  # Single container: embedded etcd and local-disk storage, as in Milvus's own
+  # standalone_embed.sh. MinIO community images are no longer publicly pullable.
+  milvus:
+    image: milvusdb/milvus:v2.6.24
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
+      COMMON_STORAGETYPE: local
+      DEPLOY_MODE: STANDALONE
+    volumes:
+      - ./deployments/opt/milvus:/var/lib/milvus
+      - ./deployments/milvus/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro
+      - ./deployments/milvus/user.yaml:/milvus/configs/user.yaml:ro
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      start_period: 90s
+      timeout: 20s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:0.34.4
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_NUM_PARALLEL: 4
+    volumes:
+      - ./deployments/opt/ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10

@@ -6,8 +6,12 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 	"web-crawler/internal/appconfig"
+	"web-crawler/internal/chunker"
 	"web-crawler/internal/documents"
+	"web-crawler/internal/embedding"
+	"web-crawler/internal/indexing"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
@@ -16,6 +20,7 @@ import (
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/utils"
+	"web-crawler/internal/vectorstore"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
@@ -33,6 +38,17 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.uber.org/zap"
 )
+
+const (
+	redisDBPageCache      = 0
+	redisDBRobotsCache    = 1
+	redisDBRunState       = 2
+	redisDBDocumentHashes = 3
+)
+
+// Covers the embedder probe, which may have to load the model first, and
+// creating and loading the collection on a fresh Milvus.
+const indexingStartupTimeout = 2 * time.Minute
 
 func InitApp() *CrawlerApp {
 	initEnv()
@@ -56,7 +72,7 @@ func InitApp() *CrawlerApp {
 		log.Fatalf("Redis URI or password is missing")
 	}
 
-	redisRunStateClient := initRedisClient(logger, redisURI, redisPassword, 2, cfg)
+	redisRunStateClient := initRedisClient(logger, redisURI, redisPassword, redisDBRunState, cfg)
 
 	nodeID, err := utils.GenerateID()
 	if err != nil {
@@ -71,10 +87,10 @@ func InitApp() *CrawlerApp {
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
-	documentSink := documents.NewLogSink(logger)
+	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword)
 
-	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, 0, cfg)
-	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, 1, cfg)
+	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBPageCache, cfg)
+	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBRobotsCache, cfg)
 
 	redisPagesCache := cache.NewRedisCache(redisPagesCacheClient, logger)
 	redisRobotsCache := cache.NewRedisCache(redisRobotsCacheClient, logger)
@@ -120,6 +136,93 @@ func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
 	}
 
 	return katana
+}
+
+func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, redisURI, redisPassword string) documents.Sink {
+	ctx, cancel := context.WithTimeout(context.Background(), indexingStartupTimeout)
+	defer cancel()
+
+	textChunker, err := chunker.NewParagraphChunker(chunker.Settings{
+		MaxRunes:         cfg.Chunker.MaxRunes,
+		OverlapRunes:     cfg.Chunker.OverlapRunes,
+		MinDocumentRunes: cfg.Chunker.MinDocumentRunes,
+	})
+	if err != nil {
+		logger.Fatal("Error initializing chunker:", err)
+	}
+
+	embedder := initEmbedder(logger, cfg, sm)
+
+	dimension, err := embedder.Probe(ctx)
+	if err != nil {
+		logger.Fatalw("Embedding endpoint is not usable", "model", cfg.Embedding.Model, "error", err)
+	}
+
+	store := initVectorStore(ctx, logger, cfg, sm, dimension)
+
+	logger.Infow("Indexing ready",
+		"chunker", textChunker.Fingerprint(),
+		"model", embedder.Model(),
+		"dimension", dimension,
+		"collection", store.Collection(),
+	)
+
+	hashClient := initRedisClient(logger, redisURI, redisPassword, redisDBDocumentHashes, cfg)
+	hashes := indexing.NewRedisHashStore(hashClient, cfg.Cache.DocumentHashTTL.Std())
+
+	chunking := indexing.NewChunkingSink(logger, textChunker, hashes, indexing.NewVectorSink(embedder, store))
+
+	return indexing.NewAsyncSink(logger, chunking, cfg.Indexer.Workers, cfg.Indexer.QueueSize, cfg.Indexer.EnqueueTimeout.Std())
+}
+
+func initEmbedder(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) *embedding.OpenAIClient {
+	baseURL, err := sm.GetSecretStringFromConfig("EMBEDDING_BASE_URL")
+	if err != nil {
+		logger.Fatal("EMBEDDING_BASE_URL is missing in Vault")
+	}
+
+	embedder, err := embedding.NewOpenAIClient(embedding.OpenAIConfig{
+		BaseURL:        baseURL,
+		APIKey:         optionalSecret(sm, "EMBEDDING_API_KEY"),
+		Model:          cfg.Embedding.Model,
+		Dimensions:     cfg.Embedding.Dimensions,
+		BatchSize:      cfg.Embedding.BatchSize,
+		RequestTimeout: cfg.Embedding.RequestTimeout.Std(),
+		MaxRetries:     cfg.Embedding.MaxRetries,
+	})
+	if err != nil {
+		logger.Fatal("Error initializing embedder:", err)
+	}
+
+	return embedder
+}
+
+func initVectorStore(ctx context.Context, logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, dimension int) *vectorstore.Milvus {
+	addr, err := sm.GetSecretStringFromConfig("MILVUS_ADDR")
+	if err != nil {
+		logger.Fatal("MILVUS_ADDR is missing in Vault")
+	}
+
+	store, err := vectorstore.NewMilvus(ctx, vectorstore.MilvusConfig{
+		Address:    addr,
+		Token:      optionalSecret(sm, "MILVUS_TOKEN"),
+		Collection: vectorstore.CollectionName(cfg.VectorStore.CollectionPrefix, cfg.Embedding.Model, dimension),
+		Dimension:  dimension,
+	})
+	if err != nil {
+		logger.Fatal("Error initializing vector store:", err)
+	}
+
+	return store
+}
+
+func optionalSecret(sm manager.SecretManager, key string) string {
+	value, err := sm.GetSecretStringFromConfig(key)
+	if err != nil {
+		return ""
+	}
+
+	return value
 }
 
 func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int, cfg appconfig.Config) *redis.Client {

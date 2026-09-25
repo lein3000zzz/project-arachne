@@ -20,6 +20,9 @@ KAFKA_TOPIC_RUNS="${KAFKA_TOPIC_RUNS:-arachne.runs}"
 KAFKA_TASKS_CONSUMER_GROUP="${KAFKA_TASKS_CONSUMER_GROUP:-arachne-tasks}"
 KAFKA_RUNS_CONSUMER_GROUP="${KAFKA_RUNS_CONSUMER_GROUP:-arachne-runs}"
 CONFIG_PATH="${CONFIG_PATH:-configs/config.yml}"
+EMBEDDING_BASE_URL_OVERRIDE="${EMBEDDING_BASE_URL:-}"
+EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
+MILVUS_TOKEN="${MILVUS_TOKEN:-}"
 
 case "$PROFILE" in
   docker)
@@ -29,6 +32,8 @@ case "$PROFILE" in
     NEO4J_URI=bolt://neo4j:7687
     KAFKA_ADDR=broker:9092
     OTLP_ENDPOINT=jaeger:4318
+    MILVUS_ADDR=milvus:19530
+    EMBEDDING_BASE_URL=http://ollama:11434/v1
     ;;
   host)
     APP_ENV=dev
@@ -37,6 +42,8 @@ case "$PROFILE" in
     NEO4J_URI=bolt://localhost:7687
     KAFKA_ADDR=localhost:29092
     OTLP_ENDPOINT=localhost:4318
+    MILVUS_ADDR=localhost:19530
+    EMBEDDING_BASE_URL=http://localhost:11434/v1
     ;;
   *)
     echo "unknown profile '$PROFILE' (want: docker | host)" >&2
@@ -150,6 +157,19 @@ vault_auth kv put kv/main/kafka \
   KAFKA_RUNS_CONSUMER_GROUP="$KAFKA_RUNS_CONSUMER_GROUP" >/dev/null
 vault_auth kv put kv/main/otel \
   OTLP_ENDPOINT="$OTLP_ENDPOINT" >/dev/null
+vault_auth kv put kv/main/milvus \
+  MILVUS_ADDR="$MILVUS_ADDR" >/dev/null
+vault_auth kv put kv/main/embedding \
+  EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL_OVERRIDE:-$EMBEDDING_BASE_URL}" >/dev/null
+
+# Credentials live at their own paths and are written only when passed in, so
+# re-running the bootstrap never erases a key someone set by hand.
+if [ -n "$EMBEDDING_API_KEY" ]; then
+  vault_auth kv put kv/main/embedding_key EMBEDDING_API_KEY="$EMBEDDING_API_KEY" >/dev/null
+fi
+if [ -n "$MILVUS_TOKEN" ]; then
+  vault_auth kv put kv/main/milvus_token MILVUS_TOKEN="$MILVUS_TOKEN" >/dev/null
+fi
 
 set_env APP_ENV "$APP_ENV"
 set_env VAULT_ADDRESS "$VAULT_ADDRESS"
