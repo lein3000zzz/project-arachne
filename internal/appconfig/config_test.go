@@ -95,6 +95,7 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		{"prefix with a dash", "vector_store:\n  collection_prefix: my-chunks\n"},
 		{"prefix starting with a digit", "vector_store:\n  collection_prefix: 1chunks\n"},
 		{"zero indexer workers", "indexer:\n  workers: 0\n"},
+		{"zero slot lease", "run_state:\n  slot_lease: 0s\n"},
 		{"zero indexer queue", "indexer:\n  queue_size: 0\n"},
 		{"zero enqueue timeout", "indexer:\n  enqueue_timeout: 0s\n"},
 		{"component timeout over budget", "shutdown:\n  timeout: 5s\n  component_timeout: 10s\n"},

@@ -58,7 +58,7 @@ help:
 	@echo "make reset     stop, delete volumes, bind mounts and $(ENV_FILE)"
 	@echo ""
 	@echo "make build / test / vet / tidy"
-	@echo "make test-integration   tests against the running Milvus and embedder"
+	@echo "make test-integration   tests against the running Milvus and Redis"
 	@echo ""
 	@echo "tuning:  configs/config.yml  (workers, TTLs, parser engine, embedding model)"
 	@echo "         make up CONFIG_PATH=configs/other.yml to use another file"
@@ -146,7 +146,9 @@ test:
 	$(GO) test ./...
 
 test-integration:
-	MILVUS_ADDR=localhost:19530 $(GO) test -tags integration -count=1 ./...
+	MILVUS_ADDR=localhost:19530 REDIS_ADDR=localhost:6379 \
+		REDIS_PASSWORD="$$(sed -n 's/^REDIS_PASSWORD=//p' $(ENV_FILE))" \
+		$(GO) test -tags integration -count=1 ./...
 
 vet:
 	$(GO) vet ./...

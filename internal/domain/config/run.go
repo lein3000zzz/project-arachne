@@ -15,6 +15,20 @@ type Run struct {
 	ExtraFlags   *ExtraTaskFlags `json:"extra_flags,omitempty"`
 
 	StartURL string `json:"start_url"`
+
+	ack func()
+}
+
+func (r *Run) SetAck(ack func()) {
+	r.ack = ack
+}
+
+// Ack: see Task.Ack.
+func (r *Run) Ack() {
+	if ack := r.ack; ack != nil {
+		r.ack = nil
+		ack()
+	}
 }
 
 func NewRun(URL string, maxDepth, maxLinks int, flags *ExtraTaskFlags) *Run {

@@ -8,6 +8,7 @@ import (
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
+	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/runstates"
@@ -31,7 +32,6 @@ type CrawlerApp struct {
 	secretManager   manager.SecretManager
 
 	maxConcurrentRuns int
-	taskProducerChan  chan []*config.Task
 	cfg               appconfig.Config
 }
 
@@ -43,7 +43,6 @@ func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesR
 		pageRepo:          pagesRepo,
 		runStateManager:   runStateManager,
 		maxConcurrentRuns: cfg.Crawler.RunWorkers,
-		taskProducerChan:  make(chan []*config.Task, cfg.Crawler.TaskBuffer),
 		tracerProvider:    tp,
 		cfg:               cfg,
 	}
@@ -56,15 +55,11 @@ func (app *CrawlerApp) StartApp(ctx context.Context) error {
 		return err
 	}
 
-	crawlerCBChan := make(chan struct{}, 1)
-
-	crawlerCfg := app.buildCrawlerConfig(crawlerCBChan)
+	crawlerCfg := app.buildCrawlerConfig()
 
 	go app.processorQueue.StartRunConsumer()
 	go app.processorQueue.StartTaskConsumer()
-	go app.startTaskProducer()
 
-	go app.startCrawlerCallbackListener(crawlerCBChan)
 	go app.pageRepo.StartSaverWorkers(app.cfg.Crawler.SaverWorkers)
 
 	go app.crawler.StartCrawler(crawlerCfg)
@@ -86,12 +81,13 @@ func (app *CrawlerApp) startRunListener(ctx context.Context) {
 	runsChan := app.processorQueue.GetRunsChan()
 
 	for run := range runsChan {
-		select {
-		case <-ctx.Done():
-			app.logger.Info("Context cancelled, dropping pending run and exiting")
+		if ctx.Err() != nil {
+			app.logger.Info("Shutting down; pending runs are redelivered after restart")
 			return
-		default:
-			app.processRun(ctx, tracer, run)
+		}
+
+		if app.processRun(ctx, tracer, run) {
+			run.Ack()
 		}
 	}
 
@@ -99,19 +95,26 @@ func (app *CrawlerApp) startRunListener(ctx context.Context) {
 	app.logger.Info("Runs channel closed, exiting RunListener...")
 }
 
-func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run *config.Run) {
+// processRun reports whether the run message is finished with. It is not when
+// shutdown interrupts it: left unacked, the run is redelivered after the restart.
+func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run *config.Run) bool {
+	if run.MaxDepth < 1 || run.MaxLinks < 1 {
+		app.logger.Warnw("Dropping run that can never crawl anything", "runID", run.ID, "maxDepth", run.MaxDepth, "maxLinks", run.MaxLinks)
+		return true
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	err := app.waitForRunSlot(runCtx, tracer, run)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			app.logger.Warnw("Timeout waiting for run slot, re-queueing", "runID", run.ID)
-			app.processorQueue.QueueRun(run)
-		} else if !errors.Is(err, context.Canceled) {
-			app.logger.Errorw("Failed to acquire slot", "runID", run.ID, "error", err)
+	if err := app.waitForRunSlot(runCtx, tracer, run); err != nil {
+		if ctx.Err() != nil {
+			return false
 		}
-		return
+
+		app.logger.Warnw("No run slot yet, re-queueing", "runID", run.ID, "error", err)
+		app.processorQueue.QueueRun(run)
+
+		return true
 	}
 
 	firstTask := &config.Task{
@@ -122,7 +125,15 @@ func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run 
 
 	if err := app.processorQueue.SendTask(firstTask); err != nil {
 		app.handleDispatchError(ctx, tracer, run, err)
+
+		if ctx.Err() != nil || errors.Is(err, queue.ErrQueueClosed) {
+			return false
+		}
+
+		app.processorQueue.QueueRun(run)
 	}
+
+	return true
 }
 
 func (app *CrawlerApp) waitForRunSlot(ctx context.Context, tracer trace.Tracer, run *config.Run) error {
@@ -142,7 +153,7 @@ func (app *CrawlerApp) waitForRunSlot(ctx context.Context, tracer trace.Tracer, 
 			attribute.Int("max_concurrent_runs", app.maxConcurrentRuns),
 		)
 
-		acquired, err := app.runStateManager.AcquireRunSlot(ctx, app.maxConcurrentRuns)
+		acquired, _, err := app.runStateManager.AcquireRunSlot(ctx, run.ID, app.maxConcurrentRuns, app.cfg.RunState.SlotLease.Std())
 		span.SetAttributes(attribute.Bool("acquired", acquired))
 
 		if err != nil {
@@ -181,49 +192,18 @@ func (app *CrawlerApp) handleDispatchError(ctx context.Context, tracerProvider t
 	releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if releaseErr := app.runStateManager.ReleaseRunSlot(releaseCtx); releaseErr != nil {
+	if releaseErr := app.runStateManager.ReleaseRunSlot(releaseCtx, run.ID); releaseErr != nil {
 		app.logger.Errorw("Failed to release run slot after dispatch error", "error", releaseErr)
 		span.RecordError(releaseErr)
 	}
 }
 
-func (app *CrawlerApp) startCrawlerCallbackListener(sigChan <-chan struct{}) {
-	for range sigChan {
-		app.logger.Infof("Received crawler callback signal, run ended")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := app.runStateManager.ReleaseRunSlot(ctx)
-		cancel()
-
-		if err != nil {
-			app.logger.Errorw("Failed to release run slot", "error", err)
-		} else {
-			app.logger.Infof("Run slot released via Redis semaphore")
-		}
-	}
-}
-
-func (app *CrawlerApp) buildCrawlerConfig(crawlerCBChan chan<- struct{}) *webcrawler.CrawlerConfig {
-	crawlerCfg := &webcrawler.CrawlerConfig{
-		TaskConsumerChan:  app.processorQueue.GetTasksChan(),
-		SaverChan:         app.pageRepo.GetSaverChan(),
-		TaskProducerChan:  app.taskProducerChan,
-		CrawlCallbackChan: crawlerCBChan,
-		WorkersNumber:     app.cfg.Crawler.TaskWorkers,
-	}
-
-	return crawlerCfg
-}
-
-// Keeps draining after a failed send: crawl workers block on taskProducerChan when
-// it is full, and the crawler's shutdown waits for them.
-func (app *CrawlerApp) startTaskProducer() {
-	for tasks := range app.taskProducerChan {
-		for _, task := range tasks {
-			if err := app.processorQueue.SendTask(task); err != nil {
-				app.logger.Debugw("Task not queued", "url", task.URL, "error", err)
-			}
-		}
+func (app *CrawlerApp) buildCrawlerConfig() *webcrawler.CrawlerConfig {
+	return &webcrawler.CrawlerConfig{
+		TaskConsumerChan: app.processorQueue.GetTasksChan(),
+		SaverChan:        app.pageRepo.GetSaverChan(),
+		TaskSender:       app.processorQueue,
+		WorkersNumber:    app.cfg.Crawler.TaskWorkers,
 	}
 }
 

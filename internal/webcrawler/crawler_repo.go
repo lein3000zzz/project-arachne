@@ -16,6 +16,7 @@ import (
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/parser"
+	"web-crawler/internal/processor"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
@@ -69,39 +70,75 @@ func (repo *CrawlerRepo) StartCrawler(cfg *CrawlerConfig) {
 
 	for range repo.cfg.WorkersNumber {
 		repo.workers.Add(1)
-		go repo.crawlWorker(repo.cfg.TaskConsumerChan, repo.cfg.TaskProducerChan, repo.cfg.SaverChan)
+		go repo.crawlWorker(repo.cfg.TaskConsumerChan, repo.cfg.SaverChan)
 	}
 }
 
-func (repo *CrawlerRepo) crawlWorker(tcChan <-chan *config.Task, tpChan chan<- []*config.Task, saverChan chan<- *data.PageData) {
+func (repo *CrawlerRepo) crawlWorker(tcChan <-chan *config.Task, saverChan chan<- *data.PageData) {
 	defer repo.workers.Done()
 
 	repo.logger.Infof("Started crawlWorker")
 
 	for task := range tcChan {
-		err := repo.processTask(task, tpChan, saverChan)
-		if err != nil && !errors.Is(err, ErrCacheHit) {
-			repo.logger.Warnf("Error processing task: %s", err)
-			continue
-		}
+		repo.handleTask(task, saverChan)
 	}
 }
 
-func (repo *CrawlerRepo) processTask(task *config.Task, tpChan chan<- []*config.Task, saverChan chan<- *data.PageData) error {
-	defer repo.onTaskDone(task.Run)
+// handleTask completes a task only once its work is fully done, including queueing
+// every link it found: completion counts it down and acks it, and an acked task is
+// never redelivered.
+func (repo *CrawlerRepo) handleTask(task *config.Task, saverChan chan<- *data.PageData) {
+	task.EnsureID()
 
+	if repo.alreadyHandled(task) {
+		task.Ack()
+		return
+	}
+
+	err := repo.processTask(task, saverChan)
+
+	switch {
+	case errors.Is(err, ErrChildrenNotSent):
+		repo.logger.Warnw("Links of a page were not queued; leaving the task for redelivery", "url", task.URL, "error", err)
+		return
+	case err != nil && !errors.Is(err, ErrCacheHit):
+		repo.logger.Warnw("Error processing task", "url", task.URL, "error", err)
+	}
+
+	repo.completeTask(task)
+}
+
+// alreadyHandled skips redelivered tasks that were already completed, and tasks of
+// runs that finished or lost their slot. On a Redis error it processes anyway:
+// every step after this is idempotent.
+func (repo *CrawlerRepo) alreadyHandled(task *config.Task) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	state, err := repo.runStateManager.TaskState(ctx, task.Run.ID, task.ID, repo.settings.RunState.SlotLease.Std())
+	if err != nil {
+		repo.logger.Warnw("Failed to read task state, processing anyway", "url", task.URL, "error", err)
+		return false
+	}
+
+	return state.Done || !state.RunActive
+}
+
+func (repo *CrawlerRepo) processTask(task *config.Task, saverChan chan<- *data.PageData) error {
 	if task.Run.UseCacheFlag {
 		cached, errCached := repo.getCachedPage(task)
 
 		if errCached == nil {
-			tpChan <- repo.createNewTasksFromLinks(task, cached.PageLinks)
+			if err := repo.sendChildren(task, cached.PageLinks); err != nil {
+				return err
+			}
+
 			return ErrCacheHit
 		}
 	}
 
 	pd, err := repo.processCrawlTask(task)
 	if err != nil {
-		repo.logger.Warnw("Failed to process task", "task", task, "error", err)
 		return err
 	}
 
@@ -117,11 +154,69 @@ func (repo *CrawlerRepo) processTask(task *config.Task, tpChan chan<- []*config.
 		repo.logger.Warnw("Failed to cache page", "url", task.URL, "depth", task.CurrentDepth, "err", errCache)
 	}
 
-	newTasks := repo.createNewTasksFromLinks(task, pd.PageLinks)
+	return repo.sendChildren(task, pd.PageLinks)
+}
 
-	tpChan <- newTasks
+// sendChildren queues the page's links before the page itself is completed. The
+// other order lets the run's count reach zero while its children are still
+// uncounted, and the run is declared finished mid-crawl.
+func (repo *CrawlerRepo) sendChildren(parent *config.Task, links []string) error {
+	if parent.CurrentDepth+1 >= parent.Run.MaxDepth {
+		return nil
+	}
+
+	var failed error
+
+	for _, link := range links {
+		child := &config.Task{URL: link, CurrentDepth: parent.CurrentDepth + 1, Run: parent.Run}
+
+		err := repo.cfg.TaskSender.SendTask(child)
+
+		switch {
+		case err == nil, errors.Is(err, processor.ErrRunLimitExceeded):
+		case errors.Is(err, processor.ErrRunNotActive):
+			return nil
+		default:
+			failed = errors.Join(failed, err)
+		}
+	}
+
+	if failed != nil {
+		return fmt.Errorf("%w: %w", ErrChildrenNotSent, failed)
+	}
 
 	return nil
+}
+
+// completeTask counts the task down and acks it. Only the completion that takes the
+// run to zero gets past the counted check - across all nodes - and it frees the
+// slot directly. A failed count is not acked, so the task is redelivered; counting
+// is idempotent, so the redelivery cannot count it twice.
+func (repo *CrawlerRepo) completeTask(task *config.Task) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	left, counted, err := repo.runStateManager.CompleteTask(ctx, task.Run.ID, task.ID, repo.settings.RunState.SlotLease.Std())
+	if err != nil {
+		repo.logger.Errorw("Failed to complete task, leaving it for redelivery", "url", task.URL, "runID", task.Run.ID, "error", err)
+		return
+	}
+
+	task.Ack()
+
+	if !counted || left > 0 {
+		return
+	}
+
+	if err := repo.runStateManager.ReleaseRunSlot(ctx, task.Run.ID); err != nil {
+		repo.logger.Errorw("Failed to release run slot; it frees itself when the lease expires", "runID", task.Run.ID, "error", err)
+	}
+
+	if err := repo.runStateManager.CleanupRun(ctx, task.Run.ID); err != nil {
+		repo.logger.Warnw("Failed to clean up run state", "runID", task.Run.ID, "error", err)
+	}
+
+	repo.logger.Infow("Run finished", "runID", task.Run.ID)
 }
 
 func (repo *CrawlerRepo) processCrawlTask(task *config.Task) (*data.PageData, error) {
@@ -217,43 +312,6 @@ func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, 
 	}
 }
 
-func (repo *CrawlerRepo) onTaskDone(run *config.Run) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	left, err := repo.runStateManager.DecrementActiveTasks(ctx, run.ID)
-	if err != nil {
-		repo.logger.Errorw("Failed to decrement active tasks in Redis", "runID", run.ID, "error", err)
-		return
-	}
-
-	if left == 0 {
-		acquired, lockErr := repo.runStateManager.AcquireRunCompletionLock(ctx, run.ID, repo.settings.RunState.LockTTL.Std())
-		if lockErr != nil {
-			repo.logger.Errorw("Failed to acquire completion lock", "runID", run.ID, "error", lockErr)
-			return
-		}
-
-		if acquired {
-			select {
-			case repo.cfg.CrawlCallbackChan <- struct{}{}:
-				repo.logger.Infow("Run finished; released run slot", "runID", run.ID)
-			default:
-				repo.logger.Infow("Run finished, but the run slot was already empty for some reason", "runID", run.ID)
-			}
-
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cleanupCancel()
-
-			if cleanupErr := repo.runStateManager.CleanupRun(cleanupCtx, run.ID); cleanupErr != nil {
-				repo.logger.Warnw("Failed to cleanup run state", "runID", run.ID, "error", cleanupErr)
-			}
-		} else {
-			repo.logger.Debugw("Another node is handling run completion", "runID", run.ID)
-		}
-	}
-}
-
 func (repo *CrawlerRepo) getCachedPage(task *config.Task) (*data.PageData, error) {
 	cachedRaw, errCache := repo.cachePages.Get(task.URL)
 	if errCache != nil {
@@ -268,23 +326,6 @@ func (repo *CrawlerRepo) getCachedPage(task *config.Task) (*data.PageData, error
 	repo.logger.Infow("using cached page", "url", task.URL)
 
 	return cached, nil
-}
-
-func (repo *CrawlerRepo) createNewTasksFromLinks(prevTask *config.Task, links []string) []*config.Task {
-	newTasks := make([]*config.Task, len(links))
-	newDepth := prevTask.CurrentDepth + 1
-
-	for i, link := range links {
-		newTask := &config.Task{
-			URL:          link,
-			CurrentDepth: newDepth,
-			Run:          prevTask.Run,
-		}
-
-		newTasks[i] = newTask
-	}
-
-	return newTasks
 }
 
 func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
@@ -325,8 +366,8 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 }
 
 // Shutdown expects the task input to be closed already: workers only exit when it
-// is. Their output channels are closed only once every worker has exited, since a
-// send on a closed channel panics.
+// is. The document sink is shut down after them, so no worker submits into a
+// closed sink.
 func (repo *CrawlerRepo) Shutdown(ctx context.Context) error {
 	workersDone := make(chan struct{})
 	go func() {
@@ -338,10 +379,8 @@ func (repo *CrawlerRepo) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-workersDone:
-		close(repo.cfg.CrawlCallbackChan)
-		close(repo.cfg.TaskProducerChan)
 	case <-ctx.Done():
-		errWait = fmt.Errorf("crawl workers still running at shutdown deadline, output channels left open: %w", ctx.Err())
+		errWait = fmt.Errorf("crawl workers still running at shutdown deadline: %w", ctx.Err())
 	}
 
 	go repo.networker.Stop()

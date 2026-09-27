@@ -271,10 +271,9 @@ func initTasksQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg app
 		User:          kafkaUser,
 		Password:      kafkaPassword,
 
-		ChannelBuffer:   cfg.Queue.ChannelBuffer,
-		RequestTimeout:  cfg.Queue.RequestTimeout.Std(),
-		ConsumerTimeout: cfg.Queue.ConsumerTimeout.Std(),
-		FlushInterval:   cfg.Queue.FlushInterval.Std(),
+		ChannelBuffer:  cfg.Queue.ChannelBuffer,
+		RequestTimeout: cfg.Queue.RequestTimeout.Std(),
+		FlushInterval:  cfg.Queue.FlushInterval.Std(),
 	}
 
 	tasksQueue, err := queue.NewKafkaQueue(logger, &kafkaTasksCfg)
@@ -303,10 +302,9 @@ func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appc
 		User:          kafkaUser,
 		Password:      kafkaPassword,
 
-		ChannelBuffer:   cfg.Queue.ChannelBuffer,
-		RequestTimeout:  cfg.Queue.RequestTimeout.Std(),
-		ConsumerTimeout: cfg.Queue.ConsumerTimeout.Std(),
-		FlushInterval:   cfg.Queue.FlushInterval.Std(),
+		ChannelBuffer:  cfg.Queue.ChannelBuffer,
+		RequestTimeout: cfg.Queue.RequestTimeout.Std(),
+		FlushInterval:  cfg.Queue.FlushInterval.Std(),
 	}
 
 	runsQueue, err := queue.NewKafkaQueue(logger, &kafkaRunsCfg)

@@ -27,7 +27,6 @@ type Crawler struct {
 	SaverWorkers     int      `yaml:"saver_workers"`
 	ParserEngine     string   `yaml:"parser_engine"`
 	SaverSendTimeout Duration `yaml:"saver_send_timeout"`
-	TaskBuffer       int      `yaml:"task_buffer"`
 }
 
 type Chunker struct {
@@ -64,15 +63,16 @@ type Cache struct {
 }
 
 type Queue struct {
-	ChannelBuffer   int      `yaml:"channel_buffer"`
-	RequestTimeout  Duration `yaml:"request_timeout"`
-	ConsumerTimeout Duration `yaml:"consumer_timeout"`
-	FlushInterval   Duration `yaml:"flush_interval"`
+	ChannelBuffer  int      `yaml:"channel_buffer"`
+	RequestTimeout Duration `yaml:"request_timeout"`
+	FlushInterval  Duration `yaml:"flush_interval"`
 }
 
 type RunState struct {
-	TTL     Duration `yaml:"ttl"`
-	LockTTL Duration `yaml:"lock_ttl"`
+	TTL Duration `yaml:"ttl"`
+	// A run that makes no progress for this long loses its slot. Any task starting
+	// or finishing renews it, on whichever node.
+	SlotLease Duration `yaml:"slot_lease"`
 }
 
 type Shutdown struct {
@@ -100,7 +100,6 @@ func Default() Config {
 			SaverWorkers:     10,
 			ParserEngine:     ParserEngineKatana,
 			SaverSendTimeout: Duration(3 * time.Second),
-			TaskBuffer:       100,
 		},
 		Chunker: Chunker{
 			MaxRunes:         1200,
@@ -128,14 +127,13 @@ func Default() Config {
 			RedisMaxMemory:  "512mb",
 		},
 		Queue: Queue{
-			ChannelBuffer:   50,
-			RequestTimeout:  Duration(30 * time.Second),
-			ConsumerTimeout: Duration(time.Minute),
-			FlushInterval:   Duration(time.Second),
+			ChannelBuffer:  50,
+			RequestTimeout: Duration(30 * time.Second),
+			FlushInterval:  Duration(time.Second),
 		},
 		RunState: RunState{
-			TTL:     Duration(24 * time.Hour),
-			LockTTL: Duration(30 * time.Second),
+			TTL:       Duration(24 * time.Hour),
+			SlotLease: Duration(10 * time.Minute),
 		},
 		Shutdown: Shutdown{
 			Timeout:          Duration(30 * time.Second),
@@ -166,7 +164,6 @@ func (c *Config) Validate() error {
 		{"crawler.task_workers", c.Crawler.TaskWorkers},
 		{"crawler.run_workers", c.Crawler.RunWorkers},
 		{"crawler.saver_workers", c.Crawler.SaverWorkers},
-		{"crawler.task_buffer", c.Crawler.TaskBuffer},
 		{"chunker.max_runes", c.Chunker.MaxRunes},
 		{"embedding.batch_size", c.Embedding.BatchSize},
 		{"indexer.workers", c.Indexer.Workers},
@@ -191,10 +188,9 @@ func (c *Config) Validate() error {
 		{"embedding.request_timeout", c.Embedding.RequestTimeout},
 		{"indexer.enqueue_timeout", c.Indexer.EnqueueTimeout},
 		{"queue.request_timeout", c.Queue.RequestTimeout},
-		{"queue.consumer_timeout", c.Queue.ConsumerTimeout},
 		{"queue.flush_interval", c.Queue.FlushInterval},
 		{"run_state.ttl", c.RunState.TTL},
-		{"run_state.lock_ttl", c.RunState.LockTTL},
+		{"run_state.slot_lease", c.RunState.SlotLease},
 		{"shutdown.timeout", c.Shutdown.Timeout},
 		{"shutdown.component_timeout", c.Shutdown.ComponentTimeout},
 	}

@@ -2,8 +2,10 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/webcrawler/runstates"
@@ -15,6 +17,7 @@ type fakeQueue struct {
 	queue.Queue
 	produced [][]byte
 	err      error
+	consumer chan queue.Message
 }
 
 func (f *fakeQueue) Produce(_ context.Context, payload []byte) error {
@@ -27,23 +30,25 @@ func (f *fakeQueue) Produce(_ context.Context, payload []byte) error {
 	return nil
 }
 
+func (f *fakeQueue) GetConsumerChan() <-chan queue.Message { return f.consumer }
+func (f *fakeQueue) StartQueueConsumer()                   {}
+func (f *fakeQueue) StartQueueProducer()                   {}
+
 type fakeRunState struct {
 	runstates.RunStateManager
-	links       int64
-	incremented int
-	decremented int
+	admission  runstates.Admission
+	admitted   []string
+	unadmitted []string
 }
 
-func (f *fakeRunState) GetCurrentLinks(context.Context, string) (int64, error) { return f.links, nil }
+func (f *fakeRunState) AdmitTask(_ context.Context, _, taskID string, _ int) (runstates.Admission, error) {
+	f.admitted = append(f.admitted, taskID)
+	return f.admission, nil
+}
 
-func (f *fakeRunState) IncrementActiveAndCurrentLinks(context.Context, string) error {
-	f.incremented++
+func (f *fakeRunState) UnadmitTask(_ context.Context, _, taskID string) error {
+	f.unadmitted = append(f.unadmitted, taskID)
 	return nil
-}
-
-func (f *fakeRunState) DecrementActiveTasks(context.Context, string) (int64, error) {
-	f.decremented++
-	return 0, nil
 }
 
 func task(depth int) *config.Task {
@@ -54,57 +59,141 @@ func task(depth int) *config.Task {
 	}
 }
 
-func TestSendTaskCountsAndProduces(t *testing.T) {
-	tasks, state := &fakeQueue{}, &fakeRunState{}
-	p := NewTaskProcessorKafka(zap.NewNop().Sugar(), tasks, &fakeQueue{}, state)
+func newProcessor(tasks *fakeQueue, state *fakeRunState) *QueueProcessor {
+	return NewTaskProcessorKafka(zap.NewNop().Sugar(), tasks, &fakeQueue{}, state)
+}
 
-	if err := p.SendTask(task(0)); err != nil {
-		t.Fatalf("SendTask: %v", err)
+func TestSendTaskByAdmission(t *testing.T) {
+	cases := []struct {
+		admission runstates.Admission
+		err       error
+		produced  int
+	}{
+		{runstates.Admitted, nil, 1},
+		{runstates.Duplicate, nil, 0},
+		{runstates.LimitReached, ErrRunLimitExceeded, 0},
+		{runstates.RunInactive, ErrRunNotActive, 0},
 	}
 
-	if len(tasks.produced) != 1 || state.incremented != 1 || state.decremented != 0 {
-		t.Errorf("produced=%d incremented=%d decremented=%d, want 1/1/0",
-			len(tasks.produced), state.incremented, state.decremented)
+	for _, tc := range cases {
+		tasks, state := &fakeQueue{}, &fakeRunState{admission: tc.admission}
+
+		err := newProcessor(tasks, state).SendTask(task(0))
+		if !errors.Is(err, tc.err) {
+			t.Errorf("admission %v: err = %v, want %v", tc.admission, err, tc.err)
+		}
+
+		if len(tasks.produced) != tc.produced || len(state.unadmitted) != 0 {
+			t.Errorf("admission %v: produced %d (want %d), unadmitted %v",
+				tc.admission, len(tasks.produced), tc.produced, state.unadmitted)
+		}
 	}
 }
 
-func TestSendTaskReleasesTheCountWhenTheQueueRefuses(t *testing.T) {
-	tasks, state := &fakeQueue{err: queue.ErrQueueClosed}, &fakeRunState{}
-	p := NewTaskProcessorKafka(zap.NewNop().Sugar(), tasks, &fakeQueue{}, state)
+func TestSendTaskCarriesItsID(t *testing.T) {
+	tasks, state := &fakeQueue{}, &fakeRunState{}
 
-	err := p.SendTask(task(0))
-	if !errors.Is(err, queue.ErrQueueClosed) {
+	if err := newProcessor(tasks, state).SendTask(task(0)); err != nil {
+		t.Fatal(err)
+	}
+
+	var sent config.Task
+	_ = json.Unmarshal(tasks.produced[0], &sent)
+
+	want := config.TaskID("run", "https://example.com/")
+	if sent.ID != want || state.admitted[0] != want {
+		t.Errorf("sent ID %q, admitted %q, want %q", sent.ID, state.admitted[0], want)
+	}
+}
+
+func TestSendTaskAtMaxDepthNeverReachesRedis(t *testing.T) {
+	tasks, state := &fakeQueue{}, &fakeRunState{}
+
+	if err := newProcessor(tasks, state).SendTask(task(3)); !errors.Is(err, ErrRunLimitExceeded) {
+		t.Fatalf("err = %v, want ErrRunLimitExceeded", err)
+	}
+
+	if len(state.admitted) != 0 {
+		t.Error("the depth limit needs no Redis round trip")
+	}
+}
+
+func TestSendTaskUndoesAdmissionWhenTheQueueRefuses(t *testing.T) {
+	tasks, state := &fakeQueue{err: queue.ErrQueueClosed}, &fakeRunState{}
+
+	if err := newProcessor(tasks, state).SendTask(task(0)); !errors.Is(err, queue.ErrQueueClosed) {
 		t.Fatalf("err = %v, want ErrQueueClosed", err)
 	}
 
-	if state.incremented != 1 || state.decremented != 1 {
-		t.Errorf("incremented=%d decremented=%d: a task that never ran must not stay counted",
-			state.incremented, state.decremented)
+	if len(state.unadmitted) != 1 || state.unadmitted[0] != state.admitted[0] {
+		t.Errorf("admitted %v, unadmitted %v: a task that never reached Kafka must not stay counted",
+			state.admitted, state.unadmitted)
 	}
 }
 
-func TestSendTaskOverTheLimitIsNeverCounted(t *testing.T) {
-	cases := map[string]struct {
-		task  *config.Task
-		links int64
-	}{
-		"depth": {task(3), 0},
-		"links": {task(0), 10},
+func TestTaskConsumerAcksMalformedMessagesAndAttachesAcks(t *testing.T) {
+	consumer := make(chan queue.Message, 4)
+	tasks := &fakeQueue{consumer: consumer}
+	p := newProcessor(tasks, &fakeRunState{})
+
+	acked := map[string]int{}
+	send := func(name string, payload string) {
+		consumer <- queue.NewMessage([]byte(payload), func() { acked[name]++ })
 	}
 
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			tasks, state := &fakeQueue{}, &fakeRunState{links: tc.links}
-			p := NewTaskProcessorKafka(zap.NewNop().Sugar(), tasks, &fakeQueue{}, state)
+	valid, _ := json.Marshal(task(0))
+	send("empty", "")
+	send("garbage", "not json")
+	send("no run", `{"url":"https://example.com/"}`)
+	send("valid", string(valid))
+	close(consumer)
 
-			if err := p.SendTask(tc.task); !errors.Is(err, ErrRunLimitExceeded) {
-				t.Fatalf("err = %v, want ErrRunLimitExceeded", err)
-			}
+	go p.StartTaskConsumer()
 
-			if state.incremented != 0 || state.decremented != 0 || len(tasks.produced) != 0 {
-				t.Errorf("a rejected task must touch nothing: incremented=%d decremented=%d produced=%d",
-					state.incremented, state.decremented, len(tasks.produced))
-			}
-		})
+	var delivered []*config.Task
+	for tk := range p.GetTasksChan() {
+		delivered = append(delivered, tk)
+	}
+
+	for _, name := range []string{"empty", "garbage", "no run"} {
+		if acked[name] != 1 {
+			t.Errorf("malformed %q must be acked immediately, acked %d times", name, acked[name])
+		}
+	}
+
+	if len(delivered) != 1 || acked["valid"] != 0 {
+		t.Fatalf("want the valid task delivered and not yet acked; delivered %d, acked %d", len(delivered), acked["valid"])
+	}
+
+	delivered[0].Ack()
+	if acked["valid"] != 1 {
+		t.Error("acking the task must ack its Kafka message")
+	}
+}
+
+func TestRunConsumerAttachesAcks(t *testing.T) {
+	consumer := make(chan queue.Message, 2)
+	runs := &fakeQueue{consumer: consumer}
+	p := NewTaskProcessorKafka(zap.NewNop().Sugar(), &fakeQueue{}, runs, &fakeRunState{})
+
+	acked := 0
+	payload, _ := json.Marshal(&config.Run{ID: "r", StartURL: "https://example.com/"})
+	consumer <- queue.NewMessage(payload, func() { acked++ })
+	close(consumer)
+
+	go p.StartRunConsumer()
+
+	select {
+	case run := <-p.GetRunsChan():
+		if acked != 0 {
+			t.Error("a run must not be acked before it is handled")
+		}
+
+		run.Ack()
+		if acked != 1 {
+			t.Error("acking the run must ack its Kafka message")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run not delivered")
 	}
 }

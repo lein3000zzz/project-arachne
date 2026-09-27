@@ -2,7 +2,6 @@ package runstates
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -11,11 +10,97 @@ import (
 )
 
 const (
-	activeTasksKeyPrefix       = "run:active_tasks:"
-	currentLinksKeyPrefix      = "run:current_links:"
-	runCompletionLockKeyPrefix = "run:completion_lock:"
-	runSemaphoreKey            = "crawler:run_semaphore"
+	slotsKey              = "crawler:run_slots"
+	activeTasksKeyPrefix  = "run:active_tasks:"
+	currentLinksKeyPrefix = "run:current_links:"
+	tasksKeyPrefix        = "run:tasks:"
 )
+
+// Lease times are read from Redis's clock (TIME), not the node's, so clock skew
+// between nodes cannot expire a live run early.
+const nowMillis = `
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+`
+
+var acquireSlotScript = redis.NewScript(nowMillis + `
+local reaped = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', now)
+if #reaped > 0 then
+  redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+end
+
+local expiry = now + tonumber(ARGV[3])
+if redis.call('ZSCORE', KEYS[1], ARGV[1]) or redis.call('ZCARD', KEYS[1]) < tonumber(ARGV[2]) then
+  redis.call('ZADD', KEYS[1], expiry, ARGV[1])
+  return {1, reaped}
+end
+
+return {0, reaped}
+`)
+
+var admitTaskScript = redis.NewScript(nowMillis + `
+local lease = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not lease or tonumber(lease) <= now then
+  return 3
+end
+
+if redis.call('HEXISTS', KEYS[2], ARGV[2]) == 1 then
+  return 1
+end
+
+if tonumber(redis.call('GET', KEYS[4]) or '0') >= tonumber(ARGV[3]) then
+  return 2
+end
+
+redis.call('HSET', KEYS[2], ARGV[2], 'queued')
+redis.call('INCR', KEYS[3])
+redis.call('INCR', KEYS[4])
+for i = 2, 4 do
+  redis.call('EXPIRE', KEYS[i], ARGV[4])
+end
+
+return 0
+`)
+
+var unadmitTaskScript = redis.NewScript(`
+if redis.call('HGET', KEYS[1], ARGV[1]) ~= 'queued' then
+  return 0
+end
+
+redis.call('HDEL', KEYS[1], ARGV[1])
+redis.call('DECR', KEYS[2])
+redis.call('DECR', KEYS[3])
+
+return 1
+`)
+
+var taskStateScript = redis.NewScript(nowMillis + `
+local lease = redis.call('ZSCORE', KEYS[1], ARGV[1])
+local active = lease and tonumber(lease) > now
+if active then
+  redis.call('ZADD', KEYS[1], 'XX', now + tonumber(ARGV[3]), ARGV[1])
+end
+
+local done = redis.call('HGET', KEYS[2], ARGV[2]) == 'done'
+
+return {active and 1 or 0, done and 1 or 0}
+`)
+
+var completeTaskScript = redis.NewScript(nowMillis + `
+if redis.call('HGET', KEYS[2], ARGV[2]) ~= 'queued' then
+  return {0, 0}
+end
+
+redis.call('HSET', KEYS[2], ARGV[2], 'done')
+local left = redis.call('DECR', KEYS[3])
+
+local lease = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if lease and tonumber(lease) > now then
+  redis.call('ZADD', KEYS[1], 'XX', now + tonumber(ARGV[3]), ARGV[1])
+end
+
+return {1, left}
+`)
 
 type RedisRunStateManager struct {
 	client *redis.Client
@@ -33,222 +118,101 @@ func NewRedisRunStateManager(client *redis.Client, logger *zap.SugaredLogger, no
 	}
 }
 
-func (m *RedisRunStateManager) activeTasksKey(runID string) string {
-	return activeTasksKeyPrefix + runID
-}
-
-func (m *RedisRunStateManager) currentLinksKey(runID string) string {
-	return currentLinksKeyPrefix + runID
-}
-
-func (m *RedisRunStateManager) completionLockKey(runID string) string {
-	return runCompletionLockKeyPrefix + runID
-}
-
-func (m *RedisRunStateManager) IncrementActiveTasks(ctx context.Context, runID string) (int64, error) {
-	key := m.activeTasksKey(runID)
-	val, err := m.client.Incr(ctx, key).Result()
+func (m *RedisRunStateManager) AcquireRunSlot(ctx context.Context, runID string, maxConcurrent int, lease time.Duration) (bool, []string, error) {
+	raw, err := acquireSlotScript.Run(ctx, m.client, []string{slotsKey}, runID, maxConcurrent, lease.Milliseconds()).Slice()
 	if err != nil {
-		return 0, fmt.Errorf("failed to increment active tasks: %w", err)
+		return false, nil, fmt.Errorf("acquiring run slot: %w", err)
 	}
 
-	if val == 1 {
-		m.client.Expire(ctx, key, m.ttl)
+	if len(raw) != 2 {
+		return false, nil, fmt.Errorf("acquiring run slot: unexpected reply %v", raw)
 	}
 
-	return val, nil
+	acquired, _ := raw[0].(int64)
+
+	reaped := make([]string, 0)
+	if list, ok := raw[1].([]any); ok {
+		for _, id := range list {
+			if s, ok := id.(string); ok {
+				reaped = append(reaped, s)
+			}
+		}
+	}
+
+	for _, id := range reaped {
+		m.logger.Warnw("Run lost its slot: no progress within its lease", "runID", id)
+	}
+
+	if acquired == 1 {
+		m.logger.Infow("Acquired run slot", "runID", runID, "nodeID", m.nodeID)
+	}
+
+	return acquired == 1, reaped, nil
 }
 
-func (m *RedisRunStateManager) DecrementActiveTasks(ctx context.Context, runID string) (int64, error) {
-	key := m.activeTasksKey(runID)
-	val, err := m.client.Decr(ctx, key).Result()
-	if err != nil {
-		return 0, fmt.Errorf("failed to decrement active tasks: %w", err)
+func (m *RedisRunStateManager) ReleaseRunSlot(ctx context.Context, runID string) error {
+	if err := m.client.ZRem(ctx, slotsKey, runID).Err(); err != nil {
+		return fmt.Errorf("releasing run slot: %w", err)
 	}
-	return val, nil
+
+	m.logger.Infow("Released run slot", "runID", runID, "nodeID", m.nodeID)
+
+	return nil
 }
 
-func (m *RedisRunStateManager) IncrementCurrentLinks(ctx context.Context, runID string) (int64, error) {
-	key := m.currentLinksKey(runID)
-	val, err := m.client.Incr(ctx, key).Result()
+func (m *RedisRunStateManager) AdmitTask(ctx context.Context, runID, taskID string, maxLinks int) (Admission, error) {
+	keys := []string{slotsKey, tasksKeyPrefix + runID, activeTasksKeyPrefix + runID, currentLinksKeyPrefix + runID}
+
+	result, err := admitTaskScript.Run(ctx, m.client, keys, runID, taskID, maxLinks, int64(m.ttl.Seconds())).Int()
 	if err != nil {
-		return 0, fmt.Errorf("failed to increment current links: %w", err)
+		return 0, fmt.Errorf("admitting task: %w", err)
 	}
 
-	if val == 1 {
-		m.client.Expire(ctx, key, m.ttl)
-	}
-
-	return val, nil
+	return Admission(result), nil
 }
 
-func (m *RedisRunStateManager) GetCurrentLinks(ctx context.Context, runID string) (int64, error) {
-	key := m.currentLinksKey(runID)
+func (m *RedisRunStateManager) UnadmitTask(ctx context.Context, runID, taskID string) error {
+	keys := []string{tasksKeyPrefix + runID, activeTasksKeyPrefix + runID, currentLinksKeyPrefix + runID}
 
-	val, err := m.client.Get(ctx, key).Int64()
-	if errors.Is(err, redis.Nil) {
-		return 0, nil
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("failed to get current links: %w", err)
-	}
-	return val, nil
-}
-
-func (m *RedisRunStateManager) GetActiveTasks(ctx context.Context, runID string) (int64, error) {
-	key := m.activeTasksKey(runID)
-
-	val, err := m.client.Get(ctx, key).Int64()
-	if errors.Is(err, redis.Nil) {
-		return 0, nil
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("failed to get active tasks: %w", err)
-	}
-	return val, nil
-}
-
-func (m *RedisRunStateManager) IncrementActiveAndCurrentLinks(ctx context.Context, runID string) error {
-	pipe := m.client.TxPipeline()
-
-	activeKey := m.activeTasksKey(runID)
-	linksKey := m.currentLinksKey(runID)
-
-	pipe.Incr(ctx, activeKey)
-	pipe.Incr(ctx, linksKey)
-	pipe.Expire(ctx, activeKey, m.ttl)
-	pipe.Expire(ctx, linksKey, m.ttl)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to increment active and current links: %w", err)
+	if err := unadmitTaskScript.Run(ctx, m.client, keys, taskID).Err(); err != nil {
+		return fmt.Errorf("unadmitting task: %w", err)
 	}
 
 	return nil
 }
 
-func (m *RedisRunStateManager) AcquireRunCompletionLock(ctx context.Context, runID string, ttl time.Duration) (bool, error) {
-	key := m.completionLockKey(runID)
+func (m *RedisRunStateManager) TaskState(ctx context.Context, runID, taskID string, lease time.Duration) (TaskState, error) {
+	keys := []string{slotsKey, tasksKeyPrefix + runID}
 
-	acquired, err := m.client.SetNX(ctx, key, m.nodeID, ttl).Result()
+	raw, err := taskStateScript.Run(ctx, m.client, keys, runID, taskID, lease.Milliseconds()).Int64Slice()
 	if err != nil {
-		return false, fmt.Errorf("failed to acquire completion lock: %w", err)
+		return TaskState{}, fmt.Errorf("reading task state: %w", err)
 	}
 
-	if acquired {
-		m.logger.Debugw("Acquired run completion lock", "runID", runID, "nodeID", m.nodeID)
-	}
-
-	return acquired, nil
+	return TaskState{RunActive: raw[0] == 1, Done: raw[1] == 1}, nil
 }
 
-func (m *RedisRunStateManager) ReleaseRunCompletionLock(ctx context.Context, runID string) error {
-	key := m.completionLockKey(runID)
+func (m *RedisRunStateManager) CompleteTask(ctx context.Context, runID, taskID string, lease time.Duration) (int64, bool, error) {
+	keys := []string{slotsKey, tasksKeyPrefix + runID, activeTasksKeyPrefix + runID}
 
-	script := redis.NewScript(`
-		if redis.call("get", KEYS[1]) == ARGV[1] then
-			return redis.call("del", KEYS[1])
-		else
-			return 0
-		end
-	`)
-
-	_, err := script.Run(ctx, m.client, []string{key}, m.nodeID).Result()
+	raw, err := completeTaskScript.Run(ctx, m.client, keys, runID, taskID, lease.Milliseconds()).Int64Slice()
 	if err != nil {
-		return fmt.Errorf("failed to release completion lock: %w", err)
+		return 0, false, fmt.Errorf("completing task: %w", err)
 	}
 
-	return nil
-}
-
-func (m *RedisRunStateManager) AcquireRunSlot(ctx context.Context, maxConcurrent int) (bool, error) {
-	script := redis.NewScript(`
-		local current = redis.call("get", KEYS[1])
-		if current == false then
-			current = 0
-		else
-			current = tonumber(current)
-		end
-		
-		if current < tonumber(ARGV[1]) then
-			redis.call("incr", KEYS[1])
-			return 1
-		else
-			return 0
-		end
-	`)
-
-	result, err := script.Run(ctx, m.client, []string{runSemaphoreKey}, maxConcurrent).Int64()
-	if err != nil {
-		return false, fmt.Errorf("failed to acquire run slot: %w", err)
-	}
-
-	acquired := result == 1
-	if acquired {
-		m.logger.Infow("Acquired run slot", "nodeID", m.nodeID)
-	}
-
-	return acquired, nil
-}
-
-func (m *RedisRunStateManager) ReleaseRunSlot(ctx context.Context) error {
-	script := redis.NewScript(`
-		local current = redis.call("get", KEYS[1])
-		if current == false or tonumber(current) <= 0 then
-			return 0
-		else
-			return redis.call("decr", KEYS[1])
-		end
-	`)
-
-	_, err := script.Run(ctx, m.client, []string{runSemaphoreKey}).Result()
-	if err != nil {
-		return fmt.Errorf("failed to release run slot: %w", err)
-	}
-
-	m.logger.Infow("Released run slot", "nodeID", m.nodeID)
-	return nil
+	return raw[1], raw[0] == 1, nil
 }
 
 func (m *RedisRunStateManager) CleanupRun(ctx context.Context, runID string) error {
-	keys := []string{
-		m.activeTasksKey(runID),
-		m.currentLinksKey(runID),
-		m.completionLockKey(runID),
-	}
+	keys := []string{activeTasksKeyPrefix + runID, currentLinksKeyPrefix + runID, tasksKeyPrefix + runID}
 
-	err := m.client.Del(ctx, keys...).Err()
-	if err != nil {
-		return fmt.Errorf("failed to cleanup run state: %w", err)
+	if err := m.client.Del(ctx, keys...).Err(); err != nil {
+		return fmt.Errorf("cleaning up run state: %w", err)
 	}
 
 	m.logger.Infow("Cleaned up run state", "runID", runID)
-	return nil
-}
-
-func (m *RedisRunStateManager) SetRunTTL(ctx context.Context, runID string, ttl time.Duration) error {
-	pipe := m.client.TxPipeline()
-
-	pipe.Expire(ctx, m.activeTasksKey(runID), ttl)
-	pipe.Expire(ctx, m.currentLinksKey(runID), ttl)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to set run TTL: %w", err)
-	}
 
 	return nil
-}
-
-func (m *RedisRunStateManager) CheckRunLimits(ctx context.Context, runID string, maxLinks int) (bool, error) {
-	currentLinks, err := m.GetCurrentLinks(ctx, runID)
-	if err != nil {
-		return false, err
-	}
-
-	return currentLinks < int64(maxLinks), nil
 }
 
 func (m *RedisRunStateManager) Stop(ctx context.Context) error {

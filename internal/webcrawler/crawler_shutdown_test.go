@@ -5,35 +5,12 @@ import (
 	"errors"
 	"testing"
 	"time"
-	"web-crawler/internal/domain/config"
-	"web-crawler/internal/networker"
-	"web-crawler/internal/networker/sugaredworker"
 
 	"go.uber.org/zap"
 )
 
-type nopNetworker struct{}
-
-func (nopNetworker) Stop()                                        {}
-func (nopNetworker) Fetch(string) (*networker.FetchResult, error) { return nil, errors.New("unused") }
-
-type nopExtra struct{}
-
-func (nopExtra) RestartBrowserAndLauncher() error { return nil }
-func (nopExtra) PerformExtraTask(string, *config.ExtraTaskFlags) *sugaredworker.ExtraTaskRes {
-	return nil
-}
-func (nopExtra) Shutdown(context.Context) error { return nil }
-
-type nopCache struct{}
-
-func (nopCache) Set(string, any, time.Duration) error { return nil }
-func (nopCache) Get(string) (string, error)           { return "", errors.New("miss") }
-func (nopCache) Stop(context.Context) error           { return nil }
-
-func shutdownRepo() (*CrawlerRepo, chan struct{}, chan []*config.Task) {
-	callbacks := make(chan struct{}, 1)
-	produced := make(chan []*config.Task, 1)
+func shutdownRepo() (*CrawlerRepo, *recordingSink) {
+	sink := &recordingSink{}
 
 	repo := &CrawlerRepo{
 		logger:      zap.NewNop().Sugar(),
@@ -41,25 +18,40 @@ func shutdownRepo() (*CrawlerRepo, chan struct{}, chan []*config.Task) {
 		extraWorker: nopExtra{},
 		cachePages:  nopCache{},
 		cacheRobots: nopCache{},
-		documents:   &recordingSink{},
-		cfg:         &CrawlerConfig{CrawlCallbackChan: callbacks, TaskProducerChan: produced},
+		documents:   sink,
+		cfg:         &CrawlerConfig{},
 	}
 
-	return repo, callbacks, produced
+	return repo, sink
 }
 
-func isClosed[T any](ch chan T) bool {
-	select {
-	case _, ok := <-ch:
-		return !ok
-	default:
-		return false
-	}
-}
-
-func TestShutdownLeavesOutputsOpenWhileAWorkerRuns(t *testing.T) {
-	repo, callbacks, produced := shutdownRepo()
+func TestShutdownStopsTheSinkOnlyAfterWorkersExit(t *testing.T) {
+	repo, sink := shutdownRepo()
 	repo.workers.Add(1)
+
+	done := make(chan error, 1)
+	go func() { done <- repo.Shutdown(context.Background()) }()
+
+	time.Sleep(30 * time.Millisecond)
+	if sink.shutdownCount() != 0 {
+		t.Fatal("the document sink was shut down while a worker could still submit to it")
+	}
+
+	repo.workers.Done()
+
+	if err := <-done; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	if sink.shutdownCount() != 1 {
+		t.Error("the document sink must be shut down once the workers are gone")
+	}
+}
+
+func TestShutdownReportsWorkersStillRunningAtTheDeadline(t *testing.T) {
+	repo, sink := shutdownRepo()
+	repo.workers.Add(1)
+	defer repo.workers.Done()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
@@ -68,27 +60,7 @@ func TestShutdownLeavesOutputsOpenWhileAWorkerRuns(t *testing.T) {
 		t.Errorf("err = %v, want the deadline reported", err)
 	}
 
-	if isClosed(callbacks) || isClosed(produced) {
-		t.Error("closing a channel a live worker may still send on would panic that worker")
-	}
-
-	repo.workers.Done()
-}
-
-func TestShutdownClosesOutputsOnceWorkersExit(t *testing.T) {
-	repo, callbacks, produced := shutdownRepo()
-	repo.workers.Add(1)
-
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		repo.workers.Done()
-	}()
-
-	if err := repo.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown: %v", err)
-	}
-
-	if !isClosed(callbacks) || !isClosed(produced) {
-		t.Error("with every worker gone, the output channels must be closed so their readers exit")
+	if sink.shutdownCount() != 1 {
+		t.Error("dependencies must still be shut down after the deadline")
 	}
 }

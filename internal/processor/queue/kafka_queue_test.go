@@ -134,7 +134,7 @@ func newTestQueue(buffer int) *KafkaQueue {
 
 	return &KafkaQueue{
 		producerChan: make(chan []byte, buffer),
-		consumerChan: make(chan []byte, buffer),
+		consumerChan: make(chan Message, buffer),
 		cfg:          &KafkaConfig{ChannelBuffer: buffer},
 		stop:         stop,
 		cancelStop:   cancel,

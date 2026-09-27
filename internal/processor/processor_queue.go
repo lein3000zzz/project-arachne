@@ -35,94 +35,71 @@ func NewTaskProcessorKafka(logger *zap.SugaredLogger, tasksQueue queue.Queue, ru
 	}
 }
 
+// SendTask admits the task in Redis - one atomic step checks the run still holds
+// its slot, drops a duplicate, enforces the link limit and counts the task - and
+// only then produces it. A duplicate is not an error: the task is already queued.
 func (p *QueueProcessor) SendTask(task *config.Task) error {
+	if task.CurrentDepth >= task.Run.MaxDepth {
+		return ErrRunLimitExceeded
+	}
+
+	task.EnsureID()
+
+	payload, err := json.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("marshalling task %s: %w", task.URL, err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	p.logger.Infow("SendTask called", "url", task.URL, "runID", task.Run.ID, "depth", task.CurrentDepth)
-
-	err := p.checkRunInfo(ctx, task)
+	admission, err := p.runStateManager.AdmitTask(ctx, task.Run.ID, task.ID, task.Run.MaxLinks)
 	if err != nil {
-		p.logger.Warnw("Failed to update run info", "task", task)
 		return err
 	}
 
-	bytes, err := json.Marshal(task)
-	if err != nil {
-		p.logger.Warnw("Failed to marshal task to json", "task", task)
-		return err
+	switch admission {
+	case runstates.Duplicate:
+		return nil
+	case runstates.LimitReached:
+		return ErrRunLimitExceeded
+	case runstates.RunInactive:
+		return ErrRunNotActive
 	}
 
-	if err := p.runStateManager.IncrementActiveAndCurrentLinks(ctx, task.Run.ID); err != nil {
-		p.logger.Warnw("Failed to increment counters in Redis", "runID", task.Run.ID, "error", err)
-		return err
-	}
-
-	p.logger.Infow("Sending task to Kafka", "url", task.URL, "runID", task.Run.ID)
-
-	if err := p.tasksQueue.Produce(ctx, bytes); err != nil {
-		// The task was counted above but will never run: give the count back, or
-		// the run's active-task counter never reaches zero and the run never ends.
-		if _, errDecr := p.runStateManager.DecrementActiveTasks(context.Background(), task.Run.ID); errDecr != nil {
-			p.logger.Errorw("Failed to release the count of an unsent task", "runID", task.Run.ID, "error", errDecr)
+	if err := p.tasksQueue.Produce(ctx, payload); err != nil {
+		// Counted but never queued: undo it, or the run can never reach zero, and a
+		// later retry would be rejected as a duplicate.
+		if errUndo := p.runStateManager.UnadmitTask(context.Background(), task.Run.ID, task.ID); errUndo != nil {
+			p.logger.Errorw("Failed to undo the admission of an unsent task", "runID", task.Run.ID, "error", errUndo)
 		}
 
 		return fmt.Errorf("queueing task %s: %w", task.URL, err)
 	}
 
-	return nil
-}
-
-func (p *QueueProcessor) checkRunInfo(ctx context.Context, task *config.Task) error {
-	currentLinks, err := p.runStateManager.GetCurrentLinks(ctx, task.Run.ID)
-	if err != nil {
-		p.logger.Warnw("Failed to get current links from Redis", "runID", task.Run.ID, "error", err)
-		return err
-	}
-
-	if currentLinks >= int64(task.Run.MaxLinks) || task.CurrentDepth >= task.Run.MaxDepth {
-		p.logger.Warnw("Task limit for links or depth is reached", "RunID", task.Run.ID, "currentLinks", currentLinks, "maxLinks", task.Run.MaxLinks)
-		return ErrRunLimitExceeded
-	}
+	p.logger.Debugw("Task queued", "url", task.URL, "runID", task.Run.ID, "depth", task.CurrentDepth)
 
 	return nil
-}
-
-func (p *QueueProcessor) GetRun() (*config.Run, error) {
-	select {
-	case runBytes, ok := <-p.runQueue.GetConsumerChan():
-		if !ok {
-			return nil, ErrNoRuns
-		}
-
-		run := new(config.Run)
-
-		if err := json.Unmarshal(runBytes, run); err != nil {
-			p.logger.Warnw("Failed to unmarshal run from kafka", "record", runBytes, "err", err)
-			return nil, err
-		}
-
-		return run, nil
-	case <-time.After(queue.SingleRequestTimeout):
-		return nil, ErrNoRuns
-	}
 }
 
 func (p *QueueProcessor) QueueRun(run *config.Run) {
-	bytes, err := json.Marshal(run)
+	payload, err := json.Marshal(run)
 	if err != nil {
-		p.logger.Warnw("Failed to marshal task to json", "run", run)
+		p.logger.Warnw("Failed to marshal run to json", "runID", run.ID, "error", err)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), queue.SingleRequestTimeout)
 	defer cancel()
 
-	if err := p.runQueue.Produce(ctx, bytes); err != nil {
+	if err := p.runQueue.Produce(ctx, payload); err != nil {
 		p.logger.Errorw("Failed to re-queue run", "runID", run.ID, "error", err)
 	}
 }
 
+// StartTaskConsumer hands tasks to the crawl workers with the message's ack
+// attached. A message that is not a valid task is acked at once: left unacked it
+// would hold back the commit point of its partition forever.
 func (p *QueueProcessor) StartTaskConsumer() {
 	go p.tasksQueue.StartQueueConsumer()
 	go p.tasksQueue.StartQueueProducer()
@@ -130,15 +107,17 @@ func (p *QueueProcessor) StartTaskConsumer() {
 	defer close(p.tasksConsumer)
 
 	p.logger.Info("StartTaskConsumer started, waiting for tasks from Kafka...")
-	for taskBytes := range p.tasksQueue.GetConsumerChan() {
-		task := new(config.Task)
 
-		if err := json.Unmarshal(taskBytes, task); err != nil {
-			p.logger.Warnw("Failed to unmarshal task to json", "taskBytes", string(taskBytes), "error", err)
+	for msg := range p.tasksQueue.GetConsumerChan() {
+		task := new(config.Task)
+		if err := json.Unmarshal(msg.Value, task); err != nil || task.Run == nil || task.Run.ID == "" || task.URL == "" {
+			p.logger.Warnw("Skipping malformed task", "payload", string(msg.Value), "error", err)
+			msg.Ack()
+
 			continue
 		}
 
-		p.logger.Infow("Received task from Kafka", "url", task.URL, "runID", task.Run.ID, "depth", task.CurrentDepth)
+		task.SetAck(msg.Ack)
 		p.tasksConsumer <- task
 	}
 }
@@ -153,14 +132,16 @@ func (p *QueueProcessor) StartRunConsumer() {
 
 	defer close(p.runsConsumer)
 
-	for runBytes := range p.runQueue.GetConsumerChan() {
+	for msg := range p.runQueue.GetConsumerChan() {
 		run := new(config.Run)
+		if err := json.Unmarshal(msg.Value, run); err != nil || run.ID == "" || run.StartURL == "" {
+			p.logger.Warnw("Skipping malformed run", "payload", string(msg.Value), "error", err)
+			msg.Ack()
 
-		if err := json.Unmarshal(runBytes, run); err != nil {
-			p.logger.Warnw("Failed to unmarshal run from kafka", "run", run)
 			continue
 		}
 
+		run.SetAck(msg.Ack)
 		p.runsConsumer <- run
 	}
 }

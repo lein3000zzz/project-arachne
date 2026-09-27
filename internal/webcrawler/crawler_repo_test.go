@@ -3,6 +3,7 @@ package webcrawler
 import (
 	"context"
 	"net/http"
+	"sync"
 	"testing"
 	"web-crawler/internal/documents"
 	"web-crawler/internal/domain/config"
@@ -13,15 +14,35 @@ import (
 )
 
 type recordingSink struct {
-	docs []*documents.Document
+	mu        sync.Mutex
+	docs      []*documents.Document
+	shutdowns int
 }
 
 func (r *recordingSink) Submit(_ context.Context, doc *documents.Document) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.docs = append(r.docs, doc)
+
 	return nil
 }
 
-func (r *recordingSink) Shutdown(context.Context) error { return nil }
+func (r *recordingSink) Shutdown(context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.shutdowns++
+
+	return nil
+}
+
+func (r *recordingSink) shutdownCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.shutdowns
+}
 
 func TestSubmitDocumentByStatus(t *testing.T) {
 	cases := []struct {

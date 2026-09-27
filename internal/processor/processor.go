@@ -6,7 +6,6 @@ import (
 )
 
 type Processor interface {
-	GetRun() (*config.Run, error)
 	QueueRun(run *config.Run)
 	SendTask(task *config.Task) error
 	StartTaskConsumer()
