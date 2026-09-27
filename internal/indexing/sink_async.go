@@ -35,8 +35,9 @@ type AsyncSink struct {
 	cancelProcess context.CancelFunc
 	workers       sync.WaitGroup
 
-	dropped atomic.Int64
-	failed  atomic.Int64
+	dropped   atomic.Int64
+	failed    atomic.Int64
+	abandoned atomic.Int64
 }
 
 func NewAsyncSink(logger *zap.SugaredLogger, inner documents.Sink, workers, queueSize int, enqueueTimeout time.Duration) *AsyncSink {
@@ -113,7 +114,13 @@ func (s *AsyncSink) work(shard chan *documents.Document) {
 }
 
 func (s *AsyncSink) process(doc *documents.Document) {
-	if err := s.inner.Submit(s.processCtx, doc); err != nil {
+	err := s.inner.Submit(s.processCtx, doc)
+
+	switch {
+	case err == nil:
+	case s.processCtx.Err() != nil:
+		s.abandoned.Add(1)
+	default:
 		s.failed.Add(1)
 		s.logger.Warnw("Indexing failed, page will be retried on its next crawl", "url", doc.URL, "err", err)
 	}
@@ -130,9 +137,14 @@ func (s *AsyncSink) Shutdown(ctx context.Context) error {
 
 	var drainErr error
 
+	closeCtx := ctx
+
 	select {
 	case <-finished:
 	case <-ctx.Done():
+		// Running out of time is expected when the queue is long: whatever was not
+		// indexed was never hashed, so its next crawl indexes it. Only workers that
+		// ignore cancellation are an error.
 		s.cancelProcess()
 
 		select {
@@ -141,14 +153,22 @@ func (s *AsyncSink) Shutdown(ctx context.Context) error {
 			drainErr = errors.New("indexing workers did not stop after cancellation")
 		}
 
-		drainErr = errors.Join(drainErr, ctx.Err())
+		// The deadline is spent, but closing the store and hash connections still
+		// has to happen and takes moments.
+		var cancel context.CancelFunc
+		closeCtx, cancel = context.WithTimeout(context.Background(), abortGrace)
+		defer cancel()
 	}
 
 	s.cancelProcess()
 
-	s.logger.Infow("Indexing queue stopped", "dropped", s.dropped.Load(), "failed", s.failed.Load())
+	s.logger.Infow("Indexing queue stopped",
+		"dropped", s.dropped.Load(),
+		"failed", s.failed.Load(),
+		"abandoned", s.abandoned.Load(),
+	)
 
-	return errors.Join(drainErr, s.inner.Shutdown(ctx))
+	return errors.Join(drainErr, s.inner.Shutdown(closeCtx))
 }
 
 func shardOf(url string, n int) int {

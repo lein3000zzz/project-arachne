@@ -83,7 +83,7 @@ func InitApp() *CrawlerApp {
 
 	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue, runStateManager)
 
-	fetcher := networker.NewNetworker(logger)
+	fetcher := networker.NewNetworker(logger, cfg.Crawler.UserAgent)
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
@@ -95,7 +95,7 @@ func InitApp() *CrawlerApp {
 	redisPagesCache := cache.NewRedisCache(redisPagesCacheClient, logger)
 	redisRobotsCache := cache.NewRedisCache(redisRobotsCacheClient, logger)
 
-	extraWorker, errRod := sugaredworker.NewExtraRodParser(logger)
+	extraWorker, errRod := sugaredworker.NewExtraRodParser(logger, cfg.Crawler.UserAgent)
 	if errRod != nil {
 		logger.Fatal("Error initializing extra worker parser:", errRod)
 	}

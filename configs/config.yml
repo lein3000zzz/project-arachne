@@ -1,4 +1,7 @@
 crawler:
+  # sent on every request, robots.txt included; robots.txt rules are matched
+  # against the product name before the first "/"
+  user_agent: "project-arachne/0.1 (+https://github.com/lein3000zzz/project-arachne)"
   task_workers: 20
   run_workers: 1
   saver_workers: 10

@@ -8,7 +8,8 @@ import (
 const SingleRequestTimeout = 30 * time.Second
 
 type Queue interface {
-	GetProducerChan() chan<- []byte
+	Produce(ctx context.Context, payload []byte) error
+	// GetConsumerChan is closed by the consumer loop when it stops.
 	GetConsumerChan() <-chan []byte
 	StartQueueConsumer()
 	StartQueueProducer()

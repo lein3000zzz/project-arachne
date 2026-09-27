@@ -152,8 +152,16 @@ func TestAsyncSinkShutdownDeadlineCancelsInFlightWork(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	if err := sink.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("err = %v, want the deadline reported", err)
+	if err := sink.Shutdown(ctx); err != nil {
+		t.Errorf("abandoning queued work at the deadline is expected, not an error: %v", err)
+	}
+
+	if sink.abandoned.Load() != 1 || sink.failed.Load() != 0 {
+		t.Errorf("abandoned=%d failed=%d: cancelled work must not count as failed", sink.abandoned.Load(), sink.failed.Load())
+	}
+
+	if inner.shutdowns != 1 {
+		t.Error("the inner sink must still be shut down after the deadline")
 	}
 
 	if elapsed := time.Since(start); elapsed > abortGrace {

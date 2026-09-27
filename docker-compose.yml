@@ -13,6 +13,9 @@ services:
       # mounted so config edits need a restart, not a rebuild
       - ./configs:/root/configs:ro
     restart: always
+    # Above shutdown.timeout in configs/config.yml. Docker's default of 10s would
+    # kill the crawler while it is still flushing queued tasks and indexing.
+    stop_grace_period: 40s
     depends_on:
       neo4j:
         condition: service_healthy

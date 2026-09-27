@@ -16,11 +16,13 @@ import (
 type NetworkWorker struct {
 	Logger     *zap.SugaredLogger
 	httpClient *http.Client
+	userAgent  string
 }
 
-func NewNetworker(logger *zap.SugaredLogger) *NetworkWorker {
+func NewNetworker(logger *zap.SugaredLogger, userAgent string) *NetworkWorker {
 	return &NetworkWorker{
-		Logger: logger,
+		Logger:    logger,
+		userAgent: userAgent,
 		httpClient: &http.Client{
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
@@ -39,6 +41,8 @@ func (nw *NetworkWorker) Fetch(url string) (*FetchResult, error) {
 			nw.Logger.Errorf("fetch url %s error: %v", url, err)
 			return nil, err
 		}
+
+		req.Header.Set("User-Agent", nw.userAgent)
 
 		resp, err := nw.httpClient.Do(req)
 		nw.Logger.Infof("fetch url %s", url)

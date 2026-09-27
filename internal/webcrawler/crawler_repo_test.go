@@ -23,18 +23,20 @@ func (r *recordingSink) Submit(_ context.Context, doc *documents.Document) error
 
 func (r *recordingSink) Shutdown(context.Context) error { return nil }
 
-func TestSubmitDocumentOnlyIndexesSuccessfulResponses(t *testing.T) {
+func TestSubmitDocumentByStatus(t *testing.T) {
 	cases := []struct {
-		status int
-		want   bool
+		status    int
+		submitted bool
+		removal   bool
 	}{
-		{http.StatusOK, true},
-		{http.StatusNoContent, true},
-		{http.StatusMovedPermanently, false},
-		{http.StatusForbidden, false},
-		{http.StatusNotFound, false},
-		{http.StatusTooManyRequests, false},
-		{http.StatusServiceUnavailable, false},
+		{http.StatusOK, true, false},
+		{http.StatusNoContent, true, false},
+		{http.StatusNotFound, true, true},
+		{http.StatusGone, true, true},
+		{http.StatusMovedPermanently, false, false},
+		{http.StatusForbidden, false, false},
+		{http.StatusTooManyRequests, false, false},
+		{http.StatusServiceUnavailable, false, false},
 	}
 
 	for _, tc := range cases {
@@ -46,11 +48,21 @@ func TestSubmitDocumentOnlyIndexesSuccessfulResponses(t *testing.T) {
 				context.Background(),
 				&config.Task{URL: "https://example.com/", Run: &config.Run{ID: "run"}},
 				&networker.FetchResult{Status: tc.status, ContentType: "text/html"},
-				&parser.ParseResult{Title: "T", Content: "Please set a user-agent and respect our robot policy."},
+				&parser.ParseResult{Title: "Not Found", Content: "The page you requested does not exist."},
 			)
 
-			if got := len(sink.docs) == 1; got != tc.want {
-				t.Errorf("status %d: submitted=%v, want %v", tc.status, got, tc.want)
+			if got := len(sink.docs) == 1; got != tc.submitted {
+				t.Fatalf("status %d: submitted=%v, want %v", tc.status, got, tc.submitted)
+			}
+
+			if !tc.submitted {
+				return
+			}
+
+			doc := sink.docs[0]
+			if isRemoval := doc.Content == "" && doc.Title == ""; isRemoval != tc.removal {
+				t.Errorf("status %d: sent as removal=%v, want %v (error page text must never be indexed)",
+					tc.status, isRemoval, tc.removal)
 			}
 		})
 	}

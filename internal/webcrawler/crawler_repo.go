@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"web-crawler/internal/appconfig"
 	"web-crawler/internal/documents"
@@ -34,7 +36,8 @@ type CrawlerRepo struct {
 	documents       documents.Sink
 	settings        appconfig.Config
 
-	cfg *CrawlerConfig
+	cfg     *CrawlerConfig
+	workers sync.WaitGroup
 }
 
 func NewCrawlerRepo(
@@ -65,11 +68,14 @@ func (repo *CrawlerRepo) StartCrawler(cfg *CrawlerConfig) {
 	repo.cfg = cfg
 
 	for range repo.cfg.WorkersNumber {
+		repo.workers.Add(1)
 		go repo.crawlWorker(repo.cfg.TaskConsumerChan, repo.cfg.TaskProducerChan, repo.cfg.SaverChan)
 	}
 }
 
 func (repo *CrawlerRepo) crawlWorker(tcChan <-chan *config.Task, tpChan chan<- []*config.Task, saverChan chan<- *data.PageData) {
+	defer repo.workers.Done()
+
 	repo.logger.Infof("Started crawlWorker")
 
 	for task := range tcChan {
@@ -182,19 +188,31 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 }
 
 func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, fetchRes *networker.FetchResult, parsed *parser.ParseResult) {
-	if fetchRes.Status < 200 || fetchRes.Status >= 300 || strings.TrimSpace(parsed.Content) == "" {
-		return
-	}
-
-	err := repo.documents.Submit(ctx, &documents.Document{
+	doc := &documents.Document{
 		URL:         task.URL,
 		Title:       parsed.Title,
 		Content:     parsed.Content,
 		ContentType: fetchRes.ContentType,
 		RunID:       task.Run.ID,
 		FetchedAt:   time.Now(),
-	})
-	if err != nil {
+	}
+
+	switch {
+	case fetchRes.Status == http.StatusNotFound || fetchRes.Status == http.StatusGone:
+		// The page is gone: an empty document removes whatever was indexed for it.
+		doc.Title, doc.Content = "", ""
+	case fetchRes.Status < 200 || fetchRes.Status >= 300:
+		// Other errors are usually transient (5xx, 429, 403 from a rate limiter), and
+		// an error body is not page content. Leave the indexed version alone.
+		return
+	case strings.TrimSpace(parsed.Content) == "":
+		// Empty text on a live page more likely means extraction failed than that the
+		// page is empty - and the legacy parser extracts no text at all. Treating it
+		// as a removal would wipe the index.
+		return
+	}
+
+	if err := repo.documents.Submit(ctx, doc); err != nil {
 		repo.logger.Warnw("Failed to submit document", "url", task.URL, "err", err)
 	}
 }
@@ -279,7 +297,7 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 	robots, errRobotsCache := repo.cacheRobots.Get(baseURL)
 	if errRobotsCache == nil {
 		repo.logger.Infow("Robots cache hit", "url", urlToCheck)
-		return grobotstxt.AgentAllowed(robots, "project-arachne", urlToCheck)
+		return grobotstxt.AgentAllowed(robots, repo.settings.Crawler.RobotsAgent(), urlToCheck)
 	}
 
 	repo.logger.Warnw("cache miss or some other redis error", "errCache", errRobotsCache)
@@ -303,10 +321,29 @@ func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
 		repo.logger.Warnw("failed to save cache", "url", baseURL, "err", errSaveCache)
 	}
 
-	return grobotstxt.AgentAllowed(robots, "project-arachne", urlToCheck)
+	return grobotstxt.AgentAllowed(robots, repo.settings.Crawler.RobotsAgent(), urlToCheck)
 }
 
+// Shutdown expects the task input to be closed already: workers only exit when it
+// is. Their output channels are closed only once every worker has exited, since a
+// send on a closed channel panics.
 func (repo *CrawlerRepo) Shutdown(ctx context.Context) error {
+	workersDone := make(chan struct{})
+	go func() {
+		repo.workers.Wait()
+		close(workersDone)
+	}()
+
+	var errWait error
+
+	select {
+	case <-workersDone:
+		close(repo.cfg.CrawlCallbackChan)
+		close(repo.cfg.TaskProducerChan)
+	case <-ctx.Done():
+		errWait = fmt.Errorf("crawl workers still running at shutdown deadline, output channels left open: %w", ctx.Err())
+	}
+
 	go repo.networker.Stop()
 
 	shutdowns := []func(context.Context) error{
@@ -318,17 +355,10 @@ func (repo *CrawlerRepo) Shutdown(ctx context.Context) error {
 
 	eg := &errgroup.Group{}
 	for _, shutdown := range shutdowns {
-		// shutdown := shutdown // птср после старых версий гошки
 		eg.Go(func() error {
-			subCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-
-			return shutdown(subCtx)
+			return shutdown(ctx)
 		})
 	}
 
-	close(repo.cfg.CrawlCallbackChan)
-	close(repo.cfg.TaskProducerChan)
-
-	return eg.Wait()
+	return errors.Join(errWait, eg.Wait())
 }

@@ -215,12 +215,13 @@ func (app *CrawlerApp) buildCrawlerConfig(crawlerCBChan chan<- struct{}) *webcra
 	return crawlerCfg
 }
 
+// Keeps draining after a failed send: crawl workers block on taskProducerChan when
+// it is full, and the crawler's shutdown waits for them.
 func (app *CrawlerApp) startTaskProducer() {
 	for tasks := range app.taskProducerChan {
 		for _, task := range tasks {
-			err := app.processorQueue.SendTask(task)
-			if err != nil {
-				return
+			if err := app.processorQueue.SendTask(task); err != nil {
+				app.logger.Debugw("Task not queued", "url", task.URL, "error", err)
 			}
 		}
 	}
@@ -230,27 +231,38 @@ func (app *CrawlerApp) ShutdownTimeout() time.Duration {
 	return app.cfg.Shutdown.Timeout.Std()
 }
 
+// StopApp shuts down in stages because each stage closes channels the next one's
+// goroutines write to. Stopping the queues closes the crawl workers' input; the
+// crawler waits for them before closing its own outputs; the page savers' input is
+// closed only after that.
 func (app *CrawlerApp) StopApp(ctx context.Context) error {
-	shutdowns := []func(context.Context) error{
-		app.crawler.Shutdown,
-		app.processorQueue.StopProcessor,
-		app.pageRepo.Shutdown,
-		app.tracerProvider.Shutdown,
-		//app.runStateManager.ReleaseRunSlot, // опционально. Если на других машинах все еще продолжается работа, то не надо.
-		// Но надо будет добавить дополнительный счетчик активных машин вообще
-		app.runStateManager.Stop,
+	stages := [][]func(context.Context) error{
+		{app.processorQueue.StopProcessor},
+		{app.crawler.Shutdown},
+		{
+			app.pageRepo.Shutdown,
+			app.tracerProvider.Shutdown,
+			// app.runStateManager.ReleaseRunSlot, // Optional for now. Vital for distributed setups, but more work will
+			// be needed here for sure
+			app.runStateManager.Stop,
+		},
 	}
 
-	eg := &errgroup.Group{}
-	for _, shutdown := range shutdowns {
-		// shutdown := shutdown // если я когда-то зачем-то решу пойти на более старую версию гошки
-		eg.Go(func() error {
-			subCtx, cancel := context.WithTimeout(ctx, app.cfg.Shutdown.ComponentTimeout.Std())
-			defer cancel()
+	var errs []error
 
-			return shutdown(subCtx)
-		})
+	for _, stage := range stages {
+		eg := &errgroup.Group{}
+		for _, shutdown := range stage {
+			eg.Go(func() error {
+				subCtx, cancel := context.WithTimeout(ctx, app.cfg.Shutdown.ComponentTimeout.Std())
+				defer cancel()
+
+				return shutdown(subCtx)
+			})
+		}
+
+		errs = append(errs, eg.Wait())
 	}
 
-	return eg.Wait()
+	return errors.Join(errs...)
 }

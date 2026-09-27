@@ -3,7 +3,9 @@ package appconfig
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
+	"unicode"
 )
 
 type Config struct {
@@ -19,6 +21,7 @@ type Config struct {
 }
 
 type Crawler struct {
+	UserAgent        string   `yaml:"user_agent"`
 	TaskWorkers      int      `yaml:"task_workers"`
 	RunWorkers       int      `yaml:"run_workers"`
 	SaverWorkers     int      `yaml:"saver_workers"`
@@ -91,6 +94,7 @@ var collectionPrefixPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 func Default() Config {
 	return Config{
 		Crawler: Crawler{
+			UserAgent:        "project-arachne/0.1 (+https://github.com/lein3000zzz/project-arachne)",
 			TaskWorkers:      20,
 			RunWorkers:       1,
 			SaverWorkers:     10,
@@ -140,6 +144,20 @@ func Default() Config {
 	}
 }
 
+// RobotsAgent is the product name robots.txt rules are matched against: the
+// leading letters, '-' and '_' of the User-Agent, as Google's matcher extracts it.
+// The matcher ignores anything that is not such a bare token.
+func (c Crawler) RobotsAgent() string {
+	end := strings.IndexFunc(c.UserAgent, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '-' || r == '_')
+	})
+	if end < 0 {
+		return c.UserAgent
+	}
+
+	return c.UserAgent[:end]
+}
+
 func (c *Config) Validate() error {
 	positive := []struct {
 		name  string
@@ -185,6 +203,15 @@ func (c *Config) Validate() error {
 		if field.value <= 0 {
 			return fmt.Errorf("%w: %s must be > 0, got %s", ErrInvalidConfig, field.name, field.value.Std())
 		}
+	}
+
+	if c.Crawler.UserAgent == "" || strings.ContainsFunc(c.Crawler.UserAgent, unicode.IsControl) {
+		return fmt.Errorf("%w: crawler.user_agent must be a non-empty single line", ErrInvalidConfig)
+	}
+
+	if c.Crawler.RobotsAgent() == "" {
+		return fmt.Errorf("%w: crawler.user_agent %q must start with a product name (letters, '-' or '_')",
+			ErrInvalidConfig, c.Crawler.UserAgent)
 	}
 
 	switch c.Crawler.ParserEngine {

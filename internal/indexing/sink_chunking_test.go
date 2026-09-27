@@ -374,3 +374,29 @@ func TestConcurrentSubmits(t *testing.T) {
 		t.Errorf("every distinct URL must be chunked at least once, got %d batches", next.count())
 	}
 }
+
+func TestRemovedPageEmitsOneEmptyBatch(t *testing.T) {
+	sink, _, next := newSink(t)
+	ctx := context.Background()
+
+	if err := sink.Submit(ctx, page(body)); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	gone := page("")
+	gone.Title = ""
+
+	for range 3 {
+		if err := sink.Submit(ctx, gone); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+	}
+
+	if next.count() != 2 {
+		t.Fatalf("want the original batch plus one removal, got %d batches", next.count())
+	}
+
+	if removal := next.batches[1]; len(removal.Chunks) != 0 {
+		t.Errorf("a removed page must produce an empty batch, got %d chunks", len(removal.Chunks))
+	}
+}

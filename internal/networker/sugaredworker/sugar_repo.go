@@ -14,13 +14,14 @@ import (
 )
 
 type ExtraRodWorker struct {
+	userAgent        string
 	Logger           *zap.SugaredLogger
 	LauncherInstance *launcher.Launcher
 	Browser          *rod.Browser
 }
 
-func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
-	l := newLauncher()
+func NewExtraRodParser(logger *zap.SugaredLogger, userAgent string) (*ExtraRodWorker, error) {
+	l := newLauncher(userAgent)
 
 	browserURL, err := l.Launch()
 	if err != nil {
@@ -42,6 +43,7 @@ func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
 	}
 
 	return &ExtraRodWorker{
+		userAgent:        userAgent,
 		Logger:           logger,
 		LauncherInstance: l,
 		Browser:          browser,
@@ -50,8 +52,9 @@ func NewExtraRodParser(logger *zap.SugaredLogger) (*ExtraRodWorker, error) {
 
 // The container ships chromium at a fixed path; off it, leaving Bin unset lets
 // rod find or fetch a browser instead of failing on a path that cannot exist.
-func newLauncher() *launcher.Launcher {
+func newLauncher(userAgent string) *launcher.Launcher {
 	l := launcher.New().
+		Set("user-agent", userAgent).
 		Headless(true).
 		Set("no-sandbox").
 		Set("disable-gpu").
@@ -66,7 +69,7 @@ func newLauncher() *launcher.Launcher {
 
 func (p *ExtraRodWorker) RestartBrowserAndLauncher() error {
 	if p.LauncherInstance == nil {
-		p.LauncherInstance = newLauncher()
+		p.LauncherInstance = newLauncher(p.userAgent)
 	}
 
 	browserURL, err := p.LauncherInstance.Launch()

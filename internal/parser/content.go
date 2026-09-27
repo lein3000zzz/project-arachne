@@ -11,7 +11,7 @@ import (
 )
 
 func (p *KatanaParser) extractContent(body []byte, base *url.URL, doc *goquery.Document, acc *accumulator) (string, string) {
-	article, err := readability.FromReader(bytes.NewReader(body), base)
+	article, err := p.readable(body, base, doc)
 	if err != nil {
 		acc.warn(stageContent, err.Error())
 		p.logger.Debugw("readability failed, falling back", "err", err)
@@ -44,6 +44,19 @@ func (p *KatanaParser) extractContent(body []byte, base *url.URL, doc *goquery.D
 	return capTitle(title), text
 }
 
+func (p *KatanaParser) readable(body []byte, base *url.URL, doc *goquery.Document) (readability.Article, error) {
+	if doc == nil {
+		return readability.FromReader(bytes.NewReader(body), base)
+	}
+
+	// Clone: the same doc goes to katana afterwards and must not be mutated.
+	cleaned := doc.Clone()
+	removeBoilerplate(cleaned)
+	removeLinkLists(cleaned)
+
+	return readability.FromDocument(cleaned.Nodes[0], base)
+}
+
 func fallbackText(doc *goquery.Document) string {
 	if doc == nil {
 		return ""
@@ -52,6 +65,8 @@ func fallbackText(doc *goquery.Document) string {
 	// Clone: the same doc goes to katana afterwards and must not be mutated.
 	stripped := doc.Clone()
 	stripped.Find(selectorNonIndexable + ", head").Remove()
+	removeBoilerplate(stripped)
+	removeLinkLists(stripped)
 
 	var b strings.Builder
 	for _, node := range stripped.Nodes {

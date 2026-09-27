@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/processor/queue"
@@ -58,7 +59,17 @@ func (p *QueueProcessor) SendTask(task *config.Task) error {
 	}
 
 	p.logger.Infow("Sending task to Kafka", "url", task.URL, "runID", task.Run.ID)
-	p.tasksQueue.GetProducerChan() <- bytes
+
+	if err := p.tasksQueue.Produce(ctx, bytes); err != nil {
+		// The task was counted above but will never run: give the count back, or
+		// the run's active-task counter never reaches zero and the run never ends.
+		if _, errDecr := p.runStateManager.DecrementActiveTasks(context.Background(), task.Run.ID); errDecr != nil {
+			p.logger.Errorw("Failed to release the count of an unsent task", "runID", task.Run.ID, "error", errDecr)
+		}
+
+		return fmt.Errorf("queueing task %s: %w", task.URL, err)
+	}
+
 	return nil
 }
 
@@ -79,7 +90,11 @@ func (p *QueueProcessor) checkRunInfo(ctx context.Context, task *config.Task) er
 
 func (p *QueueProcessor) GetRun() (*config.Run, error) {
 	select {
-	case runBytes := <-p.runQueue.GetConsumerChan():
+	case runBytes, ok := <-p.runQueue.GetConsumerChan():
+		if !ok {
+			return nil, ErrNoRuns
+		}
+
 		run := new(config.Run)
 
 		if err := json.Unmarshal(runBytes, run); err != nil {
@@ -100,12 +115,19 @@ func (p *QueueProcessor) QueueRun(run *config.Run) {
 		return
 	}
 
-	p.runQueue.GetProducerChan() <- bytes
+	ctx, cancel := context.WithTimeout(context.Background(), queue.SingleRequestTimeout)
+	defer cancel()
+
+	if err := p.runQueue.Produce(ctx, bytes); err != nil {
+		p.logger.Errorw("Failed to re-queue run", "runID", run.ID, "error", err)
+	}
 }
 
 func (p *QueueProcessor) StartTaskConsumer() {
 	go p.tasksQueue.StartQueueConsumer()
 	go p.tasksQueue.StartQueueProducer()
+
+	defer close(p.tasksConsumer)
 
 	p.logger.Info("StartTaskConsumer started, waiting for tasks from Kafka...")
 	for taskBytes := range p.tasksQueue.GetConsumerChan() {
@@ -129,6 +151,8 @@ func (p *QueueProcessor) StartRunConsumer() {
 	go p.runQueue.StartQueueConsumer()
 	go p.runQueue.StartQueueProducer()
 
+	defer close(p.runsConsumer)
+
 	for runBytes := range p.runQueue.GetConsumerChan() {
 		run := new(config.Run)
 
@@ -151,12 +175,9 @@ func (p *QueueProcessor) StopProcessor(ctx context.Context) error {
 		return p.tasksQueue.CloseQueue(ctx)
 	})
 
-	err := eg.Wait()
-
-	close(p.runsConsumer)
-	close(p.tasksConsumer)
-
-	return err
+	// runsConsumer and tasksConsumer are closed by the loops that send on them,
+	// once the queues above stop feeding them.
+	return eg.Wait()
 }
 
 func (p *QueueProcessor) GetRunsChan() <-chan *config.Run {

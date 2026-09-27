@@ -73,6 +73,9 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		body string
 	}{
 		{"zero workers", "crawler:\n  task_workers: 0\n"},
+		{"empty user agent", "crawler:\n  user_agent: \"\"\n"},
+		{"header injection in user agent", "crawler:\n  user_agent: \"bot/1\\r\\nX-Evil: 1\"\n"},
+		{"user agent without a product name", "crawler:\n  user_agent: \"/1.0 (+https://x)\"\n"},
 		{"negative workers", "crawler:\n  run_workers: -1\n"},
 		{"unknown parser engine", "crawler:\n  parser_engine: goja\n"},
 		{"unparseable duration", "cache:\n  page_ttl: half an hour\n"},
@@ -142,5 +145,21 @@ func TestShippedConfigFileIsValid(t *testing.T) {
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("the committed configs/config.yml must validate: %v", err)
+	}
+}
+
+func TestRobotsAgentIsTheProductName(t *testing.T) {
+	cases := map[string]string{
+		"project-arachne/0.1 (+https://github.com/x)": "project-arachne",
+		"MyBot":        "MyBot",
+		"my_bot/2.0":   "my_bot",
+		"arachne2/1.0": "arachne",
+		"/1.0":         "",
+	}
+
+	for ua, want := range cases {
+		if got := (Crawler{UserAgent: ua}).RobotsAgent(); got != want {
+			t.Errorf("RobotsAgent(%q) = %q, want %q", ua, got, want)
+		}
 	}
 }
