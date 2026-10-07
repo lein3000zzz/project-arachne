@@ -8,7 +8,7 @@ COMPOSE      ?= docker compose
 COMPOSE_HOST := $(COMPOSE) -f docker-compose.yml -f deployments/compose.host.yml
 GO           ?= go
 ENV_FILE     ?= main.env
-INFRA        := vault neo4j redis broker jaeger milvus ollama
+EMBEDDERS    := ollama vllm
 # Not waited on: nothing depends on the UI, and it fails its first start whenever
 # it beats the broker up.
 UI           := kafka-ui
@@ -23,15 +23,29 @@ KAFKA_TOPIC_TASKS          ?= arachne.tasks
 KAFKA_TOPIC_RUNS           ?= arachne.runs
 KAFKA_TASKS_CONSUMER_GROUP ?= arachne-tasks
 KAFKA_RUNS_CONSUMER_GROUP  ?= arachne-runs
-CONFIG_PATH                ?= configs/config.yml
 
-# The config file is the single source of truth for the model name.
-EMBEDDING_MODEL ?= $(shell sed -n 's/^[[:space:]]*model:[[:space:]]*//p' $(CONFIG_PATH) | head -1)
-# Empty means the bundled Ollama. Set these to use an external OpenAI-compatible
-# endpoint or an authenticated Milvus; credentials are only written when given.
+# Embedding backend: ollama (fastest on Apple Silicon), vllm (x86 servers), or
+# external (EMBEDDING_BASE_URL). Giving EMBEDDING_BASE_URL alone means external.
+# The choice is remembered in $(ENV_FILE), so a plain `make up` keeps it: a silent
+# switch would move indexing to another model's collection.
 EMBEDDING_BASE_URL ?=
 EMBEDDING_API_KEY  ?=
 MILVUS_TOKEN       ?=
+EMBEDDER ?= $(if $(EMBEDDING_BASE_URL),external,$(or $(shell sed -n 's/^EMBEDDER=//p' $(ENV_FILE) 2>/dev/null),ollama))
+EMBEDDER_SERVICE := $(filter $(EMBEDDER),$(EMBEDDERS))
+export COMPOSE_PROFILES := $(EMBEDDER_SERVICE)
+
+INFRA := vault neo4j redis broker jaeger milvus $(EMBEDDER_SERVICE)
+
+comma := ,
+space := $(subst ,, )
+CONFIG_OVERLAY_vllm := ,configs/vllm.yml
+CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
+
+# The config files are the single source of truth for the model name; the last
+# file naming one wins, as in the crawler.
+EMBEDDING_MODEL ?= $(shell sed -n 's/^[[:space:]]*model:[[:space:]]*//p' $(subst $(comma), ,$(CONFIG_PATH)) | tail -1)
+export EMBEDDING_MODEL
 
 BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	REDIS_PASSWORD=$(REDIS_PASSWORD) \
@@ -40,12 +54,12 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	KAFKA_TOPIC_TASKS=$(KAFKA_TOPIC_TASKS) KAFKA_TOPIC_RUNS=$(KAFKA_TOPIC_RUNS) \
 	KAFKA_TASKS_CONSUMER_GROUP=$(KAFKA_TASKS_CONSUMER_GROUP) \
 	KAFKA_RUNS_CONSUMER_GROUP=$(KAFKA_RUNS_CONSUMER_GROUP) \
-	CONFIG_PATH=$(CONFIG_PATH) \
+	CONFIG_PATH=$(CONFIG_PATH) EMBEDDER=$(EMBEDDER) \
 	EMBEDDING_BASE_URL="$(EMBEDDING_BASE_URL)" EMBEDDING_API_KEY="$(EMBEDDING_API_KEY)" \
 	MILVUS_TOKEN="$(MILVUS_TOKEN)" \
 	scripts/vault-bootstrap.sh
 
-.PHONY: help up dev run crawl down reset restart logs ps env vault-bootstrap neo4j-init models build test test-integration vet tidy
+.PHONY: help up dev run crawl down reset restart logs ps env vault-bootstrap neo4j-init models stop-other-embedders build test test-integration vet tidy
 
 help:
 	@echo "make up        full stack in docker (crawler included)"
@@ -58,14 +72,19 @@ help:
 	@echo "make reset     stop, delete volumes, bind mounts and $(ENV_FILE)"
 	@echo ""
 	@echo "make build / test / vet / tidy"
-	@echo "make test-integration   tests against the running Milvus and Redis"
+	@echo "make test-integration   tests against the running Milvus, Redis and Neo4j"
 	@echo ""
 	@echo "tuning:  configs/config.yml  (workers, TTLs, parser engine, embedding model)"
 	@echo "         make up CONFIG_PATH=configs/other.yml to use another file"
 	@echo ""
+	@echo "embedder (remembered in $(ENV_FILE), now: $(EMBEDDER)):"
+	@echo "         make up EMBEDDER=ollama   bundled Ollama, fastest on Apple Silicon"
+	@echo "         make up EMBEDDER=vllm     bundled vLLM (CPU), for x86 servers"
+	@echo "         make up EMBEDDING_BASE_URL=https://... [EMBEDDING_API_KEY=...]   external"
+	@echo ""
 	@echo "UI: kafka-ui http://localhost:8080  jaeger http://localhost:16686"
 	@echo "    neo4j    http://localhost:7474  vault  http://localhost:8200"
-	@echo "    milvus   localhost:19530         ollama http://localhost:11434"
+	@echo "    milvus   localhost:19530         ollama http://localhost:11434  vllm http://localhost:8001"
 
 env: $(ENV_FILE)
 
@@ -80,6 +99,7 @@ $(ENV_FILE):
 	@echo "wrote $(ENV_FILE)"
 
 up: env
+	@$(MAKE) --no-print-directory stop-other-embedders
 	$(COMPOSE) up -d --wait $(INFRA)
 	$(COMPOSE) up -d $(UI)
 	$(BOOTSTRAP) docker
@@ -91,6 +111,7 @@ up: env
 
 dev: env
 	@$(COMPOSE) stop crawler 2>/dev/null || true
+	@$(MAKE) --no-print-directory stop-other-embedders
 	$(COMPOSE_HOST) up -d --wait $(INFRA)
 	$(COMPOSE_HOST) up -d $(UI)
 	$(BOOTSTRAP) host
@@ -110,10 +131,17 @@ crawl:
 vault-bootstrap: env
 	$(BOOTSTRAP) $(or $(PROFILE),docker)
 
-# A no-op when the model is present. Harmless when an external endpoint is used.
+# Ollama pulls on demand; a no-op when the model is present. vLLM downloads the
+# model itself on its first start, into deployments/opt/huggingface.
 models:
+ifeq ($(EMBEDDER),ollama)
 	@$(COMPOSE) exec -T ollama ollama pull $(EMBEDDING_MODEL) >/dev/null
-	@echo "embedding model '$(EMBEDDING_MODEL)' ready"
+endif
+	@echo "embedding model '$(EMBEDDING_MODEL)' ready ($(EMBEDDER))"
+
+stop-other-embedders:
+	@COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) \
+		$(COMPOSE) stop $(filter-out $(EMBEDDER_SERVICE),$(EMBEDDERS)) 2>/dev/null || true
 
 neo4j-init:
 	@$(COMPOSE) exec -T neo4j cypher-shell \
@@ -130,11 +158,12 @@ logs:
 ps:
 	$(COMPOSE) ps
 
+# Every profile, so an embedder left over from a switch is stopped too.
 down:
-	$(COMPOSE) down
+	COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) $(COMPOSE) down
 
 reset:
-	$(COMPOSE) down -v --remove-orphans
+	COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) $(COMPOSE) down -v --remove-orphans
 	rm -rf deployments/opt output
 	rm -f $(ENV_FILE)
 	@echo "reset done. next: make up"
@@ -148,6 +177,8 @@ test:
 test-integration:
 	MILVUS_ADDR=localhost:19530 REDIS_ADDR=localhost:6379 \
 		REDIS_PASSWORD="$$(sed -n 's/^REDIS_PASSWORD=//p' $(ENV_FILE))" \
+		NEO4J_URI=bolt://localhost:7687 \
+		NEO4J_PASSWORD="$$(sed -n 's/^NEO4J_AUTH="*[^/]*\/\([^"]*\)"*$$/\1/p' deployments/neo4j/neo4j.env)" \
 		$(GO) test -tags integration -count=1 ./...
 
 vet:

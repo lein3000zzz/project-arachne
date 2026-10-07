@@ -20,6 +20,7 @@ KAFKA_TOPIC_RUNS="${KAFKA_TOPIC_RUNS:-arachne.runs}"
 KAFKA_TASKS_CONSUMER_GROUP="${KAFKA_TASKS_CONSUMER_GROUP:-arachne-tasks}"
 KAFKA_RUNS_CONSUMER_GROUP="${KAFKA_RUNS_CONSUMER_GROUP:-arachne-runs}"
 CONFIG_PATH="${CONFIG_PATH:-configs/config.yml}"
+EMBEDDER="${EMBEDDER:-ollama}"
 EMBEDDING_BASE_URL_OVERRIDE="${EMBEDDING_BASE_URL:-}"
 EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
 MILVUS_TOKEN="${MILVUS_TOKEN:-}"
@@ -33,7 +34,8 @@ case "$PROFILE" in
     KAFKA_ADDR=broker:9092
     OTLP_ENDPOINT=jaeger:4318
     MILVUS_ADDR=milvus:19530
-    EMBEDDING_BASE_URL=http://ollama:11434/v1
+    OLLAMA_URL=http://ollama:11434/v1
+    VLLM_URL=http://vllm:8000/v1
     ;;
   host)
     APP_ENV=dev
@@ -43,13 +45,25 @@ case "$PROFILE" in
     KAFKA_ADDR=localhost:29092
     OTLP_ENDPOINT=localhost:4318
     MILVUS_ADDR=localhost:19530
-    EMBEDDING_BASE_URL=http://localhost:11434/v1
+    OLLAMA_URL=http://localhost:11434/v1
+    VLLM_URL=http://localhost:8001/v1
     ;;
   *)
     echo "unknown profile '$PROFILE' (want: docker | host)" >&2
     exit 1
     ;;
 esac
+
+case "$EMBEDDER" in
+  ollama)   EMBEDDING_BASE_URL="$OLLAMA_URL" ;;
+  vllm)     EMBEDDING_BASE_URL="$VLLM_URL" ;;
+  external) EMBEDDING_BASE_URL="" ;;
+  *)
+    echo "unknown embedder '$EMBEDDER' (want: ollama | vllm | external)" >&2
+    exit 1
+    ;;
+esac
+EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL_OVERRIDE:-$EMBEDDING_BASE_URL}"
 
 set_env() {
   python3 - "$ENV_FILE" "$1" "$2" <<'PY'
@@ -159,8 +173,13 @@ vault_auth kv put kv/main/otel \
   OTLP_ENDPOINT="$OTLP_ENDPOINT" >/dev/null
 vault_auth kv put kv/main/milvus \
   MILVUS_ADDR="$MILVUS_ADDR" >/dev/null
-vault_auth kv put kv/main/embedding \
-  EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL_OVERRIDE:-$EMBEDDING_BASE_URL}" >/dev/null
+# An external endpoint given once stays in Vault, so later runs need not repeat it.
+if [ -n "$EMBEDDING_BASE_URL" ]; then
+  vault_auth kv put kv/main/embedding EMBEDDING_BASE_URL="$EMBEDDING_BASE_URL" >/dev/null
+elif ! vault_auth kv get kv/main/embedding >/dev/null 2>&1; then
+  echo "EMBEDDER=external needs EMBEDDING_BASE_URL on the first run" >&2
+  exit 1
+fi
 
 # Credentials live at their own paths and are written only when passed in, so
 # re-running the bootstrap never erases a key someone set by hand.
@@ -175,5 +194,6 @@ set_env APP_ENV "$APP_ENV"
 set_env VAULT_ADDRESS "$VAULT_ADDRESS"
 set_env REDIS_PASSWORD "$REDIS_PASSWORD"
 set_env CONFIG_PATH "$CONFIG_PATH"
+set_env EMBEDDER "$EMBEDDER"
 
 echo "==> vault ready"

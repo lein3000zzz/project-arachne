@@ -25,8 +25,14 @@ services:
         condition: service_started
       milvus:
         condition: service_healthy
+      # Only the embedder picked by EMBEDDER (the compose profile) runs, and neither
+      # does when the endpoint is external.
       ollama:
         condition: service_healthy
+        required: false
+      vllm:
+        condition: service_healthy
+        required: false
 
   vault:
     image: hashicorp/vault
@@ -108,6 +114,7 @@ services:
   # standalone_embed.sh. MinIO community images are no longer publicly pullable.
   milvus:
     image: milvusdb/milvus:v2.6.24
+    restart: unless-stopped
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
@@ -133,6 +140,7 @@ services:
 
   ollama:
     image: ollama/ollama:0.34.4
+    profiles: [ollama]
     environment:
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_NUM_PARALLEL: 4
@@ -145,3 +153,32 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
+
+  vllm:
+    # vllm-openai-cpu v0.30.0, amd64 and arm64. Its CPU kernels are tuned for x86
+    # with AVX-512; on Apple Silicon it runs at about a third of Ollama's speed.
+    image: vllm/vllm-openai-cpu@sha256:85d126740e78e9b7270b6cfc01159776d066c445609b7167faf32efc4a86f19d
+    profiles: [vllm]
+    # The model is fixed at start, unlike Ollama's pull-on-demand; the Makefile
+    # passes the one named in the config. Weights download on the first start.
+    command: ["${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}", "--runner", "pooling", "--max-model-len", "8192"]
+    environment:
+      # GiB for the KV cache. vLLM's default of 4 does not fit next to the rest of
+      # the stack in Docker Desktop's default VM.
+      VLLM_CPU_KVCACHE_SPACE: ${VLLM_CPU_KVCACHE_SPACE:-1}
+      # Cores kept free of vLLM's OpenMP threads. By default it pins all but one, and
+      # under embedding load Milvus's embedded etcd then misses its session lease
+      # and Milvus exits.
+      VLLM_CPU_NUM_OF_RESERVED_CPU: ${VLLM_CPU_NUM_OF_RESERVED_CPU:-4}
+    shm_size: 1g
+    volumes:
+      - ./deployments/opt/huggingface:/root/.cache/huggingface
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Warm-up compiles the model: minutes on first start.
+      start_period: 15m

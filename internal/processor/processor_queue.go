@@ -7,6 +7,7 @@ import (
 	"time"
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/processor/queue"
+	"web-crawler/internal/urlnorm"
 	"web-crawler/internal/webcrawler/runstates"
 
 	"go.uber.org/zap"
@@ -43,6 +44,12 @@ func (p *QueueProcessor) SendTask(task *config.Task) error {
 		return ErrRunLimitExceeded
 	}
 
+	canonical, ok := urlnorm.Canonical(task.URL, nil)
+	if !ok {
+		return ErrInvalidURL
+	}
+
+	task.URL = canonical
 	task.EnsureID()
 
 	payload, err := json.Marshal(task)

@@ -83,7 +83,7 @@ func InitApp() *CrawlerApp {
 
 	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue, runStateManager)
 
-	fetcher := networker.NewNetworker(logger, cfg.Crawler.UserAgent)
+	fetcher := networker.NewNetworker(logger, cfg.Crawler.UserAgent, cfg.Crawler.FetchTimeout.Std())
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
@@ -101,6 +101,8 @@ func InitApp() *CrawlerApp {
 	}
 
 	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, cfg)
+
+	initGraphSchema(logger, pageRepo, crawler, documentSink)
 
 	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp, cfg)
 }
@@ -313,6 +315,26 @@ func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appc
 	}
 
 	return runsQueue
+}
+
+// The first start against a graph without constraints fetches every page that has
+// a scheme or trailing-slash twin, one at a time.
+const graphSchemaTimeout = 15 * time.Minute
+
+func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, crawler *webcrawler.CrawlerRepo, sink documents.Sink) {
+	ctx, cancel := context.WithTimeout(context.Background(), graphSchemaTimeout)
+	defer cancel()
+
+	removed, err := pageRepo.EnsureSchema(ctx, crawler.ResolveIdentity)
+	if err != nil {
+		logger.Fatal("Error preparing the page graph:", err)
+	}
+
+	for _, pageURL := range removed {
+		if err := sink.Submit(ctx, &documents.Document{URL: pageURL, FetchedAt: time.Now()}); err != nil {
+			logger.Warnw("Failed to drop a merged page from the index", "url", pageURL, "err", err)
+		}
+	}
 }
 
 func initPageRepo(logger *zap.SugaredLogger, neo4jDriver neo4j.DriverWithContext) pages.PageRepo {

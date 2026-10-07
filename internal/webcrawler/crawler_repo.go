@@ -17,6 +17,7 @@ import (
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/parser"
 	"web-crawler/internal/processor"
+	"web-crawler/internal/urlnorm"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
@@ -173,7 +174,7 @@ func (repo *CrawlerRepo) sendChildren(parent *config.Task, links []string) error
 		err := repo.cfg.TaskSender.SendTask(child)
 
 		switch {
-		case err == nil, errors.Is(err, processor.ErrRunLimitExceeded):
+		case err == nil, errors.Is(err, processor.ErrRunLimitExceeded), errors.Is(err, processor.ErrInvalidURL):
 		case errors.Is(err, processor.ErrRunNotActive):
 			return nil
 		default:
@@ -244,6 +245,12 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		return nil, ErrFetching
 	}
 
+	pageURL, alias := pageIdentity(task.URL, fetchRes)
+	if alias != "" && !repo.isAllowedByRobots(pageURL) {
+		repo.logger.Warnw("Redirected to a page robots.txt disallows", "url", task.URL, "final", pageURL)
+		return nil, ErrNotAllowedByRobots
+	}
+
 	if task.Run.ExtraFlags != nil {
 		extra := repo.extraWorker.PerformExtraTask(task.URL, task.Run.ExtraFlags)
 
@@ -256,7 +263,7 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 
 	parsed, errParse := repo.parser.Parse(ctx, &parser.ParseParams{
 		Body:        fetchRes.Body,
-		BaseURL:     task.URL,
+		BaseURL:     linkBase(task.URL, fetchRes),
 		ContentType: fetchRes.ContentType,
 	})
 	if errParse != nil {
@@ -265,10 +272,10 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		parsed = &parser.ParseResult{}
 	}
 
-	repo.submitDocument(ctx, task, fetchRes, parsed)
+	repo.submitDocument(ctx, pageURL, task.Run.ID, fetchRes, parsed)
 
 	pageData := &data.PageData{
-		URL:           task.URL,
+		URL:           pageURL,
 		Status:        fetchRes.Status,
 		Title:         parsed.Title,
 		Links:         parsed.AllURLs(),
@@ -279,16 +286,67 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		ContentType:   fetchRes.ContentType,
 	}
 
+	if alias != "" {
+		pageData.Aliases = []string{alias}
+		repo.removeDocument(ctx, alias, task.Run.ID)
+	}
+
 	return pageData, nil
 }
 
-func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, fetchRes *networker.FetchResult, parsed *parser.ParseResult) {
+// pageIdentity names the page a fetch returned. When the requested URL turned out
+// to be another name for a different one, the page is stored under that one and
+// the requested URL comes back as its alias.
+func pageIdentity(requested string, fetchRes *networker.FetchResult) (pageURL, alias string) {
+	if canonical, ok := urlnorm.Canonical(requested, nil); ok {
+		requested = canonical
+	}
+
+	identity, ok := urlnorm.Canonical(fetchRes.IdentityURL, nil)
+	if !ok || identity == requested {
+		return requested, ""
+	}
+
+	return identity, requested
+}
+
+// ResolveIdentity fetches rawURL and reports the canonical URL it is an alias of,
+// if the server says it is one.
+func (repo *CrawlerRepo) ResolveIdentity(rawURL string) (string, bool) {
+	if !repo.isAllowedByRobots(rawURL) {
+		return "", false
+	}
+
+	fetchRes, err := repo.networker.Fetch(rawURL)
+	if err != nil {
+		return "", false
+	}
+
+	pageURL, alias := pageIdentity(rawURL, fetchRes)
+	if alias == "" {
+		return "", false
+	}
+
+	return pageURL, true
+}
+
+// linkBase is where the document really came from, whatever it is stored under:
+// relative links resolve against it.
+func linkBase(requested string, fetchRes *networker.FetchResult) string {
+	if fetchRes.FinalURL == "" {
+		return requested
+	}
+
+	return fetchRes.FinalURL
+}
+
+func (repo *CrawlerRepo) submitDocument(ctx context.Context, pageURL, runID string, fetchRes *networker.FetchResult, parsed *parser.ParseResult) {
 	doc := &documents.Document{
-		URL:         task.URL,
+		URL:         pageURL,
 		Title:       parsed.Title,
 		Content:     parsed.Content,
 		ContentType: fetchRes.ContentType,
-		RunID:       task.Run.ID,
+		RunID:       runID,
 		FetchedAt:   time.Now(),
 	}
 
@@ -308,7 +366,16 @@ func (repo *CrawlerRepo) submitDocument(ctx context.Context, task *config.Task, 
 	}
 
 	if err := repo.documents.Submit(ctx, doc); err != nil {
-		repo.logger.Warnw("Failed to submit document", "url", task.URL, "err", err)
+		repo.logger.Warnw("Failed to submit document", "url", pageURL, "err", err)
+	}
+}
+
+// removeDocument drops whatever was indexed under a URL that is now only an alias.
+func (repo *CrawlerRepo) removeDocument(ctx context.Context, pageURL, runID string) {
+	doc := &documents.Document{URL: pageURL, RunID: runID, FetchedAt: time.Now()}
+
+	if err := repo.documents.Submit(ctx, doc); err != nil {
+		repo.logger.Warnw("Failed to remove alias from the index", "url", pageURL, "err", err)
 	}
 }
 

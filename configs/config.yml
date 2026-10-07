@@ -8,6 +8,8 @@ crawler:
   # katana (readability text + jsluice links) or legacy (links only, no text)
   parser_engine: katana
   saver_send_timeout: 3s
+  # whole request, redirects and body included
+  fetch_timeout: 30s
 
 chunker:
   max_runes: 1200

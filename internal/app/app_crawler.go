@@ -9,7 +9,7 @@ import (
 	"web-crawler/internal/pages"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
-	"web-crawler/internal/utils"
+	"web-crawler/internal/urlnorm"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/runstates"
 
@@ -103,6 +103,12 @@ func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run 
 		return true
 	}
 
+	startURL, ok := urlnorm.FromUserInput(run.StartURL)
+	if !ok {
+		app.logger.Warnw("Dropping run with an unusable start URL", "runID", run.ID, "startURL", run.StartURL)
+		return true
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -118,7 +124,7 @@ func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run 
 	}
 
 	firstTask := &config.Task{
-		URL:          utils.CorrectURLScheme(run.StartURL),
+		URL:          startURL,
 		Run:          run,
 		CurrentDepth: 0,
 	}

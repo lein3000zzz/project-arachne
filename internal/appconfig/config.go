@@ -27,6 +27,7 @@ type Crawler struct {
 	SaverWorkers     int      `yaml:"saver_workers"`
 	ParserEngine     string   `yaml:"parser_engine"`
 	SaverSendTimeout Duration `yaml:"saver_send_timeout"`
+	FetchTimeout     Duration `yaml:"fetch_timeout"`
 }
 
 type Chunker struct {
@@ -100,6 +101,7 @@ func Default() Config {
 			SaverWorkers:     10,
 			ParserEngine:     ParserEngineKatana,
 			SaverSendTimeout: Duration(3 * time.Second),
+			FetchTimeout:     Duration(30 * time.Second),
 		},
 		Chunker: Chunker{
 			MaxRunes:         1200,
@@ -182,6 +184,7 @@ func (c *Config) Validate() error {
 		value Duration
 	}{
 		{"crawler.saver_send_timeout", c.Crawler.SaverSendTimeout},
+		{"crawler.fetch_timeout", c.Crawler.FetchTimeout},
 		{"cache.page_ttl", c.Cache.PageTTL},
 		{"cache.robots_ttl", c.Cache.RobotsTTL},
 		{"cache.document_hash_ttl", c.Cache.DocumentHashTTL},

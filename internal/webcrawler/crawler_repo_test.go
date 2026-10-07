@@ -6,7 +6,6 @@ import (
 	"sync"
 	"testing"
 	"web-crawler/internal/documents"
-	"web-crawler/internal/domain/config"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/parser"
 
@@ -67,7 +66,7 @@ func TestSubmitDocumentByStatus(t *testing.T) {
 
 			repo.submitDocument(
 				context.Background(),
-				&config.Task{URL: "https://example.com/", Run: &config.Run{ID: "run"}},
+				"https://example.com/", "run",
 				&networker.FetchResult{Status: tc.status, ContentType: "text/html"},
 				&parser.ParseResult{Title: "Not Found", Content: "The page you requested does not exist."},
 			)
@@ -95,7 +94,7 @@ func TestSubmitDocumentSkipsEmptyContent(t *testing.T) {
 
 	repo.submitDocument(
 		context.Background(),
-		&config.Task{URL: "https://example.com/", Run: &config.Run{ID: "run"}},
+		"https://example.com/", "run",
 		&networker.FetchResult{Status: http.StatusOK},
 		&parser.ParseResult{Content: " \n\n "},
 	)

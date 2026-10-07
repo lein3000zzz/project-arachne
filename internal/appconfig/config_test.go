@@ -164,3 +164,42 @@ func TestRobotsAgentIsTheProductName(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadLayersSeveralFiles(t *testing.T) {
+	base := writeConfig(t, `
+crawler:
+  task_workers: 4
+embedding:
+  model: base-model
+  batch_size: 8
+`)
+	overlay := filepath.Join(t.TempDir(), "overlay.yml")
+	if err := os.WriteFile(overlay, []byte("embedding:\n  model: overlay-model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(base + ", " + overlay)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Embedding.Model != "overlay-model" || cfg.Embedding.BatchSize != 8 || cfg.Crawler.TaskWorkers != 4 {
+		t.Errorf("got model %q batch %d workers %d: the overlay must override only what it names",
+			cfg.Embedding.Model, cfg.Embedding.BatchSize, cfg.Crawler.TaskWorkers)
+	}
+
+	if _, err := Load(base + "," + filepath.Join(t.TempDir(), "absent.yml")); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a missing overlay must be reported, got %v", err)
+	}
+}
+
+func TestShippedVLLMOverlayIsValid(t *testing.T) {
+	cfg, err := Load("../../configs/config.yml,../../configs/vllm.yml")
+	if err != nil {
+		t.Fatalf("config.yml + vllm.yml must load: %v", err)
+	}
+
+	if cfg.Embedding.Model == Default().Embedding.Model {
+		t.Error("the vllm overlay must name its own model")
+	}
+}

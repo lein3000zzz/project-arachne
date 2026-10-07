@@ -3,39 +3,12 @@ package parser
 import (
 	"net/url"
 	"strings"
+	"web-crawler/internal/urlnorm"
 )
 
 func normalizeURL(raw string, base *url.URL) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.HasPrefix(raw, "#") {
-		return ""
-	}
-
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-
-	if !parsed.IsAbs() {
-		if base == nil {
-			return ""
-		}
-
-		parsed = base.ResolveReference(parsed)
-	}
-
-	if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
-		return ""
-	}
-
-	parsed.Fragment = ""
-	parsed.RawFragment = ""
-
-	if parsed.Path == "" {
-		parsed.Path = "/"
-	}
-
-	return parsed.String()
+	canonical, _ := urlnorm.Canonical(raw, base)
+	return canonical
 }
 
 func parseBaseURL(raw string) *url.URL {

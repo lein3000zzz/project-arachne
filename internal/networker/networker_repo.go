@@ -2,8 +2,12 @@ package networker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -13,18 +17,24 @@ import (
 	"go.uber.org/zap"
 )
 
+// net/http's own limit, which a custom CheckRedirect has to re-impose.
+const maxRedirects = 10
+
+var errTooManyRedirects = errors.New("stopped after 10 redirects")
+
 type NetworkWorker struct {
 	Logger     *zap.SugaredLogger
 	httpClient *http.Client
 	userAgent  string
 }
 
-func NewNetworker(logger *zap.SugaredLogger, userAgent string) *NetworkWorker {
+func NewNetworker(logger *zap.SugaredLogger, userAgent string, timeout time.Duration) *NetworkWorker {
 	return &NetworkWorker{
 		Logger:    logger,
 		userAgent: userAgent,
 		httpClient: &http.Client{
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
+			Timeout:   timeout,
 		},
 	}
 }
@@ -44,7 +54,24 @@ func (nw *NetworkWorker) Fetch(url string) (*FetchResult, error) {
 
 		req.Header.Set("User-Agent", nw.userAgent)
 
-		resp, err := nw.httpClient.Do(req)
+		identity, renamed := url, true
+
+		client := *nw.httpClient
+		client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return errTooManyRedirects
+			}
+
+			if renamed && isIdentityRedirect(next.Response.StatusCode, via[len(via)-1].URL, next.URL) {
+				identity = next.URL.String()
+			} else {
+				renamed = false
+			}
+
+			return nil
+		}
+
+		resp, err := client.Do(req)
 		nw.Logger.Infof("fetch url %s", url)
 		if err != nil {
 			nw.Logger.Errorf("fetch url %s error", url)
@@ -77,10 +104,22 @@ func (nw *NetworkWorker) Fetch(url string) (*FetchResult, error) {
 		}
 
 		fetchResult.Status = resp.StatusCode
+		fetchResult.FinalURL = resp.Request.URL.String()
+		fetchResult.IdentityURL = identity
 		span.SetStatus(codes.Ok, "Fetch completed successfully")
 
 		return fetchResult, nil
 	})
+}
+
+func isIdentityRedirect(status int, from, to *url.URL) bool {
+	if status == http.StatusMovedPermanently || status == http.StatusPermanentRedirect {
+		return true
+	}
+
+	return strings.EqualFold(from.Host, to.Host) &&
+		from.RawQuery == to.RawQuery &&
+		strings.TrimSuffix(from.EscapedPath(), "/") == strings.TrimSuffix(to.EscapedPath(), "/")
 }
 
 func (nw *NetworkWorker) withSpan(name string, f func(context.Context, trace.Span) (*FetchResult, error)) (*FetchResult, error) {

@@ -1,0 +1,5 @@
+# Layered over config.yml by `make up EMBEDDER=vllm`. vLLM serves Hugging Face
+# repos by name, and its vectors differ from Ollama's quantized build, so the
+# name also gives it its own Milvus collection.
+embedding:
+  model: Qwen/Qwen3-Embedding-0.6B

@@ -10,6 +10,7 @@ require (
 	github.com/jimsmart/grobotstxt v1.0.3
 	github.com/joho/godotenv v1.5.1
 	github.com/lein3000zzz/vault-config-manager v0.0.1
+	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/projectdiscovery/katana v1.7.0
 	github.com/redis/go-redis/extra/redisotel/v9 v9.17.3
@@ -106,7 +107,6 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.17 // indirect
-	github.com/milvus-io/milvus/client/v2 v2.6.5 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect

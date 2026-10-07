@@ -13,8 +13,9 @@ import (
 )
 
 type PageNeo4jRepo struct {
-	driver neo4j.DriverWithContext
-	logger *zap.SugaredLogger
+	driver   neo4j.DriverWithContext
+	database string
+	logger   *zap.SugaredLogger
 
 	saverChan chan *data.PageData
 }
@@ -22,6 +23,7 @@ type PageNeo4jRepo struct {
 func NewNeo4jRepo(logger *zap.SugaredLogger, driver neo4j.DriverWithContext) *PageNeo4jRepo {
 	return &PageNeo4jRepo{
 		driver:    driver,
+		database:  "pages",
 		logger:    logger,
 		saverChan: make(chan *data.PageData),
 	}
@@ -63,20 +65,17 @@ func (repo *PageNeo4jRepo) SavePage(page *data.PageData) error {
 		return errParams
 	}
 
-	queryRes, errQuery := neo4j.ExecuteQuery(ctx, repo.driver, `
-		MERGE (p:Page {url: $url})
-		ON CREATE SET p.foundAt = $foundAt, p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType, p.title = $title 
-		ON MATCH SET p.lastUpdatedAt = $lastUpdatedAt, p.status = $status, p.links = $links, p.lastRunID = $lastRunID, p.contentType = $contentType, p.title = $title
-		WITH p
-		UNWIND $links AS linkUrl
-		MERGE (l:Page {url: linkUrl})
-		ON CREATE SET l.foundAt = $foundAt
-		MERGE (p)-[:LINKS_TO]->(l)
-	`,
-		params,
-		neo4j.EagerResultTransformer,
-		neo4j.ExecuteQueryWithDatabase("pages"),
-	)
+	if page.Aliases == nil {
+		params["aliases"] = []string{}
+	}
+
+	if page.Links == nil {
+		params["links"] = []string{}
+	}
+
+	_, errQuery := repo.write(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		return nil, savePage(ctx, tx, params, page.Aliases)
+	})
 	if errQuery != nil {
 		span.RecordError(errQuery)
 		span.SetStatus(codes.Error, "Save failed")
@@ -85,9 +84,15 @@ func (repo *PageNeo4jRepo) SavePage(page *data.PageData) error {
 	}
 
 	span.SetStatus(codes.Ok, "Page saved")
-	repo.logger.Debugw("page saved pages number: %d", queryRes.Summary.ResultAvailableAfter())
 
 	return nil
+}
+
+func (repo *PageNeo4jRepo) write(ctx context.Context, work neo4j.ManagedTransactionWork) (any, error) {
+	session := repo.driver.NewSession(ctx, neo4j.SessionConfig{DatabaseName: repo.database, AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(ctx)
+
+	return session.ExecuteWrite(ctx, work)
 }
 
 func (repo *PageNeo4jRepo) GetSaverChan() chan<- *data.PageData {
