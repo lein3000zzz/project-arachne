@@ -47,6 +47,7 @@ type errorResponse struct {
 
 // Services are what the API serves; Answerer and Runs may be nil.
 type Services struct {
+	Auth     Authenticator
 	Searcher Searcher
 	Answerer Answerer
 	Runs     RunService
@@ -56,16 +57,23 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux := http.NewServeMux()
 	searcher := services.Searcher
 
+	signIn := &authHandler{logger: logger, auth: services.Auth}
+	mux.HandleFunc("GET /login", signIn.loginPage)
+	mux.HandleFunc("POST /api/login", signIn.login)
+	mux.HandleFunc("POST /api/logout", signIn.logout)
+	mux.Handle("GET /api/me", signIn.api(signIn.me))
+	mux.Handle("POST /api/me/password", signIn.api(signIn.changePassword))
+
 	answers := &answerHandler{logger: logger, answerer: services.Answerer, timeout: cfg.AnswerTimeout}
-	mux.HandleFunc("GET /answer", answers.serveJSON)
-	mux.HandleFunc("GET /answer/stream", answers.serveStream)
+	mux.Handle("GET /answer", signIn.api(answers.serveJSON))
+	mux.Handle("GET /answer/stream", signIn.api(answers.serveStream))
 
 	runsAPI := &runsHandler{logger: logger, service: services.Runs}
-	mux.HandleFunc("POST /api/runs", runsAPI.submit)
-	mux.HandleFunc("GET /api/runs", runsAPI.list)
-	mux.HandleFunc("GET /api/runs/{id}", runsAPI.get)
+	mux.Handle("POST /api/runs", signIn.api(runsAPI.submit))
+	mux.Handle("GET /api/runs", signIn.api(runsAPI.list))
+	mux.Handle("GET /api/runs/{id}", signIn.api(runsAPI.get))
 
-	mux.HandleFunc("GET /search", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /search", signIn.api(func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseRequest(r, cfg)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
@@ -101,16 +109,25 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 			TookMS:  time.Since(started).Milliseconds(),
 			Results: results,
 		})
-	})
+	}))
 
-	mux.HandleFunc("GET /{$}", serveIndex)
+	mux.Handle("GET /{$}", signIn.page(serveIndex))
 	mux.HandleFunc("GET /favicon.svg", serveFavicon)
+	mux.Handle("GET /static/", staticHandler())
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	return mux
+	// Refuses state-changing requests a browser makes on another site's behalf,
+	// a forged login included.
+	protected := http.NewCrossOriginProtection().Handler(mux)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		protected.ServeHTTP(w, r)
+	})
 }
 
 func parseRequest(r *http.Request, cfg Config) (retrieval.Request, error) {

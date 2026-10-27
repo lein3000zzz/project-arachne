@@ -74,6 +74,12 @@ CHAT_MODEL    ?= $(call config_value,chat,model)
 CHAT_PROVIDER ?= $(call config_value,chat,provider)
 CHAT_LOCAL    := $(if $(and $(filter ollama,$(EMBEDDER)),$(if $(CHAT_BASE_URL),,yes),$(filter openai-compatible,$(CHAT_PROVIDER))),yes)
 
+# API token of the make targets that call the search service (make token). It
+# reaches curl on stdin, never as an argument other processes could read.
+ARACHNE_TOKEN ?= $(shell sed -n 's/^ARACHNE_TOKEN=//p' $(ENV_FILE) 2>/dev/null)
+export ARACHNE_TOKEN
+AUTH_HEADER := printf 'Authorization: Bearer %s\n' "$$ARACHNE_TOKEN"
+
 BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	REDIS_PASSWORD=$(REDIS_PASSWORD) \
 	POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
@@ -88,7 +94,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	RERANK_BASE_URL="$(RERANK_BASE_URL)" RERANK_API_KEY="$(RERANK_API_KEY)" \
 	scripts/vault-bootstrap.sh
 
-.PHONY: help up dev run crawl search eval rank smoke down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
+.PHONY: help up dev run crawl search eval rank smoke user password token down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
 
 help:
 	@echo "make up        full stack in docker (crawler included)"
@@ -99,6 +105,11 @@ help:
 	@echo "make rank      recompute page and site PageRank from the link graph"
 	@echo "make eval [DATASET=eval/sample.yml] [OUT=results.json]   nDCG/MRR/recall per mode"
 	@echo "make search Q=\"query\" [MODE=hybrid|dense|bm25] [HOST=go.dev] [LIMIT=10]"
+	@echo ""
+	@echo "accounts (sign-up is closed; the search service must be up):"
+	@echo "         make user NAME=<name> [ADMIN=1]   new account, password asked for"
+	@echo "         make password NAME=<name>         reset a password"
+	@echo "         make token NAME=<name>            API token for search/eval/smoke, saved in $(ENV_FILE)"
 	@echo "make logs      follow crawler logs"
 	@echo "make ps        service status"
 	@echo "make down      stop containers, keep data"
@@ -163,7 +174,7 @@ run:
 
 # make search Q="goroutine leak" [MODE=hybrid|dense|bm25] [HOST=go.dev] [LIMIT=10]
 search:
-	@curl -sfG http://localhost:8090/search --data-urlencode "q=$(Q)" \
+	@$(AUTH_HEADER) | curl -sfG -H @- http://localhost:8090/search --data-urlencode "q=$(Q)" \
 		$(if $(MODE),--data-urlencode "mode=$(MODE)") $(if $(HOST),--data-urlencode "host=$(HOST)") \
 		$(if $(LIMIT),--data-urlencode "limit=$(LIMIT)") | jq .
 
@@ -178,6 +189,23 @@ rank:
 # make eval [DATASET=eval/sample.yml] [OUT=eval/results.json]; needs the search service up
 eval:
 	$(GO) run ./cmd/eval -dataset $(or $(DATASET),eval/sample.yml) $(if $(OUT),-out $(OUT))
+
+# make user NAME=lein [ADMIN=1]: the password is asked for, never passed in.
+user:
+	@test -n "$(NAME)" || { echo "usage: make user NAME=<username> [ADMIN=1]"; exit 2; }
+	@$(COMPOSE) exec search ./user create $(if $(ADMIN),-admin) "$(NAME)"
+
+password:
+	@test -n "$(NAME)" || { echo "usage: make password NAME=<username>"; exit 2; }
+	@$(COMPOSE) exec search ./user password "$(NAME)"
+
+# Replaces the account's earlier "make" token, so running it again rotates it.
+token:
+	@test -n "$(NAME)" || { echo "usage: make token NAME=<username>"; exit 2; }
+	@token=$$($(COMPOSE) exec -T search ./user token -name make "$(NAME)") || exit 1; \
+	sed -i.bak '/^ARACHNE_TOKEN=/d' $(ENV_FILE) && rm -f $(ENV_FILE).bak && \
+	{ [ -z "$$(tail -c1 $(ENV_FILE))" ] || echo >> $(ENV_FILE); } && \
+	echo "ARACHNE_TOKEN=$$token" >> $(ENV_FILE) && echo "saved in $(ENV_FILE)"
 
 crawl:
 	@COMPOSE="$(COMPOSE)" KAFKA_TOPIC_RUNS=$(KAFKA_TOPIC_RUNS) \

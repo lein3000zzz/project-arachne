@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 	"web-crawler/internal/runs"
-
-	"go.uber.org/zap"
 )
 
 type fakeRuns struct {
@@ -43,9 +41,9 @@ func serveRuns(service RunService, method, target, body string) *httptest.Respon
 		services.Runs = service
 	}
 
-	handler := NewHandler(zap.NewNop().Sugar(), services, Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second})
+	handler := newTestHandler(services, Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second})
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(method, target, strings.NewReader(body)))
+	handler.ServeHTTP(rec, signedIn(httptest.NewRequest(method, target, strings.NewReader(body))))
 
 	return rec
 }

@@ -12,8 +12,6 @@ import (
 	"web-crawler/internal/answer"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/retrieval"
-
-	"go.uber.org/zap"
 )
 
 type fakeAnswerer struct {
@@ -48,10 +46,9 @@ func serveAnswer(answerer Answerer, target string) *httptest.ResponseRecorder {
 		services.Answerer = answerer
 	}
 
-	handler := NewHandler(zap.NewNop().Sugar(), services,
-		Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second, AnswerTimeout: time.Second})
+	handler := newTestHandler(services, Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second, AnswerTimeout: time.Second})
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	handler.ServeHTTP(rec, signedIn(httptest.NewRequest(http.MethodGet, target, nil)))
 
 	return rec
 }

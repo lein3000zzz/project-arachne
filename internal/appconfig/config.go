@@ -20,6 +20,7 @@ type Config struct {
 	Chat        Chat        `yaml:"chat"`
 	Rerank      Rerank      `yaml:"rerank"`
 	CrawlAPI    CrawlAPI    `yaml:"crawl_api"`
+	Auth        Auth        `yaml:"auth"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -123,14 +124,28 @@ type Chat struct {
 	SourceRunes int `yaml:"source_runes"`
 }
 
-// CrawlAPI lets the search service start crawls. Anyone who can reach it can
-// then make the crawler fetch any site, so it is for a trusted network.
+// CrawlAPI lets the search service start crawls: any signed-in user can then
+// make the crawler fetch any site.
 type CrawlAPI struct {
 	Enabled      bool `yaml:"enabled"`
 	DefaultDepth int  `yaml:"default_depth"`
 	MaxDepth     int  `yaml:"max_depth"`
 	DefaultLinks int  `yaml:"default_links"`
 	MaxLinks     int  `yaml:"max_links"`
+}
+
+type Auth struct {
+	SessionTTL Duration `yaml:"session_ttl"`
+	// Failed logins tolerated per username and per client address within
+	// FailureWindow; the next one locks them for Lockout, doubling with each
+	// further failure up to MaxLockout.
+	UserFailures  int      `yaml:"user_failures"`
+	IPFailures    int      `yaml:"ip_failures"`
+	FailureWindow Duration `yaml:"failure_window"`
+	Lockout       Duration `yaml:"lockout"`
+	MaxLockout    Duration `yaml:"max_lockout"`
+	// Password hashes computed at once; each holds 64 MiB while it runs.
+	HashConcurrency int `yaml:"hash_concurrency"`
 }
 
 type Cache struct {
@@ -252,6 +267,15 @@ func Default() Config {
 			DefaultLinks: 100,
 			MaxLinks:     2000,
 		},
+		Auth: Auth{
+			SessionTTL:      Duration(30 * 24 * time.Hour),
+			UserFailures:    5,
+			IPFailures:      20,
+			FailureWindow:   Duration(time.Hour),
+			Lockout:         Duration(time.Minute),
+			MaxLockout:      Duration(15 * time.Minute),
+			HashConcurrency: 2,
+		},
 		Chat: Chat{
 			Provider:       ChatProviderOpenAICompatible,
 			Model:          "qwen3:4b-instruct",
@@ -324,6 +348,9 @@ func (c *Config) Validate() error {
 		{"crawl_api.max_depth", c.CrawlAPI.MaxDepth},
 		{"crawl_api.default_links", c.CrawlAPI.DefaultLinks},
 		{"crawl_api.max_links", c.CrawlAPI.MaxLinks},
+		{"auth.user_failures", c.Auth.UserFailures},
+		{"auth.ip_failures", c.Auth.IPFailures},
+		{"auth.hash_concurrency", c.Auth.HashConcurrency},
 	}
 
 	for _, field := range positive {
@@ -353,6 +380,10 @@ func (c *Config) Validate() error {
 		{"chat.request_timeout", c.Chat.RequestTimeout},
 		{"rank.watch_interval", c.Rank.WatchInterval},
 		{"rerank.request_timeout", c.Rerank.RequestTimeout},
+		{"auth.session_ttl", c.Auth.SessionTTL},
+		{"auth.failure_window", c.Auth.FailureWindow},
+		{"auth.lockout", c.Auth.Lockout},
+		{"auth.max_lockout", c.Auth.MaxLockout},
 	}
 
 	for _, field := range durations {
@@ -444,6 +475,10 @@ func (c *Config) Validate() error {
 
 	if c.CrawlAPI.DefaultDepth > c.CrawlAPI.MaxDepth || c.CrawlAPI.DefaultLinks > c.CrawlAPI.MaxLinks {
 		return fmt.Errorf("%w: crawl_api defaults must not exceed their maximums", ErrInvalidConfig)
+	}
+
+	if c.Auth.Lockout > c.Auth.MaxLockout {
+		return fmt.Errorf("%w: auth.lockout must not exceed auth.max_lockout", ErrInvalidConfig)
 	}
 
 	if c.Chat.Model == "" {

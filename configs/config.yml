@@ -86,13 +86,26 @@ rank:
   watch_interval: 30s
 
 crawl_api:
-  # lets the search service start crawls (UI and POST /api/runs); anyone who can
-  # reach it can then make the crawler fetch any site
+  # lets the search service start crawls (UI and POST /api/runs); any signed-in
+  # user can then make the crawler fetch any site
   enabled: true
   default_depth: 3
   max_depth: 5
   default_links: 100
   max_links: 2000
+
+auth:
+  session_ttl: 720h
+  # failed logins tolerated per username and per client address within
+  # failure_window; the next one locks them for lockout, doubling with each
+  # further failure up to max_lockout
+  user_failures: 5
+  ip_failures: 20
+  failure_window: 1h
+  lockout: 1m
+  max_lockout: 15m
+  # password hashes at once (argon2id, 64 MiB each while it runs)
+  hash_concurrency: 2
 
 chat:
   # openai-compatible: Ollama, vLLM, OpenRouter, DeepSeek… — openai: OpenAI itself

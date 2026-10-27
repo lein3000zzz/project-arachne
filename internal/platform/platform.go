@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"web-crawler/internal/appconfig"
+	"web-crawler/internal/auth"
 	"web-crawler/internal/database"
 	"web-crawler/internal/embedding"
 	"web-crawler/internal/llm"
@@ -191,6 +192,23 @@ func OpenDatabase(ctx context.Context, logger *zap.SugaredLogger, sm manager.Sec
 	}
 
 	return pool
+}
+
+func NewAuthService(ctx context.Context, logger *zap.SugaredLogger, cfg appconfig.Config, pool *pgxpool.Pool) *auth.Service {
+	service, err := auth.NewService(ctx, logger, auth.NewPostgresStore(pool),
+		auth.NewHasher(auth.DefaultParams, cfg.Auth.HashConcurrency), auth.Config{
+			SessionTTL:    cfg.Auth.SessionTTL.Std(),
+			UserFailures:  cfg.Auth.UserFailures,
+			IPFailures:    cfg.Auth.IPFailures,
+			FailureWindow: cfg.Auth.FailureWindow.Std(),
+			Lockout:       cfg.Auth.Lockout.Std(),
+			MaxLockout:    cfg.Auth.MaxLockout.Std(),
+		})
+	if err != nil {
+		logger.Fatal("Error initializing accounts:", err)
+	}
+
+	return service
 }
 
 // NewChatClient returns nil when no chat endpoint is configured: search still

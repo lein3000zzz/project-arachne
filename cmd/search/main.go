@@ -46,6 +46,12 @@ func main() {
 
 	db := platform.OpenDatabase(startCtx, logger, sm, searchDBConns)
 
+	accounts := platform.NewAuthService(startCtx, logger, cfg, db)
+
+	if n, err := accounts.UserCount(startCtx); err == nil && n == 0 {
+		logger.Warn("No accounts yet, so nobody can sign in: create one with make user NAME=<name> ADMIN=1")
+	}
+
 	cancelStart()
 
 	var reranker retrieval.Reranker
@@ -87,7 +93,7 @@ func main() {
 		logger.Infow("Answering enabled", "provider", cfg.Chat.Provider, "model", chat.Model())
 	}
 
-	services := searchapi.Services{Searcher: retriever, Answerer: answerer}
+	services := searchapi.Services{Auth: accounts, Searcher: retriever, Answerer: answerer}
 
 	if cfg.CrawlAPI.Enabled {
 		producer := platform.NewRunsProducer(logger, sm)

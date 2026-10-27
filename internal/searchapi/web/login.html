@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · arachne</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem("theme"); } catch (_) {}
+  if (stored === "light" || stored === "dark") document.documentElement.setAttribute("data-theme", stored);
+})();
+</script>
+<link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="shell">
+
+<header class="site">
+  <a class="brand" href="/">arachne</a>
+  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <p class="eyebrow">@arachne</p>
+    <h1>Sign in.</h1>
+    <p class="lede">Accounts are made by an admin.</p>
+
+    <form id="login" class="login">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="action primary" id="signin">Sign in</button>
+    </form>
+    <p class="note" id="note" aria-live="polite"></p>
+  </section>
+</main>
+
+<footer class="footer">
+  <p class="convert">arachne</p>
+  <nav class="contact" aria-label="Links">
+    <a href="https://github.com/lein3000zzz/project-arachne">GitHub</a>
+    <a href="https://lein3000.dev">lein3000.dev</a>
+  </nav>
+</footer>
+
+</div>
+
+<script src="/static/theme.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+
+// Only paths on this site: "//host" and "/\host" are other hosts to a browser.
+const next = (() => {
+  const n = new URLSearchParams(location.search).get("next") || "/";
+  return n.startsWith("/") && !n.startsWith("//") && !n.startsWith("/\\") ? n : "/";
+})();
+
+function wait(seconds) {
+  return seconds < 90 ? seconds + " s" : Math.ceil(seconds / 60) + " min";
+}
+
+$("login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("signin").disabled = true;
+  $("note").textContent = "";
+  try {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("username").value.trim(), password: $("password").value }),
+    });
+    if (res.ok) {
+      location.replace(next);
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    const retry = Number(res.headers.get("Retry-After"));
+    const message = res.status === 429 && retry ? "Too many attempts. Try again in " + wait(retry) + "."
+      : body.error || res.statusText;
+    $("note").replaceChildren(Object.assign(document.createElement("span"), { className: "error", textContent: message }));
+    $("password").select();
+  } catch (err) {
+    $("note").textContent = err.message;
+  } finally {
+    $("signin").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

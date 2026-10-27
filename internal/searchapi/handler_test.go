@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 	"web-crawler/internal/retrieval"
-
-	"go.uber.org/zap"
 )
 
 type fakeSearcher struct {
@@ -31,9 +29,9 @@ func (f *fakeSearcher) Search(_ context.Context, req retrieval.Request) ([]retri
 func serve(t *testing.T, searcher Searcher, target string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	handler := NewHandler(zap.NewNop().Sugar(), Services{Searcher: searcher}, Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second})
+	handler := newTestHandler(Services{Searcher: searcher}, Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second})
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	handler.ServeHTTP(rec, signedIn(httptest.NewRequest(http.MethodGet, target, nil)))
 
 	return rec
 }

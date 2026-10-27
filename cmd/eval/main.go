@@ -45,7 +45,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	client := &http.Client{Timeout: time.Minute}
+	token := os.Getenv("ARACHNE_TOKEN")
+	if token == "" {
+		log.Fatal("ARACHNE_TOKEN is not set: the search service needs an API token (make token NAME=<user>)")
+	}
+
+	client := &http.Client{Timeout: time.Minute, Transport: bearer{token: token, next: http.DefaultTransport}}
 	limit := max(*k, *deep)
 
 	var reports []queryReport
@@ -93,6 +98,18 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+}
+
+type bearer struct {
+	token string
+	next  http.RoundTripper
+}
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+
+	return b.next.RoundTrip(r)
 }
 
 func search(client *http.Client, endpoint string, q evaluation.Query, mode retrieval.Mode, limit int) ([]string, error) {
