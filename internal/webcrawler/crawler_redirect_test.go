@@ -92,7 +92,7 @@ func TestScrapStoresARenamedPageUnderItsFinalURL(t *testing.T) {
 }
 
 func TestScrapKeepsTheRequestedURLAfterATemporaryRedirect(t *testing.T) {
-	repo, _ := redirectRepo(t, &networker.FetchResult{
+	repo, sink := redirectRepo(t, &networker.FetchResult{
 		FinalURL:    "https://example.com/login/",
 		IdentityURL: "https://example.com/account",
 		Status:      http.StatusOK,
@@ -111,5 +111,9 @@ func TestScrapKeepsTheRequestedURLAfterATemporaryRedirect(t *testing.T) {
 
 	if len(pd.PageLinks) != 1 || pd.PageLinks[0] != "https://example.com/login/intro" {
 		t.Errorf("links = %v: they still resolve against the document's real location", pd.PageLinks)
+	}
+
+	if len(sink.docs) != 0 {
+		t.Errorf("indexed %d documents: the login page's text must not become /account's", len(sink.docs))
 	}
 }

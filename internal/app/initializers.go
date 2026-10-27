@@ -2,40 +2,30 @@ package app
 
 import (
 	"context"
-	"errors"
 	"log"
-	"os"
-	"strings"
 	"time"
 	"web-crawler/internal/appconfig"
 	"web-crawler/internal/chunker"
 	"web-crawler/internal/documents"
-	"web-crawler/internal/embedding"
 	"web-crawler/internal/indexing"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/parser"
+	"web-crawler/internal/platform"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/utils"
-	"web-crawler/internal/vectorstore"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
 
-	"github.com/joho/godotenv"
 	"github.com/lein3000zzz/vault-config-manager/pkg/manager"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	neoconfig "github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.uber.org/zap"
 )
 
@@ -51,13 +41,13 @@ const (
 const indexingStartupTimeout = 2 * time.Minute
 
 func InitApp() *CrawlerApp {
-	initEnv()
+	platform.LoadEnv()
 
-	logger := initLogger()
-	cfg := initConfig(logger)
-	sm := initSecretManager(logger)
+	logger := platform.NewLogger()
+	cfg := platform.LoadConfig(logger)
+	sm := platform.NewSecretManager(logger)
 
-	tp := initTracing(sm)
+	tp := platform.NewTracing(sm, "project-arachne")
 
 	neo4jDriver := initNeo4jDriver(sm, cfg)
 	pageRepo := initPageRepo(logger, neo4jDriver)
@@ -107,23 +97,6 @@ func InitApp() *CrawlerApp {
 	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp, cfg)
 }
 
-func initConfig(logger *zap.SugaredLogger) appconfig.Config {
-	path, explicit := appconfig.Path()
-
-	cfg, err := appconfig.Load(path)
-
-	switch {
-	case err == nil:
-		logger.Infow("Loaded config", "path", path)
-	case errors.Is(err, appconfig.ErrNotFound) && !explicit:
-		logger.Warnw("No config file found, using defaults", "path", path)
-	default:
-		logger.Fatalf("Error loading config from %s: %v", path, err)
-	}
-
-	return cfg
-}
-
 func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
 	logger.Infow("Selected parser engine", "engine", engine)
 
@@ -153,14 +126,14 @@ func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manage
 		logger.Fatal("Error initializing chunker:", err)
 	}
 
-	embedder := initEmbedder(logger, cfg, sm)
+	embedder := platform.NewEmbedder(logger, cfg, sm)
 
 	dimension, err := embedder.Probe(ctx)
 	if err != nil {
 		logger.Fatalw("Embedding endpoint is not usable", "model", cfg.Embedding.Model, "error", err)
 	}
 
-	store := initVectorStore(ctx, logger, cfg, sm, dimension)
+	store := platform.NewVectorStore(ctx, logger, cfg, sm, dimension)
 
 	logger.Infow("Indexing ready",
 		"chunker", textChunker.Fingerprint(),
@@ -175,56 +148,6 @@ func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manage
 	chunking := indexing.NewChunkingSink(logger, textChunker, hashes, indexing.NewVectorSink(embedder, store))
 
 	return indexing.NewAsyncSink(logger, chunking, cfg.Indexer.Workers, cfg.Indexer.QueueSize, cfg.Indexer.EnqueueTimeout.Std())
-}
-
-func initEmbedder(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) *embedding.OpenAIClient {
-	baseURL, err := sm.GetSecretStringFromConfig("EMBEDDING_BASE_URL")
-	if err != nil {
-		logger.Fatal("EMBEDDING_BASE_URL is missing in Vault")
-	}
-
-	embedder, err := embedding.NewOpenAIClient(embedding.OpenAIConfig{
-		BaseURL:        baseURL,
-		APIKey:         optionalSecret(sm, "EMBEDDING_API_KEY"),
-		Model:          cfg.Embedding.Model,
-		Dimensions:     cfg.Embedding.Dimensions,
-		BatchSize:      cfg.Embedding.BatchSize,
-		RequestTimeout: cfg.Embedding.RequestTimeout.Std(),
-		MaxRetries:     cfg.Embedding.MaxRetries,
-	})
-	if err != nil {
-		logger.Fatal("Error initializing embedder:", err)
-	}
-
-	return embedder
-}
-
-func initVectorStore(ctx context.Context, logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, dimension int) *vectorstore.Milvus {
-	addr, err := sm.GetSecretStringFromConfig("MILVUS_ADDR")
-	if err != nil {
-		logger.Fatal("MILVUS_ADDR is missing in Vault")
-	}
-
-	store, err := vectorstore.NewMilvus(ctx, vectorstore.MilvusConfig{
-		Address:    addr,
-		Token:      optionalSecret(sm, "MILVUS_TOKEN"),
-		Collection: vectorstore.CollectionName(cfg.VectorStore.CollectionPrefix, cfg.Embedding.Model, dimension),
-		Dimension:  dimension,
-	})
-	if err != nil {
-		logger.Fatal("Error initializing vector store:", err)
-	}
-
-	return store
-}
-
-func optionalSecret(sm manager.SecretManager, key string) string {
-	value, err := sm.GetSecretStringFromConfig(key)
-	if err != nil {
-		return ""
-	}
-
-	return value
 }
 
 func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int, cfg appconfig.Config) *redis.Client {
@@ -366,79 +289,4 @@ func initNeo4jDriver(sm manager.SecretManager, cfg appconfig.Config) neo4j.Drive
 	}
 
 	return neo4jDriver
-}
-
-func initTracing(sm manager.SecretManager) *trace.TracerProvider {
-	oltpString, err := sm.GetSecretStringFromConfig("OTLP_ENDPOINT")
-	if err != nil {
-		log.Fatalf("Error initializing tracing: %v", err)
-	}
-
-	exp, err := otlptracehttp.New(context.Background(), otlptracehttp.WithEndpoint(oltpString), otlptracehttp.WithInsecure())
-	if err != nil {
-		log.Fatalf("Error initializing jaeger: %v", err)
-	}
-
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(semconv.ServiceNameKey.String("project-arachne")),
-	)
-	if err != nil {
-		log.Fatal("Error initializing otel resource:", err)
-	}
-
-	tracerProvider := trace.NewTracerProvider(
-		trace.WithBatcher(exp),
-		trace.WithResource(res),
-	)
-
-	otel.SetTracerProvider(tracerProvider)
-
-	return tracerProvider
-}
-
-func initSecretManager(logger *zap.SugaredLogger) manager.SecretManager {
-	sm, err := manager.NewSecretManager(
-		os.Getenv("VAULT_ADDRESS"),
-		os.Getenv("VAULT_TOKEN"),
-		manager.DefaultBasePathData+"main/",
-		manager.DefaultBasePathMetaData+"main/",
-		logger,
-	)
-	if err != nil {
-		logger.Fatalf("Error initializing secret manager: %v", err)
-	}
-
-	keys := strings.Split(os.Getenv("VAULT_KEYS"), ",")
-
-	sm.UnsealVault(keys)
-
-	err = sm.ResetConfig()
-	if err != nil {
-		logger.Fatalw("failed to update config on start", "error", err)
-	}
-
-	return sm
-}
-
-func initLogger() *zap.SugaredLogger {
-	zapLogger, err := zap.NewProduction()
-	if err != nil {
-		log.Fatalf("Error initializing zap logger: %v", err)
-		return nil
-	}
-
-	logger := zapLogger.Sugar()
-	return logger
-}
-
-func initEnv() {
-	if os.Getenv("APP_ENV") == "prod" {
-		return
-	}
-
-	err := godotenv.Load("main.env")
-
-	if err != nil {
-		log.Fatalf("Error loading .env file")
-	}
 }

@@ -272,7 +272,12 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		parsed = &parser.ParseResult{}
 	}
 
-	repo.submitDocument(ctx, pageURL, task.Run.ID, fetchRes, parsed)
+	// After a temporary redirect elsewhere the body is another page's - a login
+	// form, a mirror - and indexing it under pageURL would make pageURL findable by
+	// text it does not have. That page is indexed when it is crawled itself.
+	if final, ok := urlnorm.Canonical(fetchRes.FinalURL, nil); !ok || final == pageURL {
+		repo.submitDocument(ctx, pageURL, task.Run.ID, fetchRes, parsed)
+	}
 
 	pageData := &data.PageData{
 		URL:           pageURL,

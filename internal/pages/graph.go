@@ -21,6 +21,7 @@ const (
 		UNWIND $links AS link
 		OPTIONAL MATCH (a:Alias {url: link})
 		WITH p, coalesce(a.target, link) AS target
+		WHERE target <> $url
 		MERGE (l:Page {url: target})
 		ON CREATE SET l.foundAt = $foundAt
 		MERGE (p)-[:LINKS_TO]->(l)

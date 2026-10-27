@@ -14,6 +14,8 @@ type Config struct {
 	Embedding   Embedding   `yaml:"embedding"`
 	VectorStore VectorStore `yaml:"vector_store"`
 	Indexer     Indexer     `yaml:"indexer"`
+	Retrieval   Retrieval   `yaml:"retrieval"`
+	Search      Search      `yaml:"search"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -44,6 +46,9 @@ type Embedding struct {
 	BatchSize      int      `yaml:"batch_size"`
 	RequestTimeout Duration `yaml:"request_timeout"`
 	MaxRetries     int      `yaml:"max_retries"`
+	// Prepended to queries, never to documents. Instruction-tuned embedders such
+	// as Qwen3 retrieve markedly worse without it; plain ones need it empty.
+	QueryPrefix string `yaml:"query_prefix"`
 }
 
 type VectorStore struct {
@@ -54,6 +59,20 @@ type Indexer struct {
 	Workers        int      `yaml:"workers"`
 	QueueSize      int      `yaml:"queue_size"`
 	EnqueueTimeout Duration `yaml:"enqueue_timeout"`
+}
+
+type Retrieval struct {
+	// Chunks taken from each of the dense and BM25 lists before they are folded
+	// into pages and fused. Pages with many matching chunks use up several.
+	Candidates   int `yaml:"candidates"`
+	RRFK         int `yaml:"rrf_k"`
+	DefaultLimit int `yaml:"default_limit"`
+	MaxLimit     int `yaml:"max_limit"`
+}
+
+type Search struct {
+	Listen         string   `yaml:"listen"`
+	RequestTimeout Duration `yaml:"request_timeout"`
 }
 
 type Cache struct {
@@ -80,6 +99,9 @@ type Shutdown struct {
 	Timeout          Duration `yaml:"timeout"`
 	ComponentTimeout Duration `yaml:"component_timeout"`
 }
+
+// The instruction the Qwen3 embedding models were trained with for web search.
+const Qwen3QueryPrefix = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
 
 const (
 	ParserEngineKatana = "katana"
@@ -113,6 +135,7 @@ func Default() Config {
 			BatchSize:      32,
 			RequestTimeout: Duration(2 * time.Minute),
 			MaxRetries:     4,
+			QueryPrefix:    Qwen3QueryPrefix,
 		},
 		VectorStore: VectorStore{
 			CollectionPrefix: "chunks",
@@ -121,6 +144,16 @@ func Default() Config {
 			Workers:        4,
 			QueueSize:      64,
 			EnqueueTimeout: Duration(5 * time.Second),
+		},
+		Retrieval: Retrieval{
+			Candidates:   100,
+			RRFK:         60,
+			DefaultLimit: 10,
+			MaxLimit:     100,
+		},
+		Search: Search{
+			Listen:         ":8090",
+			RequestTimeout: Duration(30 * time.Second),
 		},
 		Cache: Cache{
 			PageTTL:         Duration(12 * time.Hour),
@@ -171,6 +204,10 @@ func (c *Config) Validate() error {
 		{"indexer.workers", c.Indexer.Workers},
 		{"indexer.queue_size", c.Indexer.QueueSize},
 		{"queue.channel_buffer", c.Queue.ChannelBuffer},
+		{"retrieval.candidates", c.Retrieval.Candidates},
+		{"retrieval.rrf_k", c.Retrieval.RRFK},
+		{"retrieval.default_limit", c.Retrieval.DefaultLimit},
+		{"retrieval.max_limit", c.Retrieval.MaxLimit},
 	}
 
 	for _, field := range positive {
@@ -196,6 +233,7 @@ func (c *Config) Validate() error {
 		{"run_state.slot_lease", c.RunState.SlotLease},
 		{"shutdown.timeout", c.Shutdown.Timeout},
 		{"shutdown.component_timeout", c.Shutdown.ComponentTimeout},
+		{"search.request_timeout", c.Search.RequestTimeout},
 	}
 
 	for _, field := range durations {
@@ -249,6 +287,15 @@ func (c *Config) Validate() error {
 	if c.Chunker.MinDocumentRunes < 0 {
 		return fmt.Errorf("%w: chunker.min_document_runes must be >= 0, got %d",
 			ErrInvalidConfig, c.Chunker.MinDocumentRunes)
+	}
+
+	if c.Retrieval.DefaultLimit > c.Retrieval.MaxLimit {
+		return fmt.Errorf("%w: retrieval.default_limit (%d) exceeds retrieval.max_limit (%d)",
+			ErrInvalidConfig, c.Retrieval.DefaultLimit, c.Retrieval.MaxLimit)
+	}
+
+	if c.Search.Listen == "" {
+		return fmt.Errorf("%w: search.listen must not be empty", ErrInvalidConfig)
 	}
 
 	if c.Cache.RedisMaxMemory == "" {

@@ -59,13 +59,15 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	MILVUS_TOKEN="$(MILVUS_TOKEN)" \
 	scripts/vault-bootstrap.sh
 
-.PHONY: help up dev run crawl down reset restart logs ps env vault-bootstrap neo4j-init models stop-other-embedders build test test-integration vet tidy
+.PHONY: help up dev run crawl search eval down reset restart logs ps env vault-bootstrap neo4j-init models stop-other-embedders build test test-integration vet tidy
 
 help:
 	@echo "make up        full stack in docker (crawler included)"
 	@echo "make dev       infra only, addressed for a host-run crawler"
 	@echo "make run       go run the crawler on the host (after make dev)"
 	@echo "make crawl URL=https://example.com/ [DEPTH=2] [LINKS=25]"
+	@echo "make eval [DATASET=eval/sample.yml] [OUT=results.json]   nDCG/MRR/recall per mode"
+	@echo "make search Q=\"query\" [MODE=hybrid|dense|bm25] [HOST=go.dev] [LIMIT=10]"
 	@echo "make logs      follow crawler logs"
 	@echo "make ps        service status"
 	@echo "make down      stop containers, keep data"
@@ -105,9 +107,9 @@ up: env
 	$(BOOTSTRAP) docker
 	$(MAKE) neo4j-init
 	$(MAKE) models
-	$(COMPOSE) up -d --build crawler
+	$(COMPOSE) up -d --build crawler search
 	@echo ""
-	@echo "stack is up. follow it with: make logs"
+	@echo "stack is up. follow it with: make logs; search at http://localhost:8090/search?q=..."
 
 dev: env
 	@$(COMPOSE) stop crawler 2>/dev/null || true
@@ -122,6 +124,16 @@ dev: env
 
 run:
 	$(GO) run ./cmd/web-crawler
+
+# make search Q="goroutine leak" [MODE=hybrid|dense|bm25] [HOST=go.dev] [LIMIT=10]
+search:
+	@curl -sfG http://localhost:8090/search --data-urlencode "q=$(Q)" \
+		$(if $(MODE),--data-urlencode "mode=$(MODE)") $(if $(HOST),--data-urlencode "host=$(HOST)") \
+		$(if $(LIMIT),--data-urlencode "limit=$(LIMIT)") | jq .
+
+# make eval [DATASET=eval/sample.yml] [OUT=eval/results.json]; needs the search service up
+eval:
+	$(GO) run ./cmd/eval -dataset $(or $(DATASET),eval/sample.yml) $(if $(OUT),-out $(OUT))
 
 crawl:
 	@COMPOSE="$(COMPOSE)" KAFKA_TOPIC_RUNS=$(KAFKA_TOPIC_RUNS) \

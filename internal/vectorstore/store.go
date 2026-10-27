@@ -22,3 +22,24 @@ type Store interface {
 	Replace(ctx context.Context, url string, rows []Row) error
 	Close(ctx context.Context) error
 }
+
+type Hit struct {
+	ID    string
+	URL   string
+	Host  string
+	Title string
+	Text  string
+	Score float32
+}
+
+// Filter narrows a search. The zero value searches everything.
+type Filter struct {
+	Host string
+}
+
+// Searcher returns chunks best first. Dense scores are cosine similarities, text
+// scores BM25: the two scales are not comparable.
+type Searcher interface {
+	SearchDense(ctx context.Context, vector []float32, limit int, filter Filter) ([]Hit, error)
+	SearchText(ctx context.Context, query string, limit int, filter Filter) ([]Hit, error)
+}

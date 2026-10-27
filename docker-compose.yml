@@ -34,6 +34,27 @@ services:
         condition: service_healthy
         required: false
 
+  search:
+    build:
+      context: .
+      dockerfile: deployments/search.Dockerfile
+    env_file:
+      - main.env
+    volumes:
+      - ./configs:/root/configs:ro
+    ports:
+      - "8090:8090"
+    restart: always
+    depends_on:
+      milvus:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+        required: false
+      vllm:
+        condition: service_healthy
+        required: false
+
   vault:
     image: hashicorp/vault
     environment:

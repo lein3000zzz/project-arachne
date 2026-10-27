@@ -24,6 +24,9 @@ embedding:
   batch_size: 32
   request_timeout: 2m
   max_retries: 4
+  # prepended to search queries only; this is Qwen3's web-search instruction,
+  # other models want their own or an empty string
+  query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
 
 vector_store:
   # collection name = <prefix>_<schema version>_<model>_<dimensions>
@@ -35,6 +38,18 @@ indexer:
   queue_size: 64
   # a page that can't be queued in time is skipped and indexed on its next crawl
   enqueue_timeout: 5s
+
+retrieval:
+  # chunks taken from each of dense and BM25 before folding into pages and fusing
+  candidates: 100
+  # reciprocal rank fusion: score = sum of 1/(rrf_k + rank) over the lists
+  rrf_k: 60
+  default_limit: 10
+  max_limit: 100
+
+search:
+  listen: ":8090"
+  request_timeout: 30s
 
 cache:
   page_ttl: 12h

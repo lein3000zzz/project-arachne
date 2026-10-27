@@ -1,0 +1,5 @@
+.git
+.idea
+main.env
+deployments/opt
+output

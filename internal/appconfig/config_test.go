@@ -203,3 +203,27 @@ func TestShippedVLLMOverlayIsValid(t *testing.T) {
 		t.Error("the vllm overlay must name its own model")
 	}
 }
+
+func TestShippedQueryPrefixMatchesTheDefault(t *testing.T) {
+	cfg, err := Load("../../configs/config.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Embedding.QueryPrefix != Qwen3QueryPrefix {
+		t.Errorf("query_prefix = %q, want %q: YAML escaping must yield a real newline", cfg.Embedding.QueryPrefix, Qwen3QueryPrefix)
+	}
+}
+
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	path := writeConfig(t, "search:\n  listen: \":1\"\n  page_ttl: 1h\n")
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("a key in the wrong section must be rejected, not ignored")
+	}
+
+	empty := writeConfig(t, "")
+	if _, err := Load(empty); err != nil {
+		t.Errorf("an empty file is a valid overlay: %v", err)
+	}
+}

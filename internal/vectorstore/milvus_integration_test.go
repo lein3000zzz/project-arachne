@@ -220,3 +220,69 @@ func TestReplaceRejectsInvalidRows(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchReturnsHitsWithTheirFields(t *testing.T) {
+	m := openTestStore(t)
+	ctx := context.Background()
+	const a, b = "https://example.com/a", "https://other.example/b"
+
+	if err := m.Replace(ctx, a, []Row{row(a, "ab01", "goroutines and channels", 1, 0, 0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+
+	other := row(b, "ab02", "channels in another site", 0.9, 0.1, 0, 0)
+	other.Host = "other.example"
+	if err := m.Replace(ctx, b, []Row{other}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Searches are eventually consistent; Replace's strong query does not make
+	// the rows visible to them.
+	waitFor := func(search func() ([]Hit, error), want int) []Hit {
+		t.Helper()
+
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+			hits, err := search()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if len(hits) >= want || time.Now().After(deadline) {
+				return hits
+			}
+		}
+	}
+
+	dense := waitFor(func() ([]Hit, error) { return m.SearchDense(ctx, []float32{1, 0, 0, 0}, 5, Filter{}) }, 2)
+	if len(dense) != 2 || dense[0].ID != "ab01" || dense[0].URL != a || dense[0].Text != "goroutines and channels" || dense[0].Score <= dense[1].Score {
+		t.Errorf("dense hits = %+v", dense)
+	}
+
+	text := waitFor(func() ([]Hit, error) { return m.SearchText(ctx, "goroutine", 5, Filter{}) }, 1)
+	if len(text) != 1 || text[0].ID != "ab01" || text[0].Score <= 0 {
+		t.Errorf("text hits = %+v", text)
+	}
+
+	onlyOther, err := m.SearchDense(ctx, []float32{1, 0, 0, 0}, 5, Filter{Host: "other.example"})
+	if err != nil || len(onlyOther) != 1 || onlyOther[0].Host != "other.example" {
+		t.Errorf("host filter: %+v, %v", onlyOther, err)
+	}
+
+	hostile, err := m.SearchText(ctx, "channels", 5, Filter{Host: `x" or host != "y`})
+	if err != nil || len(hostile) != 0 {
+		t.Errorf("a quote in the host must not widen the filter: %+v, %v", hostile, err)
+	}
+}
+
+func TestSearchRejectsBadQueries(t *testing.T) {
+	m := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := m.SearchDense(ctx, []float32{1, 0}, 5, Filter{}); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("wrong dimension: %v", err)
+	}
+
+	if _, err := m.SearchText(ctx, "", 5, Filter{}); !errors.Is(err, ErrInvalidQuery) {
+		t.Errorf("empty text: %v", err)
+	}
+}

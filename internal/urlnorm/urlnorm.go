@@ -87,11 +87,32 @@ func Canonical(raw string, base *url.URL) (string, bool) {
 // FromUserInput accepts what a person types: a bare "example.com" means https.
 func FromUserInput(raw string) (string, bool) {
 	raw = strings.TrimSpace(raw)
-	if !strings.Contains(raw, "://") && !strings.HasPrefix(raw, "//") {
+	if !hasScheme(raw) && !strings.HasPrefix(raw, "//") {
 		raw = "https://" + raw
 	}
 
 	return Canonical(raw, nil)
+}
+
+// hasScheme tells "mailto:a@b" - a scheme, to be rejected - from "localhost:8080",
+// a host and port. Prefixing the first with https:// would read "mailto:a" as
+// userinfo and turn it into https://b/.
+func hasScheme(raw string) bool {
+	colon := strings.IndexByte(raw, ':')
+	if colon <= 0 {
+		return false
+	}
+
+	for i, r := range raw[:colon] {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		if !letter && (i == 0 || !(r >= '0' && r <= '9' || r == '+' || r == '-' || r == '.')) {
+			return false
+		}
+	}
+
+	rest := raw[colon+1:]
+
+	return rest == "" || rest[0] < '0' || rest[0] > '9'
 }
 
 func canonicalHost(u *url.URL) (string, bool) {

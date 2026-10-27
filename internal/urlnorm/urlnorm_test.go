@@ -112,11 +112,19 @@ func TestFromUserInput(t *testing.T) {
 		"  Example.com/docs ":  "https://example.com/docs",
 		"http://example.com":   "http://example.com/",
 		"https://example.com/": "https://example.com/",
+		"localhost:8080/x":     "https://localhost:8080/x",
+		"example.com:443":      "https://example.com/",
 	}
 
 	for raw, want := range cases {
 		if got, ok := FromUserInput(raw); !ok || got != want {
 			t.Errorf("FromUserInput(%q) = %q, %v; want %q", raw, got, ok, want)
+		}
+	}
+
+	for _, raw := range []string{"mailto:a@example.com", "javascript:void(0)", "ftp://example.com/", "tel:+15551234", ""} {
+		if got, ok := FromUserInput(raw); ok {
+			t.Errorf("FromUserInput(%q) = %q, want rejected", raw, got)
 		}
 	}
 }

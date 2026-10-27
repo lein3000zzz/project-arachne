@@ -1,0 +1,49 @@
+# Smoke test for `make eval`, not a measurement: a handful of queries over the
+# dev crawl (go.dev, ru.wikipedia.org/wiki/Go), judged by one person in minutes.
+# Grades: 3 the answer, 2 relevant, 1 marginal, 0 judged not relevant.
+queries:
+  - id: goroutine-communication
+    query: how do goroutines communicate
+    relevant:
+      go.dev/doc/effective_go: 3
+      go.dev/ref/spec: 2
+      go.dev/blog/goroutine-leak-profiles: 1
+
+  - id: defer-panic-recover
+    query: defer panic recover
+    relevant:
+      go.dev/ref/spec: 3
+      go.dev/doc/effective_go: 3
+
+  - id: goroutine-leak
+    query: finding goroutine leaks
+    relevant:
+      go.dev/blog/goroutine-leak-profiles: 3
+
+  - id: gofix
+    query: automatically modernize old Go code
+    relevant:
+      go.dev/blog/gofix: 3
+      go.dev/blog/inliner: 2
+
+  - id: simd
+    query: SIMD vector instructions in Go
+    relevant:
+      go.dev/blog/simd-experiment: 3
+
+  - id: go-history-ru
+    query: кто создал язык Go и когда
+    relevant:
+      ru.wikipedia.org/wiki/Go: 3
+
+  - id: gc-ru
+    query: сборка мусора
+    relevant:
+      ru.wikipedia.org/wiki/Go: 3
+      go.dev/blog/allocation-optimizations: 1
+
+  - id: release-notes
+    query: Go release history
+    relevant:
+      go.dev/doc/devel/release: 3
+      go.dev/blog/go1.27: 2

@@ -1,8 +1,10 @@
 package appconfig
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"strings"
@@ -75,7 +77,12 @@ func Load(path string) (Config, error) {
 			return cfg, fmt.Errorf("reading %s: %w", file, err)
 		}
 
-		if err := yaml.Unmarshal(raw, &decoded); err != nil {
+		// A misspelled or misplaced key would otherwise be ignored and its setting
+		// silently left at the default.
+		dec := yaml.NewDecoder(bytes.NewReader(raw))
+		dec.KnownFields(true)
+
+		if err := dec.Decode(&decoded); err != nil && !errors.Is(err, io.EOF) {
 			return cfg, fmt.Errorf("parsing %s: %w", file, err)
 		}
 	}

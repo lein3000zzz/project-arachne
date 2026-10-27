@@ -278,3 +278,21 @@ func TestEnsureSchemaRecanonicalizesAfterANormalizerChange(t *testing.T) {
 		t.Errorf("EnsureSchema at the current version = %v, %v; want a no-op", again, err)
 	}
 }
+
+func TestSavePageDrawsNoSelfLoops(t *testing.T) {
+	repo := testRepo(t)
+
+	if _, err := repo.EnsureSchema(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.SavePage(page("https://example.com/doc/", []string{"https://example.com/doc/", "https://example.com/other"}, "https://example.com/doc")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.SavePage(page("https://example.com/doc/", []string{"https://example.com/doc"})); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStrings(t, "self-loops", repo.strings(t, `MATCH (p:Page)-[:LINKS_TO]->(p) RETURN p.url AS v`, nil))
+}
