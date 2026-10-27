@@ -80,6 +80,8 @@ type Rank struct {
 	Damping       float64 `yaml:"damping"`
 	Tolerance     float64 `yaml:"tolerance"`
 	MaxIterations int     `yaml:"max_iterations"`
+	// Placeholder twins asked about per run before ranking; each is one fetch.
+	TwinChecks int `yaml:"twin_checks"`
 }
 
 type Cache struct {
@@ -166,6 +168,7 @@ func Default() Config {
 			Damping:       0.85,
 			Tolerance:     1e-9,
 			MaxIterations: 100,
+			TwinChecks:    500,
 		},
 		Cache: Cache{
 			PageTTL:         Duration(12 * time.Hour),
@@ -221,6 +224,7 @@ func (c *Config) Validate() error {
 		{"retrieval.default_limit", c.Retrieval.DefaultLimit},
 		{"retrieval.max_limit", c.Retrieval.MaxLimit},
 		{"rank.max_iterations", c.Rank.MaxIterations},
+		{"rank.twin_checks", c.Rank.TwinChecks},
 	}
 
 	for _, field := range positive {

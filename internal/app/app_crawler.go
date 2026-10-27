@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 	"web-crawler/internal/appconfig"
 	"web-crawler/internal/domain/config"
@@ -107,6 +108,17 @@ func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run 
 	if !ok {
 		app.logger.Warnw("Dropping run with an unusable start URL", "runID", run.ID, "startURL", run.StartURL)
 		return true
+	}
+
+	if run.Scope != "" {
+		scope, ok := urlnorm.FromUserInput(run.Scope)
+		if !ok || !strings.HasPrefix(startURL, scope) {
+			app.logger.Warnw("Dropping run whose start URL is outside its scope", "runID", run.ID, "startURL", startURL, "scope", run.Scope)
+			return true
+		}
+
+		// Canonical, so it compares with the canonical URLs links are made of.
+		run.Scope = scope
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, 30*time.Second)

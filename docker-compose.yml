@@ -181,13 +181,14 @@ services:
   ollama:
     image: ollama/ollama:0.34.4
     profiles: [ollama]
-    # Embedding takes every core it is given. Capped so a crawl does not pin the
-    # whole machine; raise OLLAMA_CPUS when indexing speed matters more.
-    cpus: ${OLLAMA_CPUS:-4}
+    # Pinned to a few cores to leave the machine usable; `make models` sets the
+    # model's thread count to match (OLLAMA_CPUS). Ollama counts every host core
+    # on its own, and oversubscribed cores make a batch take minutes.
+    cpuset: ${OLLAMA_CPUSET:-0-3}
     mem_limit: ${OLLAMA_MEMORY:-4g}
     environment:
       OLLAMA_KEEP_ALIVE: 24h
-      OLLAMA_NUM_PARALLEL: 4
+      OLLAMA_NUM_PARALLEL: 2
     volumes:
       - ./deployments/opt/ollama:/root/.ollama
     ports:

@@ -3,6 +3,7 @@ package pages
 import (
 	"context"
 	"fmt"
+	"time"
 	"web-crawler/internal/rank"
 
 	"github.com/jackc/pgx/v5"
@@ -177,4 +178,79 @@ func (s *GraphStore) LookupRanks(ctx context.Context, urls []string) (map[string
 	}
 
 	return out, rows.Err()
+}
+
+// Twin is a page never fetched whose URL differs from fetched pages' only by
+// scheme or a trailing slash. Links to it most likely mean one of those pages,
+// but only the server can say which, if any.
+type Twin struct {
+	Placeholder string
+	Fetched     []string
+}
+
+// PlaceholderTwins lists the twins nobody has asked the server about yet.
+func (s *GraphStore) PlaceholderTwins(ctx context.Context, limit int) ([]Twin, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH k AS (
+			SELECT id, url, status, identity_checked_at,
+			       host || regexp_replace(regexp_replace(url, '^https?://[^/]+', ''), '/(\?|$)', '\1') AS key
+			FROM pages
+		)
+		SELECT p.url, array_agg(c.url ORDER BY c.url)
+		FROM k p JOIN k c ON c.key = p.key AND c.id <> p.id
+		WHERE p.status IS NULL AND c.status IS NOT NULL AND p.identity_checked_at IS NULL
+		GROUP BY p.url
+		ORDER BY p.url
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Twin, error) {
+		var twin Twin
+		err := row.Scan(&twin.Placeholder, &twin.Fetched)
+
+		return twin, err
+	})
+}
+
+// ResolveTwin records the server's answer about a placeholder. A different
+// identity makes the placeholder an alias of that page - created if new - and its
+// incoming links move there; the same identity only marks it as checked.
+func (s *GraphStore) ResolveTwin(ctx context.Context, placeholder, identity string) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if identity == "" || identity == placeholder {
+			_, err := tx.Exec(ctx, `UPDATE pages SET identity_checked_at = now() WHERE url = $1`, placeholder)
+			return err
+		}
+
+		if _, err := tx.Exec(ctx, insertPlaceholders, []string{identity}, []string{hostOf(identity)}, time.Now()); err != nil {
+			return err
+		}
+
+		var (
+			oldID    *int64
+			targetID int64
+		)
+
+		// The placeholder may have been crawled meanwhile, and then the crawler
+		// already knows its identity better.
+		if err := tx.QueryRow(ctx, `
+			SELECT (SELECT id FROM pages WHERE url = $1 AND status IS NULL), (SELECT id FROM pages WHERE url = $2)`,
+			placeholder, identity).Scan(&oldID, &targetID); err != nil {
+			return err
+		}
+
+		if oldID == nil {
+			return nil
+		}
+
+		if err := fold(ctx, tx, *oldID, targetID, false); err != nil {
+			return err
+		}
+
+		_, err := tx.Exec(ctx, recordAlias, placeholder, targetID)
+
+		return err
+	})
 }

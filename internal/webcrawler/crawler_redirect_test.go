@@ -37,14 +37,14 @@ func redirectRepo(t *testing.T, page *networker.FetchResult) (*CrawlerRepo, *rec
 
 	sink := &recordingSink{}
 
-	return &CrawlerRepo{
+	return (&CrawlerRepo{
 		logger:      zap.NewNop().Sugar(),
 		parser:      katana,
 		networker:   redirectingNetworker{page: page},
 		cacheRobots: nopCache{},
 		documents:   sink,
 		settings:    appconfig.Default(),
-	}, sink
+	}).withRobots(), sink
 }
 
 const redirectBody = `<html><head><title>Guide</title></head><body><main>

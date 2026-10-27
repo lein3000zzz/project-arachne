@@ -2,12 +2,14 @@
 # Publishes a config.Run to the runs topic. There is no HTTP API, so this is how
 # a crawl gets started.
 #
-# usage: scripts/submit-run.sh <url> [max_depth] [max_links]
+# usage: scripts/submit-run.sh <url> [max_depth] [max_links] [scope]
+# scope: URL prefix every followed page must start with; empty follows links anywhere
 set -euo pipefail
 
 URL="${1:?usage: submit-run.sh <url> [max_depth] [max_links]}"
 MAX_DEPTH="${2:-2}"
 MAX_LINKS="${3:-25}"
+SCOPE="${4:-}"
 
 COMPOSE="${COMPOSE:-docker compose}"
 KAFKA_TOPIC_RUNS="${KAFKA_TOPIC_RUNS:-arachne.runs}"
@@ -17,15 +19,16 @@ USE_CACHE="${USE_CACHE:-true}"
 
 RUN_ID=$(python3 -c 'import secrets; print(secrets.token_hex(20))')
 
-PAYLOAD=$(python3 - "$RUN_ID" "$URL" "$MAX_DEPTH" "$MAX_LINKS" "$USE_CACHE" <<'PY'
+PAYLOAD=$(python3 - "$RUN_ID" "$URL" "$MAX_DEPTH" "$MAX_LINKS" "$USE_CACHE" "$SCOPE" <<'PY'
 import json, sys
-run_id, url, depth, links, use_cache = sys.argv[1:6]
+run_id, url, depth, links, use_cache, scope = sys.argv[1:7]
 print(json.dumps({
     "id": run_id,
     "use_cache_flag": use_cache == "true",
     "max_depth": int(depth),
     "max_links": int(links),
     "start_url": url,
+    "scope": scope,
 }))
 PY
 )
@@ -47,4 +50,4 @@ EOF
       --producer.config /tmp/arachne-client.properties
   ' >/dev/null
 
-echo "submitted run $RUN_ID  url=$URL depth=$MAX_DEPTH links=$MAX_LINKS"
+echo "submitted run $RUN_ID  url=$URL depth=$MAX_DEPTH links=$MAX_LINKS${SCOPE:+ scope=$SCOPE}"

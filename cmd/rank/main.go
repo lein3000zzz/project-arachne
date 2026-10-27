@@ -6,14 +6,21 @@ import (
 	"context"
 	"sort"
 	"time"
+	"web-crawler/internal/networker"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
 	"web-crawler/internal/rank"
+	"web-crawler/internal/robots"
+	"web-crawler/internal/twins"
 
 	"go.uber.org/zap"
 )
 
-const timeout = 30 * time.Minute
+const (
+	timeout = 30 * time.Minute
+	// Twins mostly sit on a handful of hosts; more would hammer them.
+	twinWorkers = 4
+)
 
 func main() {
 	platform.LoadEnv()
@@ -31,6 +38,18 @@ func main() {
 	store := pages.NewGraphStore(pool)
 
 	started := time.Now()
+
+	fetcher := networker.NewNetworker(logger, cfg.Crawler.UserAgent, cfg.Crawler.FetchTimeout.Std())
+	defer fetcher.Stop()
+
+	checker := robots.NewChecker(logger, fetcher, robots.NewMemoryCache(), cfg.Crawler.RobotsAgent(), 0)
+
+	twinStats, err := twins.Resolve(ctx, logger, store, fetcher, checker, cfg.Rank.TwinChecks, twinWorkers)
+	if err != nil {
+		logger.Fatal("Resolving placeholder twins:", err)
+	}
+
+	logger.Infow("Placeholder twins", "checked", twinStats.Checked, "folded", twinStats.Folded, "retryLater", twinStats.Skipped)
 
 	graph, err := store.LoadLinkGraph(ctx)
 	if err != nil {

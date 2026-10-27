@@ -21,7 +21,8 @@ embedding:
   model: qwen3-embedding:0.6b
   # 0 = the model's native size; a smaller value truncates (Matryoshka models only)
   dimensions: 0
-  batch_size: 32
+  # small enough that a batch finishes well inside request_timeout on 4 cores
+  batch_size: 16
   request_timeout: 2m
   max_retries: 4
   # prepended to search queries only; this is Qwen3's web-search instruction,
@@ -33,8 +34,9 @@ vector_store:
   collection_prefix: chunks
 
 indexer:
-  # embedding runs on these workers, never on the crawl workers
-  workers: 4
+  # embedding runs on these workers, never on the crawl workers; on a CPU-bound
+  # embedder more workers only make each request wait longer
+  workers: 2
   queue_size: 64
   # a page that can't be queued in time is skipped and indexed on its next crawl
   enqueue_timeout: 5s
@@ -57,6 +59,9 @@ rank:
   # iteration stops once the scores move less than this in total (L1)
   tolerance: 1.0e-9
   max_iterations: 100
+  # never-fetched pages differing from a fetched one only by scheme or trailing
+  # slash; each is fetched once to ask whether it redirects there
+  twin_checks: 500
 
 cache:
   page_ttl: 12h

@@ -17,12 +17,11 @@ import (
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/parser"
 	"web-crawler/internal/processor"
+	"web-crawler/internal/robots"
 	"web-crawler/internal/urlnorm"
-	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
 
-	"github.com/jimsmart/grobotstxt"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -34,6 +33,7 @@ type CrawlerRepo struct {
 	extraWorker     sugaredworker.SugaredWorker
 	cachePages      cache.CachedStorage
 	cacheRobots     cache.CachedStorage
+	robots          *robots.Checker
 	runStateManager runstates.RunStateManager
 	documents       documents.Sink
 	settings        appconfig.Config
@@ -60,6 +60,7 @@ func NewCrawlerRepo(
 		extraWorker:     extraWorker,
 		cachePages:      cachePages,
 		cacheRobots:     cacheRobots,
+		robots:          robots.NewChecker(logger, networker, cacheRobots, settings.Crawler.RobotsAgent(), settings.Cache.RobotsTTL.Std()),
 		runStateManager: runStateManager,
 		documents:       documentSink,
 		settings:        settings,
@@ -169,6 +170,10 @@ func (repo *CrawlerRepo) sendChildren(parent *config.Task, links []string) error
 	var failed error
 
 	for _, link := range links {
+		if !parent.Run.InScope(link) {
+			continue
+		}
+
 		child := &config.Task{URL: link, CurrentDepth: parent.CurrentDepth + 1, Run: parent.Run}
 
 		err := repo.cfg.TaskSender.SendTask(child)
@@ -381,40 +386,7 @@ func (repo *CrawlerRepo) getCachedPage(task *config.Task) (*data.PageData, error
 }
 
 func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {
-	baseURL, err := utils.GetBaseURL(urlToCheck)
-	if err != nil {
-		repo.logger.Errorw("Failed to get robots URL", "url", urlToCheck, "err", err)
-		return false
-	}
-
-	robots, errRobotsCache := repo.cacheRobots.Get(baseURL)
-	if errRobotsCache == nil {
-		repo.logger.Infow("Robots cache hit", "url", urlToCheck)
-		return grobotstxt.AgentAllowed(robots, repo.settings.Crawler.RobotsAgent(), urlToCheck)
-	}
-
-	repo.logger.Warnw("cache miss or some other redis error", "errCache", errRobotsCache)
-
-	robotsURL := baseURL + "/robots.txt"
-	responseData, errFetch := repo.networker.Fetch(robotsURL)
-	if errFetch != nil {
-		repo.logger.Errorw("failed to fetch robots", "url", robotsURL, "err", errFetch)
-		return false
-	}
-
-	if responseData.Status == http.StatusNotFound {
-		repo.logger.Warnw("robots URL not found", "url", robotsURL)
-		return true
-	}
-
-	robots = string(responseData.Body)
-
-	errSaveCache := repo.cacheRobots.Set(baseURL, string(responseData.Body), repo.settings.Cache.RobotsTTL.Std())
-	if errSaveCache != nil {
-		repo.logger.Warnw("failed to save cache", "url", baseURL, "err", errSaveCache)
-	}
-
-	return grobotstxt.AgentAllowed(robots, repo.settings.Crawler.RobotsAgent(), urlToCheck)
+	return repo.robots.Allowed(urlToCheck)
 }
 
 // Shutdown expects the task input to be closed already: workers only exit when it

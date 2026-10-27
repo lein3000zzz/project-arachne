@@ -32,6 +32,12 @@ EMBEDDING_API_KEY  ?=
 MILVUS_TOKEN       ?=
 EMBEDDER ?= $(if $(EMBEDDING_BASE_URL),external,$(or $(shell sed -n 's/^EMBEDDER=//p' $(ENV_FILE) 2>/dev/null),ollama))
 EMBEDDER_SERVICE := $(filter $(EMBEDDER),$(EMBEDDERS))
+
+# Cores the bundled Ollama may use. It is pinned to them and told to start as
+# many threads: it counts every host core otherwise, and more threads than cores
+# makes embedding many times slower, not faster.
+OLLAMA_CPUS ?= 4
+export OLLAMA_CPUSET := 0-$(shell expr $(OLLAMA_CPUS) - 1)
 export COMPOSE_PROFILES := $(EMBEDDER_SERVICE)
 
 INFRA := vault postgres redis broker jaeger milvus $(EMBEDDER_SERVICE)
@@ -64,7 +70,7 @@ help:
 	@echo "make up        full stack in docker (crawler included)"
 	@echo "make dev       infra only, addressed for a host-run crawler"
 	@echo "make run       go run the crawler on the host (after make dev)"
-	@echo "make crawl URL=https://example.com/ [DEPTH=2] [LINKS=25]"
+	@echo "make crawl URL=https://example.com/ [DEPTH=2] [LINKS=25] [SCOPE=https://example.com/docs/]"
 	@echo "make rank      recompute page and site PageRank from the link graph"
 	@echo "make eval [DATASET=eval/sample.yml] [OUT=results.json]   nDCG/MRR/recall per mode"
 	@echo "make search Q=\"query\" [MODE=hybrid|dense|bm25] [HOST=go.dev] [LIMIT=10]"
@@ -140,18 +146,21 @@ eval:
 crawl:
 	@COMPOSE="$(COMPOSE)" KAFKA_TOPIC_RUNS=$(KAFKA_TOPIC_RUNS) \
 		KAFKA_USERNAME=$(KAFKA_USERNAME) KAFKA_PASSWORD=$(KAFKA_PASSWORD) \
-		scripts/submit-run.sh "$(or $(URL),https://example.com/)" $(or $(DEPTH),2) $(or $(LINKS),25)
+		scripts/submit-run.sh "$(or $(URL),https://example.com/)" $(or $(DEPTH),2) $(or $(LINKS),25) "$(SCOPE)"
 
 vault-bootstrap: env
 	$(BOOTSTRAP) $(or $(PROFILE),docker)
 
 # Ollama pulls on demand; a no-op when the model is present. vLLM downloads the
 # model itself on its first start, into deployments/opt/huggingface.
+# A pull resets the model's parameters, so num_thread is set again after it, and
+# the model unloaded so the next request loads it with the new value.
 models:
 ifeq ($(EMBEDDER),ollama)
 	@$(COMPOSE) exec -T ollama ollama pull $(EMBEDDING_MODEL) >/dev/null
+	@$(COMPOSE) exec -T ollama sh -c 'printf "FROM %s\nPARAMETER num_thread %s\n" "$(EMBEDDING_MODEL)" "$(OLLAMA_CPUS)" > /tmp/Modelfile && ollama create "$(EMBEDDING_MODEL)" -f /tmp/Modelfile >/dev/null && ollama stop "$(EMBEDDING_MODEL)" 2>/dev/null || true'
 endif
-	@echo "embedding model '$(EMBEDDING_MODEL)' ready ($(EMBEDDER))"
+	@echo "embedding model '$(EMBEDDING_MODEL)' ready ($(EMBEDDER)$(if $(filter ollama,$(EMBEDDER)), on $(OLLAMA_CPUS) cores))"
 
 stop-other-embedders:
 	@COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) \

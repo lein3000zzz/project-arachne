@@ -12,7 +12,7 @@ import (
 func shutdownRepo() (*CrawlerRepo, *recordingSink) {
 	sink := &recordingSink{}
 
-	repo := &CrawlerRepo{
+	repo := (&CrawlerRepo{
 		logger:      zap.NewNop().Sugar(),
 		networker:   nopNetworker{},
 		extraWorker: nopExtra{},
@@ -20,7 +20,7 @@ func shutdownRepo() (*CrawlerRepo, *recordingSink) {
 		cacheRobots: nopCache{},
 		documents:   sink,
 		cfg:         &CrawlerConfig{},
-	}
+	}).withRobots()
 
 	return repo, sink
 }

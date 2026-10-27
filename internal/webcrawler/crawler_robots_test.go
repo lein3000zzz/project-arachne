@@ -21,12 +21,12 @@ func robotsRepo(robots string) *CrawlerRepo {
 	settings := appconfig.Default()
 	settings.Crawler.UserAgent = "project-arachne/0.1 (+https://example.com/bot)"
 
-	return &CrawlerRepo{
+	return (&CrawlerRepo{
 		logger:      zap.NewNop().Sugar(),
 		networker:   robotsNetworker{body: robots},
 		cacheRobots: nopCache{},
 		settings:    settings,
-	}
+	}).withRobots()
 }
 
 func TestRobotsRulesMatchOurProductName(t *testing.T) {

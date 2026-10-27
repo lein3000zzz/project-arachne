@@ -118,7 +118,7 @@ func newHarness(links ...string) *taskHarness {
 	log := &eventLog{}
 	state := &fakeRunState{log: log, state: runstates.TaskState{RunActive: true}, left: 5, counted: true}
 
-	repo := &CrawlerRepo{
+	repo := (&CrawlerRepo{
 		logger:          zap.NewNop().Sugar(),
 		parser:          linkParser{links: links},
 		networker:       pageNetworker{},
@@ -129,7 +129,7 @@ func newHarness(links ...string) *taskHarness {
 		documents:       &recordingSink{},
 		settings:        appconfig.Default(),
 		cfg:             &CrawlerConfig{TaskSender: &fakeSender{log: log}},
-	}
+	}).withRobots()
 
 	task := &config.Task{URL: "https://example.com/", Run: &config.Run{ID: "run", MaxDepth: 3, MaxLinks: 100}}
 	task.SetAck(func() { log.add("ack") })
@@ -277,5 +277,16 @@ func TestFailedFetchStillCompletes(t *testing.T) {
 
 	if got := h.run(); !slices.Equal(got, []string{"complete", "ack"}) {
 		t.Errorf("events = %v: an unreachable page is finished, not retried forever", got)
+	}
+}
+
+func TestChildrenOutsideTheScopeAreNotFollowed(t *testing.T) {
+	h := newHarness("https://example.com/docs/a", "https://example.com/blog/b", "https://other.example/docs/c")
+	h.task.URL = "https://example.com/docs/"
+	h.task.Run.Scope = "https://example.com/docs/"
+
+	want := []string{"send https://example.com/docs/a", "complete", "ack"}
+	if got := h.run(); !slices.Equal(got, want) {
+		t.Errorf("events = %v, want %v", got, want)
 	}
 }

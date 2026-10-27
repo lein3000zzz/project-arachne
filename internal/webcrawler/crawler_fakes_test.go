@@ -7,6 +7,7 @@ import (
 	"web-crawler/internal/domain/config"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
+	"web-crawler/internal/robots"
 )
 
 type nopNetworker struct{}
@@ -27,3 +28,10 @@ type nopCache struct{}
 func (nopCache) Set(string, any, time.Duration) error { return nil }
 func (nopCache) Get(string) (string, error)           { return "", errors.New("miss") }
 func (nopCache) Stop(context.Context) error           { return nil }
+
+// withRobots does what NewCrawlerRepo does for repos the tests build field by field.
+func (repo *CrawlerRepo) withRobots() *CrawlerRepo {
+	repo.robots = robots.NewChecker(repo.logger, repo.networker, repo.cacheRobots, repo.settings.Crawler.RobotsAgent(), 0)
+
+	return repo
+}

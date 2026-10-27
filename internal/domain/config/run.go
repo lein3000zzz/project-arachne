@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"web-crawler/internal/utils"
 )
 
@@ -15,8 +16,15 @@ type Run struct {
 	ExtraFlags   *ExtraTaskFlags `json:"extra_flags,omitempty"`
 
 	StartURL string `json:"start_url"`
+	// URL prefix every followed page must start with; empty follows links anywhere.
+	// Links out of scope are still recorded in the graph, only not fetched.
+	Scope string `json:"scope,omitempty"`
 
 	ack func()
+}
+
+func (r *Run) InScope(url string) bool {
+	return r.Scope == "" || strings.HasPrefix(url, r.Scope)
 }
 
 func (r *Run) SetAck(ack func()) {

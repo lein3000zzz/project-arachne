@@ -313,3 +313,58 @@ func TestGraphStoreRoundTrip(t *testing.T) {
 		t.Errorf("rank_runs = %d, %v", runs, err)
 	}
 }
+
+func TestPlaceholderTwinsResolve(t *testing.T) {
+	repo := testRepo(t)
+	store := NewGraphStore(repo.pool)
+	ctx := context.Background()
+
+	repo.save(t, page("https://example.com/", []string{
+		"https://example.com/learn", "https://example.com/help/", "http://example.com/docs/?v=1", "https://example.com/solo",
+	}, nil))
+	repo.save(t, page("https://example.com/learn/", nil, nil))
+	repo.save(t, page("https://example.com/help", nil, nil))
+	repo.save(t, page("https://example.com/docs?v=1", nil, nil))
+
+	twins, err := store.PlaceholderTwins(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+	for _, twin := range twins {
+		got[twin.Placeholder] = fmt.Sprint(twin.Fetched)
+	}
+
+	want := map[string]string{
+		"https://example.com/learn":    "[https://example.com/learn/]",
+		"https://example.com/help/":    "[https://example.com/help]",
+		"http://example.com/docs/?v=1": "[https://example.com/docs?v=1]",
+	}
+
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("twins = %v, want %v", got, want)
+	}
+
+	if err := store.ResolveTwin(ctx, "https://example.com/learn", "https://example.com/learn/"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ResolveTwin(ctx, "https://example.com/help/", "https://example.com/help/"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStrings(t, "links of / after resolving", repo.strings(t, linksOf, "https://example.com/"),
+		"https://example.com/learn/ 1", "https://example.com/help/ 1", "http://example.com/docs/?v=1 1", "https://example.com/solo 1")
+
+	assertStrings(t, "aliases", repo.strings(t, `SELECT url FROM aliases`), "https://example.com/learn")
+
+	again, err := store.PlaceholderTwins(ctx, 10)
+	if err != nil || len(again) != 1 || again[0].Placeholder != "http://example.com/docs/?v=1" {
+		t.Errorf("after resolving: %+v, %v; checked placeholders must not come back", again, err)
+	}
+
+	repo.save(t, page("https://example.com/", []string{"https://example.com/learn"}, nil))
+
+	assertStrings(t, "a later link to the alias", repo.strings(t, linksOf, "https://example.com/"), "https://example.com/learn/ 1")
+}

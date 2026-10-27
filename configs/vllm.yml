@@ -3,3 +3,8 @@
 # name also gives it its own Milvus collection.
 embedding:
   model: Qwen/Qwen3-Embedding-0.6B
+  batch_size: 32
+
+# The server has the cores to spare; config.yml is sized for a laptop.
+indexer:
+  workers: 4

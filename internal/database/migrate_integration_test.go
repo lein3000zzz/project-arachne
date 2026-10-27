@@ -4,6 +4,7 @@ package database_test
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 	"web-crawler/internal/database"
@@ -35,7 +36,12 @@ func TestMigrateIsSafeToRunConcurrentlyAndAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if applied != 1 {
-		t.Errorf("%d migrations recorded, want 1", applied)
+	files, err := filepath.Glob("migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if applied != len(files) {
+		t.Errorf("%d migrations recorded, want %d: each applied exactly once", applied, len(files))
 	}
 }
