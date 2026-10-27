@@ -71,6 +71,16 @@
         </select>
       </label>
       <label>Site <input id="host" type="text" placeholder="any, or e.g. go.dev"></label>
+      <label><input id="rerank" type="checkbox" checked> Rerank</label>
+      <label>PageRank weight
+        <select id="pagerank">
+          <option value="">default</option>
+          <option value="0">0</option>
+          <option value="0.25">0.25</option>
+          <option value="0.5">0.5</option>
+          <option value="1">1</option>
+        </select>
+      </label>
     </div>
   </form>
 
@@ -105,7 +115,9 @@ function el(tag, attrs, ...children) {
 const fmt = (x, digits) => Number(x).toPrecision(digits);
 
 function signals(r) {
-  const out = [el("span", {}, "score ", el("b", {}, fmt(r.score, 4)))];
+  const out = [];
+  if (r.rerank) out.push(el("span", {}, "rerank #", el("b", {}, r.rerank.rank), " · ", fmt(r.rerank.score, 3)));
+  out.push(el("span", {}, "fused ", el("b", {}, fmt(r.score, 4))));
   if (r.dense) out.push(el("span", {}, "dense #", el("b", {}, r.dense.rank), " · ", fmt(r.dense.score, 3)));
   if (r.bm25) out.push(el("span", {}, "bm25 #", el("b", {}, r.bm25.rank), " · ", fmt(r.bm25.score, 3)));
   if (r.pagerank) out.push(el("span", {}, "pagerank ", el("b", {}, fmt(r.pagerank.page, 3)), " · site ", fmt(r.pagerank.site, 3)));
@@ -153,6 +165,9 @@ function flash(n) {
 function params() {
   const p = new URLSearchParams({ q: $("q").value.trim(), mode: $("mode").value });
   if ($("host").value.trim()) p.set("host", $("host").value.trim());
+  // Checked leaves the server's default, so a stack without a reranker still works.
+  if (!$("rerank").checked) p.set("rerank", "false");
+  if ($("pagerank").value !== "") p.set("pagerank", $("pagerank").value);
   return p;
 }
 

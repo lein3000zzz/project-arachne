@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"web-crawler/internal/rank"
@@ -63,7 +64,7 @@ func hit(url string, score float32, text string) vectorstore.Hit {
 func newRetriever(t *testing.T, store *fakeStore, embedder *fakeEmbedder) *Retriever {
 	t.Helper()
 
-	r, err := New(embedder, store, nil, Config{QueryPrefix: "Query: ", Candidates: 50, RRFK: 60})
+	r, err := New(embedder, store, nil, nil, Config{QueryPrefix: "Query: ", Candidates: 50, RRFK: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +142,7 @@ func TestSingleModesRankByTheirOwnScore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := urls(dense); got[0] != "a" || dense[0].Score != float64(float32(0.9)) || dense[0].BM25 != nil {
+	if got := urls(dense); got[0] != "a" || dense[0].Score != 0.9 || dense[0].BM25 != nil {
 		t.Errorf("dense = %+v", dense)
 	}
 
@@ -225,7 +226,7 @@ func TestSearchAttachesRanksWithoutReordering(t *testing.T) {
 	store := &fakeStore{dense: []vectorstore.Hit{hit("a", 0.9, ""), hit("b", 0.5, "")}}
 	ranks := fakeRanks{scores: map[string]rank.Scores{"b": {Page: 0.9, Site: 0.8}}}
 
-	r, err := New(&fakeEmbedder{}, store, ranks, Config{Candidates: 10, RRFK: 60})
+	r, err := New(&fakeEmbedder{}, store, ranks, nil, Config{Candidates: 10, RRFK: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,8 +244,132 @@ func TestSearchAttachesRanksWithoutReordering(t *testing.T) {
 		t.Errorf("ranks = %+v, %+v", results[0].PageRank, results[1].PageRank)
 	}
 
-	failing, _ := New(&fakeEmbedder{}, store, fakeRanks{err: errors.New("postgres down")}, Config{Candidates: 10, RRFK: 60})
+	failing, _ := New(&fakeEmbedder{}, store, fakeRanks{err: errors.New("postgres down")}, nil, Config{Candidates: 10, RRFK: 60})
 	if _, err := failing.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense}); err == nil {
 		t.Error("a failed rank lookup must fail the search, not drop the scores silently")
+	}
+}
+
+type fakeReranker struct {
+	scores map[string]float64
+	docs   []string
+	err    error
+}
+
+func (f *fakeReranker) Model() string { return "fake-reranker" }
+
+func (f *fakeReranker) Rerank(_ context.Context, _ string, docs []string) ([]float64, error) {
+	f.docs = docs
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	out := make([]float64, len(docs))
+	for i, d := range docs {
+		for key, score := range f.scores {
+			if strings.HasPrefix(d, "T "+key+"\n") {
+				out[i] = score
+			}
+		}
+	}
+
+	return out, nil
+}
+
+func TestPageRankJoinsTheFusionOnlyWithAWeight(t *testing.T) {
+	store := &fakeStore{
+		dense: []vectorstore.Hit{hit("a", 0.9, ""), hit("b", 0.8, ""), hit("c", 0.7, "")},
+		text:  []vectorstore.Hit{hit("a", 9, ""), hit("b", 8, ""), hit("c", 7, "")},
+	}
+	ranks := fakeRanks{scores: map[string]rank.Scores{
+		"a": {Page: 0.1, Site: 0.5}, "b": {Page: 0.2, Site: 0.5}, "c": {Page: 0.9, Site: 0.5},
+	}}
+
+	r, err := New(&fakeEmbedder{}, store, ranks, nil, Config{Candidates: 10, RRFK: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plain, _ := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeHybrid})
+	if got := urls(plain); got[0] != "a" {
+		t.Errorf("without a weight the order is retrieval's: %v", got)
+	}
+
+	heavy := 10.0
+	weighted, err := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeHybrid, PageRankWeight: &heavy})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := urls(weighted); got[0] != "c" {
+		t.Errorf("a heavy page-rank weight puts the most linked page first: %v", got)
+	}
+
+	// Equal site scores share rank 1: the site list adds the same to everyone.
+	site := 10.0
+	siteOnly, _ := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeHybrid, SiteRankWeight: &site})
+	if got := urls(siteOnly); got[0] != "a" || got[2] != "c" {
+		t.Errorf("one site, one rank: order must not change: %v", got)
+	}
+
+	bm25, _ := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeBM25, PageRankWeight: &heavy})
+	// c is third by BM25 and first by page rank: 1/(1+3) + 10/(1+1), not BM25's 7.
+	if got := urls(bm25); got[0] != "c" || math.Abs(bm25[0].Score-(1.0/4+10.0/2)) > 1e-12 {
+		t.Errorf("a single list joins the fusion as its RRF term, not raw BM25: %v %v", got, bm25[0].Score)
+	}
+
+	negative := -1.0
+	if _, err := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeHybrid, PageRankWeight: &negative}); !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("negative weight: %v", err)
+	}
+}
+
+func TestRerankReordersTheTopCandidates(t *testing.T) {
+	store := &fakeStore{dense: []vectorstore.Hit{
+		hit("a", 0.9, "alpha"), hit("b", 0.8, "beta"), hit("c", 0.7, "gamma"), hit("d", 0.6, "delta"),
+	}}
+	reranker := &fakeReranker{scores: map[string]float64{"a": 0.1, "b": 0.3, "c": 0.9}}
+
+	r, err := New(&fakeEmbedder{}, store, nil, reranker, Config{Candidates: 10, RRFK: 60, RerankByDefault: true, RerankCandidates: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := urls(results); strings.Join(got, "") != "cbad" {
+		t.Errorf("order = %v: the top 3 by reranker, then the rest in fusion order", got)
+	}
+
+	if results[0].Rerank == nil || results[0].Rerank.Rank != 1 || results[0].Rerank.Score != 0.9 || results[3].Rerank != nil {
+		t.Errorf("rerank signals: %+v / %+v", results[0].Rerank, results[3].Rerank)
+	}
+
+	if results[0].Dense.Rank != 3 {
+		t.Errorf("the dense signal keeps its own rank: %+v", results[0].Dense)
+	}
+
+	if len(reranker.docs) != 3 || reranker.docs[0] != "T a\n\nalpha" {
+		t.Errorf("reranker saw %q: title and best chunk, without the duplicated title", reranker.docs)
+	}
+
+	off := false
+	plain, _ := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense, Rerank: &off})
+	if got := urls(plain); strings.Join(got, "") != "abcd" || plain[0].Rerank != nil {
+		t.Errorf("rerank=false: %v", got)
+	}
+
+	reranker.err = errors.New("reranker down")
+	if _, err := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense}); err == nil {
+		t.Error("a failed rerank must fail the search, not quietly return another order")
+	}
+
+	none, _ := New(&fakeEmbedder{}, store, nil, nil, Config{Candidates: 10, RRFK: 60})
+	on := true
+	if _, err := none.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense, Rerank: &on}); !errors.Is(err, ErrNoReranker) {
+		t.Errorf("rerank requested without a reranker: %v", err)
 	}
 }

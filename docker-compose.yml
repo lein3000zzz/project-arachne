@@ -56,6 +56,9 @@ services:
       vllm:
         condition: service_healthy
         required: false
+      reranker:
+        condition: service_healthy
+        required: false
 
   # One-shot: `make rank`. Built from the search image, which carries both binaries.
   rank:
@@ -182,9 +185,9 @@ services:
     image: ollama/ollama:0.34.4
     profiles: [ollama]
     # Pinned to a few cores to leave the machine usable; `make models` sets the
-    # model's thread count to match (OLLAMA_CPUS). Ollama counts every host core
+    # model's thread count to match (MODEL_CPUS). Ollama counts every host core
     # on its own, and oversubscribed cores make a batch take minutes.
-    cpuset: ${OLLAMA_CPUSET:-0-3}
+    cpuset: ${MODEL_CPUSET:-0-3}
     # the embedding model and the chat model with its 8k context, both loaded
     mem_limit: ${OLLAMA_MEMORY:-8g}
     environment:
@@ -199,6 +202,32 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
+
+  reranker:
+    # llama.cpp's server: /v1/rerank in the shape vLLM, Jina and Cohere share.
+    # Off when RERANK_BASE_URL points elsewhere.
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:8ee4ec7ce58a921313d07390c6699af13aa5ec083f3cdf67e5f4155767047373
+    profiles: [reranker]
+    # A cross-encoder reads query and document together, so every pair must fit
+    # one batch: 4 slots of 2048 tokens; documents are cut to 2000 runes.
+    command: ["-hf", "${RERANK_HF_MODEL:-gpustack/bge-reranker-v2-m3-GGUF:Q8_0}", "--reranking",
+              "--host", "0.0.0.0", "--port", "8080", "-t", "${MODEL_CPUS:-4}",
+              "-c", "8192", "-np", "4", "-b", "2048", "-ub", "2048"]
+    cpuset: ${MODEL_CPUSET:-0-3}
+    mem_limit: 2g
+    environment:
+      # Downloaded on the first start.
+      LLAMA_CACHE: /models
+    volumes:
+      - ./deployments/opt/llamacpp:/models
+    ports:
+      - "8002:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10m
 
   vllm:
     # vllm-openai-cpu v0.30.0, amd64 and arm64. Its CPU kernels are tuned for x86

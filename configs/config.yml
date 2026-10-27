@@ -48,6 +48,20 @@ retrieval:
   rrf_k: 60
   default_limit: 10
   max_limit: 100
+  # page and site PageRank as extra RRF lists; 0 = scores shown, order unchanged
+  pagerank_weight: 0
+  siterank_weight: 0
+
+rerank:
+  # cross-encoder over the rerank API (llama.cpp, vLLM, Jina, Cohere); the
+  # endpoint and key are in Vault (RERANK_BASE_URL, RERANK_API_KEY)
+  enabled: true
+  model: bge-reranker-v2-m3
+  # top fused pages reordered; cost is linear in this - about 0.23 s per page
+  # on 4 cores with bge-reranker-v2-m3
+  candidates: 10
+  request_timeout: 60s
+  max_retries: 2
 
 search:
   listen: ":8090"

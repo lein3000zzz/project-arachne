@@ -7,4 +7,5 @@ var (
 	ErrInvalidRequest = errors.New("invalid search request")
 	ErrEmptyQuery     = errors.New("empty query")
 	ErrUnknownMode    = errors.New("unknown search mode")
+	ErrNoReranker     = errors.New("reranking requested, but no reranker is configured")
 )

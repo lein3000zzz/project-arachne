@@ -4,11 +4,16 @@
 # They differ only in the addresses seeded into Vault, so switching profiles
 # re-seeds; both are idempotent.
 
+comma := ,
+space := $(subst ,, )
+
 COMPOSE      ?= docker compose
 COMPOSE_HOST := $(COMPOSE) -f docker-compose.yml -f deployments/compose.host.yml
 GO           ?= go
 ENV_FILE     ?= main.env
 EMBEDDERS    := ollama vllm
+# Every optional profile, so down and reset stop whatever a previous run started.
+ALL_PROFILES := ollama,vllm,reranker,tools
 # Not waited on: nothing depends on the UI, and it fails its first start whenever
 # it beats the broker up.
 UI           := kafka-ui
@@ -33,17 +38,22 @@ MILVUS_TOKEN       ?=
 EMBEDDER ?= $(if $(EMBEDDING_BASE_URL),external,$(or $(shell sed -n 's/^EMBEDDER=//p' $(ENV_FILE) 2>/dev/null),ollama))
 EMBEDDER_SERVICE := $(filter $(EMBEDDER),$(EMBEDDERS))
 
-# Cores the bundled Ollama may use. It is pinned to them and told to start as
-# many threads: it counts every host core otherwise, and more threads than cores
-# makes embedding many times slower, not faster.
-OLLAMA_CPUS ?= 4
-export OLLAMA_CPUSET := 0-$(shell expr $(OLLAMA_CPUS) - 1)
-export COMPOSE_PROFILES := $(EMBEDDER_SERVICE)
+# Cores the bundled models (Ollama, the reranker) may use. They are pinned to
+# them and told to start as many threads: left alone they count every host
+# core, and more threads than cores makes them many times slower, not faster.
+MODEL_CPUS ?= $(or $(OLLAMA_CPUS),4)
+export MODEL_CPUS
+export MODEL_CPUSET := 0-$(shell expr $(MODEL_CPUS) - 1)
 
-INFRA := vault postgres redis broker jaeger milvus $(EMBEDDER_SERVICE)
+# Reranker: the bundled llama.cpp server unless RERANK_BASE_URL points elsewhere.
+RERANK_BASE_URL ?=
+RERANK_API_KEY  ?=
+RERANKER_SERVICE := $(if $(RERANK_BASE_URL),,reranker)
 
-comma := ,
-space := $(subst ,, )
+export COMPOSE_PROFILES := $(subst $(space),$(comma),$(strip $(EMBEDDER_SERVICE) $(RERANKER_SERVICE)))
+
+INFRA := vault postgres redis broker jaeger milvus $(EMBEDDER_SERVICE) $(RERANKER_SERVICE)
+
 CONFIG_OVERLAY_vllm := ,configs/vllm.yml
 CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
 
@@ -75,6 +85,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	EMBEDDING_BASE_URL="$(EMBEDDING_BASE_URL)" EMBEDDING_API_KEY="$(EMBEDDING_API_KEY)" \
 	MILVUS_TOKEN="$(MILVUS_TOKEN)" \
 	CHAT_BASE_URL="$(CHAT_BASE_URL)" CHAT_API_KEY="$(CHAT_API_KEY)" \
+	RERANK_BASE_URL="$(RERANK_BASE_URL)" RERANK_API_KEY="$(RERANK_API_KEY)" \
 	scripts/vault-bootstrap.sh
 
 .PHONY: help up dev run crawl search eval rank down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
@@ -99,7 +110,7 @@ help:
 	@echo "         make up CONFIG_PATH=configs/other.yml to use another file"
 	@echo ""
 	@echo "embedder (remembered in $(ENV_FILE), now: $(EMBEDDER)):"
-	@echo "         make up EMBEDDER=ollama   bundled Ollama, fastest on Apple Silicon (OLLAMA_CPUS=4 by default)"
+	@echo "         make up EMBEDDER=ollama   bundled Ollama, fastest on Apple Silicon (MODEL_CPUS=4 by default)"
 	@echo "         make up EMBEDDER=vllm     bundled vLLM (CPU), for x86 servers"
 	@echo "         make up EMBEDDING_BASE_URL=https://... [EMBEDDING_API_KEY=...]   external"
 	@echo ""
@@ -107,6 +118,8 @@ help:
 	@echo "         make up                   local $(CHAT_MODEL) on the bundled Ollama"
 	@echo "         make up CONFIG_PATH=configs/config.yml,configs/chat-anthropic.yml \\"
 	@echo "                 CHAT_BASE_URL=https://api.anthropic.com/v1 CHAT_API_KEY=..."
+	@echo ""
+	@echo "reranker: bundled llama.cpp (bge-reranker-v2-m3), or RERANK_BASE_URL=... [RERANK_API_KEY=...]"
 	@echo ""
 	@echo "UI: kafka-ui http://localhost:8080  jaeger http://localhost:16686"
 	@echo "    postgres localhost:5432          vault  http://localhost:8200"
@@ -176,15 +189,15 @@ vault-bootstrap: env
 models:
 ifeq ($(EMBEDDER),ollama)
 	@$(COMPOSE) exec -T ollama ollama pull $(EMBEDDING_MODEL) >/dev/null
-	@$(COMPOSE) exec -T ollama sh -c 'printf "FROM %s\nPARAMETER num_thread %s\n" "$(EMBEDDING_MODEL)" "$(OLLAMA_CPUS)" > /tmp/Modelfile && ollama create "$(EMBEDDING_MODEL)" -f /tmp/Modelfile >/dev/null && ollama stop "$(EMBEDDING_MODEL)" 2>/dev/null || true'
+	@$(COMPOSE) exec -T ollama sh -c 'printf "FROM %s\nPARAMETER num_thread %s\n" "$(EMBEDDING_MODEL)" "$(MODEL_CPUS)" > /tmp/Modelfile && ollama create "$(EMBEDDING_MODEL)" -f /tmp/Modelfile >/dev/null && ollama stop "$(EMBEDDING_MODEL)" 2>/dev/null || true'
 endif
 ifeq ($(CHAT_LOCAL),yes)
 	@$(COMPOSE) exec -T ollama ollama pull $(CHAT_MODEL) >/dev/null
 	@# Ollama's default 4k context would silently cut off the sources.
-	@$(COMPOSE) exec -T ollama sh -c 'printf "FROM %s\nPARAMETER num_thread %s\nPARAMETER num_ctx 8192\n" "$(CHAT_MODEL)" "$(OLLAMA_CPUS)" > /tmp/Modelfile && ollama create "$(CHAT_MODEL)" -f /tmp/Modelfile >/dev/null && ollama stop "$(CHAT_MODEL)" 2>/dev/null || true'
-	@echo "chat model '$(CHAT_MODEL)' ready (ollama on $(OLLAMA_CPUS) cores)"
+	@$(COMPOSE) exec -T ollama sh -c 'printf "FROM %s\nPARAMETER num_thread %s\nPARAMETER num_ctx 8192\n" "$(CHAT_MODEL)" "$(MODEL_CPUS)" > /tmp/Modelfile && ollama create "$(CHAT_MODEL)" -f /tmp/Modelfile >/dev/null && ollama stop "$(CHAT_MODEL)" 2>/dev/null || true'
+	@echo "chat model '$(CHAT_MODEL)' ready (ollama on $(MODEL_CPUS) cores)"
 endif
-	@echo "embedding model '$(EMBEDDING_MODEL)' ready ($(EMBEDDER)$(if $(filter ollama,$(EMBEDDER)), on $(OLLAMA_CPUS) cores))"
+	@echo "embedding model '$(EMBEDDING_MODEL)' ready ($(EMBEDDER)$(if $(filter ollama,$(EMBEDDER)), on $(MODEL_CPUS) cores))"
 
 stop-other-embedders:
 	@COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) \
@@ -201,10 +214,10 @@ ps:
 
 # Every profile, so an embedder left over from a switch is stopped too.
 down:
-	COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) $(COMPOSE) down
+	COMPOSE_PROFILES=$(ALL_PROFILES) $(COMPOSE) down
 
 reset:
-	COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) $(COMPOSE) down -v --remove-orphans
+	COMPOSE_PROFILES=$(ALL_PROFILES) $(COMPOSE) down -v --remove-orphans
 	rm -rf deployments/opt output
 	rm -f $(ENV_FILE)
 	@echo "reset done. next: make up"

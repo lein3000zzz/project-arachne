@@ -12,6 +12,7 @@ import (
 	"web-crawler/internal/database"
 	"web-crawler/internal/embedding"
 	"web-crawler/internal/llm"
+	"web-crawler/internal/rerank"
 	"web-crawler/internal/vectorstore"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -206,6 +207,29 @@ func NewChatClient(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.S
 	})
 	if err != nil {
 		logger.Fatal("Error initializing the chat model:", err)
+	}
+
+	return client
+}
+
+// NewReranker returns nil when no reranker endpoint is configured: search then
+// runs without reranking.
+func NewReranker(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) *rerank.Client {
+	baseURL, err := sm.GetSecretStringFromConfig("RERANK_BASE_URL")
+	if err != nil || baseURL == "" {
+		logger.Warn("RERANK_BASE_URL is not in Vault; reranking is disabled")
+		return nil
+	}
+
+	client, err := rerank.New(rerank.Config{
+		BaseURL:        baseURL,
+		APIKey:         optionalSecret(sm, "RERANK_API_KEY"),
+		Model:          cfg.Rerank.Model,
+		RequestTimeout: cfg.Rerank.RequestTimeout.Std(),
+		MaxRetries:     cfg.Rerank.MaxRetries,
+	})
+	if err != nil {
+		logger.Fatal("Error initializing the reranker:", err)
 	}
 
 	return client

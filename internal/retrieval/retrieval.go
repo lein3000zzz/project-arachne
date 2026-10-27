@@ -1,13 +1,14 @@
-// Package retrieval answers a query with pages, ranked by dense similarity, BM25,
-// or both fused with reciprocal rank fusion. Each result carries the signals it
-// was ranked by, so later stages - PageRank, a reranker - and the evaluation can
-// see every score separately.
+// Package retrieval answers a query with pages. Dense similarity and BM25 are
+// fused with reciprocal rank fusion, the link graph can join the fusion as two
+// more ranked lists, and a cross-encoder can reorder the top. Each result carries
+// every signal it was ranked by, so each stage can be judged on its own.
 package retrieval
 
 import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"web-crawler/internal/embedding"
 	"web-crawler/internal/rank"
@@ -31,13 +32,17 @@ type Request struct {
 	Limit int
 	Host  string
 	Mode  Mode
+	// Nil takes the configured default.
+	PageRankWeight *float64
+	SiteRankWeight *float64
+	Rerank         *bool
 }
 
 // Signal is a page's place in one ranked list: its rank among pages, from 1, and
-// the score of its best chunk there.
+// its score there - of its best chunk, for dense and BM25.
 type Signal struct {
 	Rank  int     `json:"rank"`
-	Score float32 `json:"score"`
+	Score float64 `json:"score"`
 }
 
 type Result struct {
@@ -46,40 +51,57 @@ type Result struct {
 	Title string `json:"title"`
 	// The best-ranked chunk that matched, from whichever list ranked the page higher.
 	Snippet string `json:"snippet"`
-	// What the results are ordered by: the RRF score in hybrid mode, the single
-	// list's score otherwise.
+	// The fusion score: RRF over the lists in play, or the single list's own score
+	// when one list ranks alone. Results are in this order unless reranked.
 	Score float64 `json:"score"`
 	Dense *Signal `json:"dense,omitempty"`
 	BM25  *Signal `json:"bm25,omitempty"`
-	// Link-graph scores from the last ranking run; absent for a page ranked
-	// never yet. Reported only: they do not affect the order.
+	// Link-graph scores from the last ranking run; absent for a page not ranked
+	// yet. They change the order only with a non-zero weight.
 	PageRank *rank.Scores `json:"pagerank,omitempty"`
+	// Set on the top candidates when the reranker ran: they are then ordered by
+	// it, ahead of the rest.
+	Rerank *Signal `json:"rerank,omitempty"`
 }
 
 type RankSource interface {
 	LookupRanks(ctx context.Context, urls []string) (map[string]rank.Scores, error)
 }
 
+type Reranker interface {
+	Rerank(ctx context.Context, query string, documents []string) ([]float64, error)
+	Model() string
+}
+
 type Config struct {
 	QueryPrefix string
 	Candidates  int
 	RRFK        int
+
+	PageRankWeight float64
+	SiteRankWeight float64
+
+	RerankByDefault  bool
+	RerankCandidates int
 }
 
 type Retriever struct {
 	embedder embedding.Embedder
 	store    vectorstore.Searcher
 	ranks    RankSource
+	reranker Reranker
 	cfg      Config
 }
 
-// New builds a retriever; ranks may be nil, and results then carry no PageRank.
-func New(embedder embedding.Embedder, store vectorstore.Searcher, ranks RankSource, cfg Config) (*Retriever, error) {
-	if embedder == nil || store == nil || cfg.Candidates <= 0 || cfg.RRFK <= 0 {
+// New builds a retriever. ranks and reranker may be nil: results then carry no
+// PageRank, and are never reranked.
+func New(embedder embedding.Embedder, store vectorstore.Searcher, ranks RankSource, reranker Reranker, cfg Config) (*Retriever, error) {
+	if embedder == nil || store == nil || cfg.Candidates <= 0 || cfg.RRFK <= 0 ||
+		cfg.PageRankWeight < 0 || cfg.SiteRankWeight < 0 || reranker != nil && cfg.RerankCandidates <= 0 {
 		return nil, ErrInvalidConfig
 	}
 
-	return &Retriever{embedder: embedder, store: store, ranks: ranks, cfg: cfg}, nil
+	return &Retriever{embedder: embedder, store: store, ranks: ranks, reranker: reranker, cfg: cfg}, nil
 }
 
 func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
@@ -92,6 +114,10 @@ func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
 		return nil, fmt.Errorf("%w: limit must be > 0", ErrInvalidRequest)
 	case req.Mode != ModeHybrid && req.Mode != ModeDense && req.Mode != ModeBM25:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownMode, req.Mode)
+	case req.PageRankWeight != nil && *req.PageRankWeight < 0, req.SiteRankWeight != nil && *req.SiteRankWeight < 0:
+		return nil, fmt.Errorf("%w: rank weights must be >= 0", ErrInvalidRequest)
+	case req.Rerank != nil && *req.Rerank && r.reranker == nil:
+		return nil, ErrNoReranker
 	}
 
 	filter := vectorstore.Filter{Host: strings.ToLower(strings.TrimSpace(req.Host))}
@@ -119,15 +145,42 @@ func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
 	}
 
 	results := fuse(dense, bm25, r.cfg.RRFK, req.Mode)
-	if len(results) > req.Limit {
-		results = results[:req.Limit]
-	}
 
 	if err := r.attachRanks(ctx, results); err != nil {
 		return nil, err
 	}
 
+	pageWeight, siteWeight := orDefault(req.PageRankWeight, r.cfg.PageRankWeight), orDefault(req.SiteRankWeight, r.cfg.SiteRankWeight)
+	if pageWeight > 0 || siteWeight > 0 {
+		fuseGraph(results, r.cfg.RRFK, req.Mode, pageWeight, siteWeight)
+	}
+
+	if r.reranker != nil && orDefault(req.Rerank, r.cfg.RerankByDefault) {
+		if err := r.rerank(ctx, query, results); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(results) > req.Limit {
+		results = results[:req.Limit]
+	}
+
 	return results, nil
+}
+
+// widen keeps a float32 score's shortest decimal form: a plain float64(f) turns
+// 0.6 into 0.6000000238418579 in every response.
+func widen(f float32) float64 {
+	v, _ := strconv.ParseFloat(strconv.FormatFloat(float64(f), 'g', -1, 32), 64)
+	return v
+}
+
+func orDefault[T any](v *T, fallback T) T {
+	if v == nil {
+		return fallback
+	}
+
+	return *v
 }
 
 func (r *Retriever) attachRanks(ctx context.Context, results []Result) error {
@@ -224,13 +277,13 @@ func fuse(dense, bm25 []page, k int, mode Mode) []Result {
 
 	for _, p := range dense {
 		res := get(p)
-		res.Dense = &Signal{Rank: p.rank, Score: p.hit.Score}
+		res.Dense = &Signal{Rank: p.rank, Score: widen(p.hit.Score)}
 		res.Snippet = snippet(p.hit)
 	}
 
 	for _, p := range bm25 {
 		res := get(p)
-		res.BM25 = &Signal{Rank: p.rank, Score: p.hit.Score}
+		res.BM25 = &Signal{Rank: p.rank, Score: widen(p.hit.Score)}
 
 		if res.Dense == nil || p.rank < res.Dense.Rank {
 			res.Snippet = snippet(p.hit)
@@ -240,9 +293,9 @@ func fuse(dense, bm25 []page, k int, mode Mode) []Result {
 	for _, res := range order {
 		switch mode {
 		case ModeDense:
-			res.Score = float64(res.Dense.Score)
+			res.Score = res.Dense.Score
 		case ModeBM25:
-			res.Score = float64(res.BM25.Score)
+			res.Score = res.BM25.Score
 		default:
 			for _, signal := range []*Signal{res.Dense, res.BM25} {
 				if signal != nil {

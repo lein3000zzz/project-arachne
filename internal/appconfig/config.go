@@ -18,6 +18,7 @@ type Config struct {
 	Search      Search      `yaml:"search"`
 	Rank        Rank        `yaml:"rank"`
 	Chat        Chat        `yaml:"chat"`
+	Rerank      Rerank      `yaml:"rerank"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -70,6 +71,21 @@ type Retrieval struct {
 	RRFK         int `yaml:"rrf_k"`
 	DefaultLimit int `yaml:"default_limit"`
 	MaxLimit     int `yaml:"max_limit"`
+	// Weights of page and site PageRank as extra RRF lists. 0 reports the scores
+	// without letting them change the order.
+	PageRankWeight float64 `yaml:"pagerank_weight"`
+	SiteRankWeight float64 `yaml:"siterank_weight"`
+}
+
+type Rerank struct {
+	// Rerank by default when a reranker endpoint is configured; requests can
+	// still ask either way.
+	Enabled bool   `yaml:"enabled"`
+	Model   string `yaml:"model"`
+	// Top fused pages the cross-encoder reorders; its cost grows linearly.
+	Candidates     int      `yaml:"candidates"`
+	RequestTimeout Duration `yaml:"request_timeout"`
+	MaxRetries     int      `yaml:"max_retries"`
 }
 
 type Search struct {
@@ -191,6 +207,13 @@ func Default() Config {
 			MaxIterations: 100,
 			TwinChecks:    500,
 		},
+		Rerank: Rerank{
+			Enabled:        true,
+			Model:          "bge-reranker-v2-m3",
+			Candidates:     10,
+			RequestTimeout: Duration(time.Minute),
+			MaxRetries:     2,
+		},
 		Chat: Chat{
 			Provider:       ChatProviderOpenAICompatible,
 			Model:          "qwen3:4b-instruct",
@@ -257,6 +280,7 @@ func (c *Config) Validate() error {
 		{"rank.twin_checks", c.Rank.TwinChecks},
 		{"chat.max_tokens", c.Chat.MaxTokens},
 		{"chat.context_chunks", c.Chat.ContextChunks},
+		{"rerank.candidates", c.Rerank.Candidates},
 	}
 
 	for _, field := range positive {
@@ -284,6 +308,7 @@ func (c *Config) Validate() error {
 		{"shutdown.component_timeout", c.Shutdown.ComponentTimeout},
 		{"search.request_timeout", c.Search.RequestTimeout},
 		{"chat.request_timeout", c.Chat.RequestTimeout},
+		{"rerank.request_timeout", c.Rerank.RequestTimeout},
 	}
 
 	for _, field := range durations {
@@ -357,6 +382,14 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("%w: chat.provider %q must be %q, %q or %q", ErrInvalidConfig, c.Chat.Provider,
 			ChatProviderOpenAICompatible, ChatProviderOpenAI, ChatProviderAnthropic)
+	}
+
+	if c.Retrieval.PageRankWeight < 0 || c.Retrieval.SiteRankWeight < 0 {
+		return fmt.Errorf("%w: retrieval.pagerank_weight and siterank_weight must be >= 0", ErrInvalidConfig)
+	}
+
+	if c.Rerank.Model == "" || c.Rerank.MaxRetries < 0 {
+		return fmt.Errorf("%w: rerank.model must be set and rerank.max_retries >= 0", ErrInvalidConfig)
 	}
 
 	if c.Chat.Model == "" {

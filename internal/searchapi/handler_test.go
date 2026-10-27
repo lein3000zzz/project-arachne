@@ -98,3 +98,31 @@ func TestSearchStatusCodes(t *testing.T) {
 		t.Errorf("healthz: %d", rec.Code)
 	}
 }
+
+func TestSearchRankingOptions(t *testing.T) {
+	searcher := &fakeSearcher{}
+
+	if rec := serve(t, searcher, "/search?q=x&pagerank=0.5&siterank=0&rerank=false"); rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+
+	got := searcher.got
+	if got.PageRankWeight == nil || *got.PageRankWeight != 0.5 || got.SiteRankWeight == nil || *got.SiteRankWeight != 0 ||
+		got.Rerank == nil || *got.Rerank {
+		t.Errorf("request = %+v", got)
+	}
+
+	if rec := serve(t, searcher, "/search?q=x"); rec.Code != http.StatusOK || searcher.got.PageRankWeight != nil || searcher.got.Rerank != nil {
+		t.Errorf("absent options must stay unset, so the configured defaults apply: %+v", searcher.got)
+	}
+
+	for _, bad := range []string{"pagerank=-1", "pagerank=NaN", "siterank=lots", "rerank=maybe"} {
+		if rec := serve(t, searcher, "/search?q=x&"+bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d", bad, rec.Code)
+		}
+	}
+
+	if rec := serve(t, &fakeSearcher{err: retrieval.ErrNoReranker}, "/search?q=x&rerank=true"); rec.Code != http.StatusBadRequest {
+		t.Errorf("rerank without a reranker: %d", rec.Code)
+	}
+}

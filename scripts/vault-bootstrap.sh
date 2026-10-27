@@ -22,6 +22,8 @@ CONFIG_PATH="${CONFIG_PATH:-configs/config.yml}"
 EMBEDDER="${EMBEDDER:-ollama}"
 CHAT_BASE_URL="${CHAT_BASE_URL:-}"
 CHAT_API_KEY="${CHAT_API_KEY:-}"
+RERANK_BASE_URL="${RERANK_BASE_URL:-}"
+RERANK_API_KEY="${RERANK_API_KEY:-}"
 EMBEDDING_BASE_URL_OVERRIDE="${EMBEDDING_BASE_URL:-}"
 EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
 MILVUS_TOKEN="${MILVUS_TOKEN:-}"
@@ -37,6 +39,7 @@ case "$PROFILE" in
     MILVUS_ADDR=milvus:19530
     OLLAMA_URL=http://ollama:11434/v1
     VLLM_URL=http://vllm:8000/v1
+    RERANKER_URL=http://reranker:8080/v1
     ;;
   host)
     APP_ENV=dev
@@ -48,6 +51,7 @@ case "$PROFILE" in
     MILVUS_ADDR=localhost:19530
     OLLAMA_URL=http://localhost:11434/v1
     VLLM_URL=http://localhost:8001/v1
+    RERANKER_URL=http://localhost:8002/v1
     ;;
   *)
     echo "unknown profile '$PROFILE' (want: docker | host)" >&2
@@ -199,6 +203,11 @@ elif [ "$(vault_auth kv get -field=CHAT_BASE_URL kv/main/chat 2>/dev/null)" = "$
 fi
 if [ -n "$CHAT_API_KEY" ]; then
   vault_auth kv put kv/main/chat_key CHAT_API_KEY="$CHAT_API_KEY" >/dev/null
+fi
+# The bundled reranker runs unless RERANK_BASE_URL points elsewhere.
+vault_auth kv put kv/main/rerank RERANK_BASE_URL="${RERANK_BASE_URL:-$RERANKER_URL}" >/dev/null
+if [ -n "$RERANK_API_KEY" ]; then
+  vault_auth kv put kv/main/rerank_key RERANK_API_KEY="$RERANK_API_KEY" >/dev/null
 fi
 if [ -n "$MILVUS_TOKEN" ]; then
   vault_auth kv put kv/main/milvus_token MILVUS_TOKEN="$MILVUS_TOKEN" >/dev/null

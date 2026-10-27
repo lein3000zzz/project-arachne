@@ -31,7 +31,11 @@ func answerRequest(r *http.Request) (answer.Request, error) {
 		return req, retrieval.ErrEmptyQuery
 	}
 
-	return req, nil
+	var err error
+
+	req.PageRankWeight, req.SiteRankWeight, req.Rerank, err = rankingOptions(q)
+
+	return req, err
 }
 
 func (h *answerHandler) context(r *http.Request) (context.Context, context.CancelFunc) {
@@ -127,7 +131,8 @@ func (h *answerHandler) failure(req answer.Request, err error) (int, string) {
 	switch {
 	case errors.Is(err, answer.ErrNoSources):
 		return http.StatusNotFound, err.Error()
-	case errors.Is(err, retrieval.ErrEmptyQuery), errors.Is(err, retrieval.ErrInvalidRequest), errors.Is(err, retrieval.ErrUnknownMode):
+	case errors.Is(err, retrieval.ErrEmptyQuery), errors.Is(err, retrieval.ErrInvalidRequest), errors.Is(err, retrieval.ErrUnknownMode),
+		errors.Is(err, retrieval.ErrNoReranker):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, "answering timed out"

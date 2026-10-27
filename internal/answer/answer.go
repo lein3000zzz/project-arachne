@@ -42,6 +42,10 @@ type Request struct {
 	Query string
 	Host  string
 	Mode  retrieval.Mode
+	// Passed to retrieval; nil takes its defaults.
+	PageRankWeight *float64
+	SiteRankWeight *float64
+	Rerank         *bool
 }
 
 // Source N is cited in the answer as [N].
@@ -73,7 +77,10 @@ const systemPrompt = `You answer questions using only the numbered sources provi
 - Answer in the language of the question, concisely.`
 
 func (s *Service) Answer(ctx context.Context, req Request, events Events) (Result, error) {
-	results, err := s.search.Search(ctx, retrieval.Request{Query: req.Query, Host: req.Host, Mode: req.Mode, Limit: s.cfg.Sources})
+	results, err := s.search.Search(ctx, retrieval.Request{
+		Query: req.Query, Host: req.Host, Mode: req.Mode, Limit: s.cfg.Sources,
+		PageRankWeight: req.PageRankWeight, SiteRankWeight: req.SiteRankWeight, Rerank: req.Rerank,
+	})
 	if err != nil {
 		return Result{}, err
 	}

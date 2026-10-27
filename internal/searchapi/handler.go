@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 	"web-crawler/internal/answer"
@@ -66,7 +68,8 @@ func NewHandler(logger *zap.SugaredLogger, searcher Searcher, answerer Answerer,
 
 		switch {
 		case err == nil:
-		case errors.Is(err, retrieval.ErrEmptyQuery), errors.Is(err, retrieval.ErrInvalidRequest), errors.Is(err, retrieval.ErrUnknownMode):
+		case errors.Is(err, retrieval.ErrEmptyQuery), errors.Is(err, retrieval.ErrInvalidRequest), errors.Is(err, retrieval.ErrUnknownMode),
+			errors.Is(err, retrieval.ErrNoReranker):
 			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 			return
 		case errors.Is(err, context.DeadlineExceeded):
@@ -119,7 +122,48 @@ func parseRequest(r *http.Request, cfg Config) (retrieval.Request, error) {
 		req.Limit = limit
 	}
 
-	return req, nil
+	var err error
+
+	req.PageRankWeight, req.SiteRankWeight, req.Rerank, err = rankingOptions(q)
+
+	return req, err
+}
+
+// rankingOptions reads the optional pagerank and siterank weights and the rerank
+// switch; an absent parameter leaves the configured default.
+func rankingOptions(q url.Values) (pageWeight, siteWeight *float64, rerank *bool, err error) {
+	weight := func(name string) (*float64, error) {
+		raw := q.Get(name)
+		if raw == "" {
+			return nil, nil
+		}
+
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil || v < 0 || math.IsInf(v, 0) || math.IsNaN(v) {
+			return nil, fmt.Errorf("%s must be a number >= 0", name)
+		}
+
+		return &v, nil
+	}
+
+	if pageWeight, err = weight("pagerank"); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if siteWeight, err = weight("siterank"); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if raw := q.Get("rerank"); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("rerank must be true or false")
+		}
+
+		rerank = &v
+	}
+
+	return pageWeight, siteWeight, rerank, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

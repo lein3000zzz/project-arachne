@@ -47,10 +47,22 @@ func main() {
 
 	cancelStart()
 
-	retriever, err := retrieval.New(embedder, store, pages.NewGraphStore(db), retrieval.Config{
-		QueryPrefix: cfg.Embedding.QueryPrefix,
-		Candidates:  cfg.Retrieval.Candidates,
-		RRFK:        cfg.Retrieval.RRFK,
+	var reranker retrieval.Reranker
+
+	if client := platform.NewReranker(logger, cfg, sm); client != nil {
+		reranker = client
+
+		logger.Infow("Reranking enabled", "model", client.Model(), "byDefault", cfg.Rerank.Enabled, "candidates", cfg.Rerank.Candidates)
+	}
+
+	retriever, err := retrieval.New(embedder, store, pages.NewGraphStore(db), reranker, retrieval.Config{
+		QueryPrefix:      cfg.Embedding.QueryPrefix,
+		Candidates:       cfg.Retrieval.Candidates,
+		RRFK:             cfg.Retrieval.RRFK,
+		PageRankWeight:   cfg.Retrieval.PageRankWeight,
+		SiteRankWeight:   cfg.Retrieval.SiteRankWeight,
+		RerankByDefault:  cfg.Rerank.Enabled,
+		RerankCandidates: cfg.Rerank.Candidates,
 	})
 	if err != nil {
 		logger.Fatal("Error initializing retriever:", err)

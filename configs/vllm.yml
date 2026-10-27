@@ -8,3 +8,6 @@ embedding:
 # The server has the cores to spare; config.yml is sized for a laptop.
 indexer:
   workers: 4
+
+rerank:
+  candidates: 30
