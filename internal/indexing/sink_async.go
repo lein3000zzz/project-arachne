@@ -23,9 +23,18 @@ const abortGrace = 2 * time.Second
 // Each URL always lands on the same shard, so two versions of a page are indexed
 // in the order they arrived. A document dropped here was never hashed, so the
 // next crawl of the page indexes it again.
+// Progress hears about each document of a run as it enters the queue and as it
+// leaves it, so a run can report how much of it is searchable. A document
+// abandoned at shutdown leaves without a word: it is indexed on its next crawl.
+type Progress interface {
+	Queued(ctx context.Context, runID string)
+	Done(ctx context.Context, runID string, failed bool)
+}
+
 type AsyncSink struct {
 	logger         *zap.SugaredLogger
 	inner          documents.Sink
+	progress       Progress
 	shards         []chan *documents.Document
 	enqueueTimeout time.Duration
 
@@ -40,7 +49,8 @@ type AsyncSink struct {
 	abandoned atomic.Int64
 }
 
-func NewAsyncSink(logger *zap.SugaredLogger, inner documents.Sink, workers, queueSize int, enqueueTimeout time.Duration) *AsyncSink {
+// NewAsyncSink takes a nil progress when nobody needs to know.
+func NewAsyncSink(logger *zap.SugaredLogger, inner documents.Sink, progress Progress, workers, queueSize int, enqueueTimeout time.Duration) *AsyncSink {
 	workers = max(workers, 1)
 	perShard := max((queueSize+workers-1)/workers, 1)
 
@@ -49,6 +59,7 @@ func NewAsyncSink(logger *zap.SugaredLogger, inner documents.Sink, workers, queu
 	s := &AsyncSink{
 		logger:         logger,
 		inner:          inner,
+		progress:       progress,
 		shards:         make([]chan *documents.Document, workers),
 		enqueueTimeout: enqueueTimeout,
 		done:           make(chan struct{}),
@@ -82,6 +93,10 @@ func (s *AsyncSink) Submit(ctx context.Context, doc *documents.Document) error {
 
 	select {
 	case s.shards[shardOf(doc.URL, len(s.shards))] <- doc:
+		if s.counted(doc) {
+			s.progress.Queued(ctx, doc.RunID)
+		}
+
 		return nil
 	case <-s.done:
 		return ErrSinkClosed
@@ -120,10 +135,21 @@ func (s *AsyncSink) process(doc *documents.Document) {
 	case err == nil:
 	case s.processCtx.Err() != nil:
 		s.abandoned.Add(1)
+		return
 	default:
 		s.failed.Add(1)
 		s.logger.Warnw("Indexing failed, page will be retried on its next crawl", "url", doc.URL, "err", err)
 	}
+
+	if s.counted(doc) {
+		s.progress.Done(context.WithoutCancel(s.processCtx), doc.RunID, err != nil)
+	}
+}
+
+// counted leaves out removals - a gone page, a redirect's old name - which make
+// nothing searchable.
+func (s *AsyncSink) counted(doc *documents.Document) bool {
+	return s.progress != nil && doc.RunID != "" && doc.Content != ""
 }
 
 func (s *AsyncSink) Shutdown(ctx context.Context) error {

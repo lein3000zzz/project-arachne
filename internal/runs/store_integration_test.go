@@ -13,7 +13,7 @@ import (
 
 func TestStoreTracksARun(t *testing.T) {
 	pool := dbtest.NewPool(t)
-	store := NewStore(pool, 10*time.Minute)
+	store := NewStore(nil, pool, 10*time.Minute)
 	ctx := context.Background()
 
 	run := &config.Run{ID: "r1", StartURL: "go.dev/doc", MaxDepth: 2, MaxLinks: 10}
@@ -62,5 +62,56 @@ func TestStoreTracksARun(t *testing.T) {
 
 	if _, err := store.Get(ctx, "nope"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown run: %v", err)
+	}
+}
+
+func TestStoreCountsIndexing(t *testing.T) {
+	pool := dbtest.NewPool(t)
+	store := NewStore(nil, pool, 10*time.Minute)
+	ctx := context.Background()
+
+	// A document can be counted before the crawler records its run.
+	store.Queued(ctx, "r1")
+	store.Queued(ctx, "r1")
+	store.Queued(ctx, "r1")
+
+	run := &config.Run{ID: "r1", StartURL: "https://go.dev/", MaxDepth: 2, MaxLinks: 10}
+	if err := store.Started(ctx, run, "https://go.dev/"); err != nil {
+		t.Fatal(err)
+	}
+
+	store.Done(ctx, "r1", false)
+	store.Done(ctx, "r1", true)
+
+	if err := store.Finished(ctx, run, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Get(ctx, "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got.DocsQueued != 3 || got.DocsIndexed != 1 || got.DocsFailed != 1 || got.IndexedAt == nil ||
+		got.StartURL != "https://go.dev/" || got.MaxLinks != 10 || got.Status != StatusIndexing {
+		t.Errorf("run = %+v", got)
+	}
+
+	store.Done(ctx, "r1", false)
+
+	if got, _ = store.Get(ctx, "r1"); got.Status != StatusFinished {
+		t.Errorf("all documents through: %s", got.Status)
+	}
+
+	if got.Ranked {
+		t.Error("no ranking has run since the crawl finished")
+	}
+
+	if _, err := pool.Exec(ctx, `INSERT INTO rank_runs (pages, links, hosts, host_links, iterations, residual) VALUES (1, 0, 1, 0, 1, 0)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ = store.Get(ctx, "r1"); !got.Ranked {
+		t.Error("ranked after the crawl finished")
 	}
 }

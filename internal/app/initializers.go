@@ -56,7 +56,7 @@ func InitApp() *CrawlerApp {
 
 	db := initDatabase(logger, sm, cfg)
 	pageRepo := pages.NewPostgresRepo(logger, db)
-	runStore := runs.NewStore(db, cfg.RunState.SlotLease.Std())
+	runStore := runs.NewStore(logger, db, cfg.RunState.SlotLease.Std())
 
 	tasksQueue := initTasksQueue(logger, sm, cfg)
 	runsQueue := initRunsQueue(logger, sm, cfg)
@@ -83,7 +83,7 @@ func InitApp() *CrawlerApp {
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
-	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword)
+	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword, runStore)
 
 	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBPageCache, cfg)
 	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBRobotsCache, cfg)
@@ -119,7 +119,7 @@ func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
 	return katana
 }
 
-func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, redisURI, redisPassword string) documents.Sink {
+func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, redisURI, redisPassword string, progress indexing.Progress) documents.Sink {
 	ctx, cancel := context.WithTimeout(context.Background(), indexingStartupTimeout)
 	defer cancel()
 
@@ -153,7 +153,7 @@ func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manage
 
 	chunking := indexing.NewChunkingSink(logger, textChunker, hashes, indexing.NewVectorSink(embedder, store))
 
-	return indexing.NewAsyncSink(logger, chunking, cfg.Indexer.Workers, cfg.Indexer.QueueSize, cfg.Indexer.EnqueueTimeout.Std())
+	return indexing.NewAsyncSink(logger, chunking, progress, cfg.Indexer.Workers, cfg.Indexer.QueueSize, cfg.Indexer.EnqueueTimeout.Std())
 }
 
 func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int, cfg appconfig.Config) *redis.Client {

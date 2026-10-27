@@ -88,13 +88,14 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	RERANK_BASE_URL="$(RERANK_BASE_URL)" RERANK_API_KEY="$(RERANK_API_KEY)" \
 	scripts/vault-bootstrap.sh
 
-.PHONY: help up dev run crawl search eval rank down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
+.PHONY: help up dev run crawl search eval rank smoke down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
 
 help:
 	@echo "make up        full stack in docker (crawler included)"
 	@echo "make dev       infra only, addressed for a host-run crawler"
 	@echo "make run       go run the crawler on the host (after make dev)"
 	@echo "make crawl URL=https://example.com/ [DEPTH=2] [LINKS=25] [SCOPE=https://example.com/docs/]"
+	@echo "make smoke     end-to-end check: crawl a few pages, index, rank, search, answer"
 	@echo "make rank      recompute page and site PageRank from the link graph"
 	@echo "make eval [DATASET=eval/sample.yml] [OUT=results.json]   nDCG/MRR/recall per mode"
 	@echo "make search Q=\"query\" [MODE=hybrid|dense|bm25] [HOST=go.dev] [LIMIT=10]"
@@ -143,7 +144,7 @@ up: env
 	$(COMPOSE) up -d $(UI)
 	$(BOOTSTRAP) docker
 	$(MAKE) models
-	$(COMPOSE) up -d --build crawler search
+	$(COMPOSE) up -d --build crawler search ranker
 	@echo ""
 	@echo "stack is up. follow it with: make logs; search at http://localhost:8090/search?q=..."
 
@@ -166,7 +167,11 @@ search:
 		$(if $(MODE),--data-urlencode "mode=$(MODE)") $(if $(HOST),--data-urlencode "host=$(HOST)") \
 		$(if $(LIMIT),--data-urlencode "limit=$(LIMIT)") | jq .
 
-# PageRank over the stored link graph; search reports the new scores at once.
+# End to end on the running stack: crawl, index, rank, search, answer.
+smoke:
+	@scripts/smoke.sh
+
+# PageRank now, without waiting for the ranker service to notice a finished crawl.
 rank:
 	$(COMPOSE) --profile tools run --rm --build rank
 

@@ -209,7 +209,7 @@ section:last-of-type { border-bottom: 0; }
 /* Never colour alone: the glyph differs by state as well as the hue. */
 .state { white-space: nowrap; }
 .state-glyph { display: inline-block; width: 1rem; color: var(--muted); }
-.state.running .state-glyph { color: var(--ok); }
+.state.running .state-glyph, .state.indexing .state-glyph { color: var(--ok); }
 .state.dropped .state-glyph, .state.stalled .state-glyph { color: var(--bad); }
 
 .footer { border-top: 1px solid var(--line); padding: 1.8rem 0 3rem; }
@@ -331,7 +331,7 @@ section:last-of-type { border-bottom: 0; }
     <p id="crawlHint" class="note">Searchable once indexed.</p>
 
     <table class="table">
-      <thead><tr><th>URL</th><th>Status</th><th class="num">Pages</th><th class="num">When</th></tr></thead>
+      <thead><tr><th>URL</th><th>Status</th><th class="num">Pages</th><th class="num">Searchable</th><th class="num">When</th></tr></thead>
       <tbody id="runs"></tbody>
     </table>
   </section>
@@ -547,7 +547,8 @@ $("form").addEventListener("submit", (e) => {
 // ---- crawls ----
 let polling = null;
 
-const glyphs = { queued: "○", running: "●", finished: "✓", dropped: "✕", stalled: "!" };
+const glyphs = { queued: "○", running: "●", indexing: "◐", finished: "✓", dropped: "✕", stalled: "!" };
+const active = (status) => status === "queued" || status === "running" || status === "indexing";
 
 function ago(iso) {
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
@@ -559,7 +560,7 @@ function ago(iso) {
 
 function renderRuns(list) {
   if (list.length === 0) {
-    $("runs").replaceChildren(el("tr", {}, el("td", { colspan: "4", class: "note" }, "None yet.")));
+    $("runs").replaceChildren(el("tr", {}, el("td", { colspan: "5", class: "note" }, "None yet.")));
     return;
   }
   $("runs").replaceChildren(...list.map((run) => el("tr", {},
@@ -567,6 +568,8 @@ function renderRuns(list) {
     el("td", {}, el("span", { class: "state " + run.status },
       el("span", { class: "state-glyph", "aria-hidden": "true" }, glyphs[run.status] || "·"), run.status)),
     el("td", { class: "num" }, run.pages + " / " + run.max_links),
+    el("td", { class: "num" }, run.docs_indexed + " / " + run.docs_queued,
+      run.docs_failed ? el("div", { class: "note" }, run.docs_failed + " failed") : null),
     el("td", { class: "num" }, ago(run.submitted_at)))));
 }
 
@@ -577,9 +580,8 @@ async function loadRuns() {
     const body = await res.json();
     $("crawl").hidden = false;
     renderRuns(body.runs);
-    const active = body.runs.some((r) => r.status === "queued" || r.status === "running");
     clearTimeout(polling);
-    if (active) polling = setTimeout(loadRuns, 3000);
+    if (body.runs.some((r) => active(r.status))) polling = setTimeout(loadRuns, 3000);
   } catch (_) {
     clearTimeout(polling);
     polling = setTimeout(loadRuns, 10000);

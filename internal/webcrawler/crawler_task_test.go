@@ -304,3 +304,33 @@ func (f *fakeRecorder) Finished(context.Context, *config.Run, string) error {
 	f.log.add("run finished")
 	return nil
 }
+
+func TestExcludedLinksAreNotFollowed(t *testing.T) {
+	h := newHarness(
+		"https://ru.wikipedia.org/wiki/%D0%92%D0%B8%D0%BA%D0%B8%D0%BF%D0%B5%D0%B4%D0%B8%D1%8F:%D0%A1%D0%BE%D0%BE%D0%B1%D1%89%D0%B5%D0%BD%D0%B8%D1%8F_%D0%BE%D0%B1_%D0%BE%D1%88%D0%B8%D0%B1%D0%BA%D0%B0%D1%85",
+		"https://ru.wikipedia.org/wiki/%D0%9E%D0%B1%D1%81%D1%83%D0%B6%D0%B4%D0%B5%D0%BD%D0%B8%D0%B5_%D1%83%D1%87%D0%B0%D1%81%D1%82%D0%BD%D0%B8%D0%BA%D0%B0:X",
+		"https://en.wikipedia.org/wiki/Special:Random",
+		"https://ru.wikipedia.org/w/index.php?title=Go&action=edit",
+		"https://ru.wikipedia.org/wiki/Go",
+		"https://en.wikipedia.org/wiki/Star_Wars:_Episode_IV",
+		"https://en.wikipedia.org/wiki/Go_(programming_language)",
+	)
+	h.repo.exclude = compileExclude(appconfig.DefaultExclude)
+
+	var sent []string
+	for _, e := range h.run() {
+		if strings.HasPrefix(e, "send ") {
+			sent = append(sent, strings.TrimPrefix(e, "send "))
+		}
+	}
+
+	want := []string{
+		"https://ru.wikipedia.org/wiki/Go",
+		"https://en.wikipedia.org/wiki/Star_Wars:_Episode_IV",
+		"https://en.wikipedia.org/wiki/Go_(programming_language)",
+	}
+
+	if !slices.Equal(sent, want) {
+		t.Errorf("followed %v, want %v: namespace, special and edit pages are excluded, articles with a colon are not", sent, want)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +36,7 @@ type CrawlerRepo struct {
 	cachePages      cache.CachedStorage
 	cacheRobots     cache.CachedStorage
 	robots          *robots.Checker
+	exclude         []*regexp.Regexp
 	runStateManager runstates.RunStateManager
 	documents       documents.Sink
 	runs            RunRecorder
@@ -63,6 +66,7 @@ func NewCrawlerRepo(
 		cachePages:      cachePages,
 		cacheRobots:     cacheRobots,
 		robots:          robots.NewChecker(logger, networker, cacheRobots, settings.Crawler.RobotsAgent(), settings.Cache.RobotsTTL.Std()),
+		exclude:         compileExclude(settings.Crawler.Exclude),
 		runStateManager: runStateManager,
 		documents:       documentSink,
 		runs:            runs,
@@ -173,7 +177,7 @@ func (repo *CrawlerRepo) sendChildren(parent *config.Task, links []string) error
 	var failed error
 
 	for _, link := range links {
-		if !parent.Run.InScope(link) {
+		if !parent.Run.InScope(link) || repo.excluded(link) {
 			continue
 		}
 
@@ -392,6 +396,33 @@ func (repo *CrawlerRepo) getCachedPage(task *config.Task) (*data.PageData, error
 	repo.logger.Infow("using cached page", "url", task.URL)
 
 	return cached, nil
+}
+
+// Validate() already rejected patterns that do not compile.
+func compileExclude(patterns []string) []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		out = append(out, regexp.MustCompile(p))
+	}
+
+	return out
+}
+
+// excluded matches the decoded URL: canonical URLs percent-encode every
+// non-ASCII character, and the patterns are written in plain text.
+func (repo *CrawlerRepo) excluded(link string) bool {
+	decoded, err := url.PathUnescape(link)
+	if err != nil {
+		decoded = link
+	}
+
+	for _, re := range repo.exclude {
+		if re.MatchString(decoded) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (repo *CrawlerRepo) isAllowedByRobots(urlToCheck string) bool {

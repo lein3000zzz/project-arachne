@@ -120,3 +120,31 @@ func TestAnswerKeepsWhatWasGeneratedOnFailure(t *testing.T) {
 		t.Errorf("err %v result %+v", err, res)
 	}
 }
+
+func TestExcerpt(t *testing.T) {
+	cases := []struct {
+		text  string
+		limit int
+		want  string
+	}{
+		{"short text", 100, "short text"},
+		// A sentence end in the last third of the limit is where the cut goes...
+		{"The first sentence is long enough. Then a second one runs past the limit.", 45, "The first sentence is long enough. …"},
+		{"Строка первая и длинная.\nСтрока вторая и ещё немного текста", 30, "Строка первая и длинная. …"},
+		// ...an earlier one would throw most of the excerpt away, so a word boundary wins.
+		{"Short. Then a much longer sentence that runs well past the limit.", 40, "Short. Then a much longer sentence that …"},
+		{"no sentence end in this long run of words at all", 20, "no sentence end in …"},
+		{"anything", 0, "anything"},
+	}
+
+	for _, tc := range cases {
+		got := excerpt(tc.text, tc.limit)
+		if got != tc.want {
+			t.Errorf("excerpt(%q, %d) = %q, want %q", tc.text, tc.limit, got, tc.want)
+		}
+
+		if tc.limit > 0 && len([]rune(got)) > tc.limit+2 {
+			t.Errorf("excerpt(%q, %d) is %d runes long", tc.text, tc.limit, len([]rune(got)))
+		}
+	}
+}

@@ -60,6 +60,21 @@ services:
         condition: service_healthy
         required: false
 
+  # Re-ranks after every finished crawl.
+  ranker:
+    build:
+      context: .
+      dockerfile: deployments/search.Dockerfile
+    command: ["./rank", "-watch"]
+    env_file:
+      - main.env
+    volumes:
+      - ./configs:/root/configs:ro
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # One-shot: `make rank`. Built from the search image, which carries both binaries.
   rank:
     build:

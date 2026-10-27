@@ -34,6 +34,9 @@ type Crawler struct {
 	ParserEngine     string   `yaml:"parser_engine"`
 	SaverSendTimeout Duration `yaml:"saver_send_timeout"`
 	FetchTimeout     Duration `yaml:"fetch_timeout"`
+	// Regular expressions over the percent-decoded URL. A matching link is
+	// recorded in the graph but never followed; a start URL is always crawled.
+	Exclude []string `yaml:"exclude"`
 }
 
 type Chunker struct {
@@ -100,6 +103,8 @@ type Rank struct {
 	MaxIterations int     `yaml:"max_iterations"`
 	// Placeholder twins asked about per run before ranking; each is one fetch.
 	TwinChecks int `yaml:"twin_checks"`
+	// How often the watching ranker checks for crawls finished since it last ran.
+	WatchInterval Duration `yaml:"watch_interval"`
 }
 
 type Chat struct {
@@ -114,6 +119,8 @@ type Chat struct {
 	MaxRetries     int      `yaml:"max_retries"`
 	// Search results handed to the model as sources, one excerpt each.
 	ContextChunks int `yaml:"context_chunks"`
+	// Each excerpt is cut to this many runes; 0 keeps the whole chunk.
+	SourceRunes int `yaml:"source_runes"`
 }
 
 // CrawlAPI lets the search service start crawls. Anyone who can reach it can
@@ -151,6 +158,17 @@ type Shutdown struct {
 	ComponentTimeout Duration `yaml:"component_timeout"`
 }
 
+// DefaultExclude keeps crawls out of wiki machinery: MediaWiki's namespace pages
+// (talk, user, special, project and file pages, in English and Russian), and
+// its edit, history and raw views. An article title may contain a colon, so the
+// namespaces are named rather than matched as "anything before a colon".
+var DefaultExclude = []string{
+	`/wiki/(Special|Talk|User|User_talk|Wikipedia|Wikipedia_talk|File|File_talk|Template|Template_talk|Help|Help_talk|Category|Category_talk|Portal|Draft|Module|MediaWiki|TimedText):`,
+	`/wiki/(Служебная|Обсуждение|Участник|Участница|Обсуждение_участника|Обсуждение_участницы|Википедия|Обсуждение_Википедии|Файл|Обсуждение_файла|Шаблон|Обсуждение_шаблона|Справка|Обсуждение_справки|Категория|Обсуждение_категории|Портал|Обсуждение_портала|Проект|Модуль|Инкубатор):`,
+	`/w/index\.php`,
+	`[?&](action|oldid|diff|printable)=`,
+}
+
 // The instruction the Qwen3 embedding models were trained with for web search.
 const Qwen3QueryPrefix = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
 
@@ -181,6 +199,7 @@ func Default() Config {
 			ParserEngine:     ParserEngineKatana,
 			SaverSendTimeout: Duration(3 * time.Second),
 			FetchTimeout:     Duration(30 * time.Second),
+			Exclude:          DefaultExclude,
 		},
 		Chunker: Chunker{
 			MaxRunes:         1200,
@@ -217,6 +236,7 @@ func Default() Config {
 			Tolerance:     1e-9,
 			MaxIterations: 100,
 			TwinChecks:    500,
+			WatchInterval: Duration(30 * time.Second),
 		},
 		Rerank: Rerank{
 			Enabled:        true,
@@ -239,7 +259,8 @@ func Default() Config {
 			Temperature:    ptr(0.2),
 			RequestTimeout: Duration(5 * time.Minute),
 			MaxRetries:     2,
-			ContextChunks:  6,
+			ContextChunks:  4,
+			SourceRunes:    600,
 		},
 		Cache: Cache{
 			PageTTL:         Duration(12 * time.Hour),
@@ -330,6 +351,7 @@ func (c *Config) Validate() error {
 		{"shutdown.component_timeout", c.Shutdown.ComponentTimeout},
 		{"search.request_timeout", c.Search.RequestTimeout},
 		{"chat.request_timeout", c.Chat.RequestTimeout},
+		{"rank.watch_interval", c.Rank.WatchInterval},
 		{"rerank.request_timeout", c.Rerank.RequestTimeout},
 	}
 
@@ -341,6 +363,12 @@ func (c *Config) Validate() error {
 
 	if c.Crawler.UserAgent == "" || strings.ContainsFunc(c.Crawler.UserAgent, unicode.IsControl) {
 		return fmt.Errorf("%w: crawler.user_agent must be a non-empty single line", ErrInvalidConfig)
+	}
+
+	for _, pattern := range c.Crawler.Exclude {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("%w: crawler.exclude %q: %w", ErrInvalidConfig, pattern, err)
+		}
 	}
 
 	if c.Crawler.RobotsAgent() == "" {
@@ -420,6 +448,10 @@ func (c *Config) Validate() error {
 
 	if c.Chat.Model == "" {
 		return fmt.Errorf("%w: chat.model must not be empty", ErrInvalidConfig)
+	}
+
+	if c.Chat.SourceRunes < 0 {
+		return fmt.Errorf("%w: chat.source_runes must be >= 0, got %d", ErrInvalidConfig, c.Chat.SourceRunes)
 	}
 
 	if c.Chat.MaxRetries < 0 {

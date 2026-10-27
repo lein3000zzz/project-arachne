@@ -254,3 +254,45 @@ func (s *GraphStore) ResolveTwin(ctx context.Context, placeholder, identity stri
 		return err
 	})
 }
+
+// Any constant nothing else locks on: it keeps two rankers from loading and
+// replacing the scores at once.
+const rankLockKey = 0x72616e6b
+
+// WithRankLock runs fn holding the ranking lock, or returns false at once when
+// another ranker holds it.
+func (s *GraphStore) WithRankLock(ctx context.Context, fn func() error) (bool, error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Release()
+
+	var acquired bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, rankLockKey).Scan(&acquired); err != nil {
+		return false, err
+	}
+
+	if !acquired {
+		return false, nil
+	}
+
+	defer func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, rankLockKey)
+	}()
+
+	return true, fn()
+}
+
+// RanksStale reports whether a crawl has finished since the last ranking, or
+// there are pages and no ranking yet.
+func (s *GraphStore) RanksStale(ctx context.Context) (bool, error) {
+	var stale bool
+
+	err := s.pool.QueryRow(ctx, `
+		SELECT coalesce(
+			(SELECT max(finished_at) FROM runs WHERE note = '') > (SELECT max(computed_at) FROM rank_runs),
+			EXISTS (SELECT 1 FROM pages) AND NOT EXISTS (SELECT 1 FROM rank_runs))`).Scan(&stale)
+
+	return stale, err
+}

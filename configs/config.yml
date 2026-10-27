@@ -10,6 +10,12 @@ crawler:
   saver_send_timeout: 3s
   # whole request, redirects and body included
   fetch_timeout: 30s
+  # regular expressions over the percent-decoded URL: matching links are recorded
+  # in the graph but never followed (a start URL always is). Leave the key out
+  # for the built-in list: MediaWiki namespace pages in English and Russian, and
+  # edit / history / index.php views.
+  # exclude:
+  #   - '/login'
 
 chunker:
   max_runes: 1200
@@ -76,6 +82,8 @@ rank:
   # never-fetched pages differing from a fetched one only by scheme or trailing
   # slash; each is fetched once to ask whether it redirects there
   twin_checks: 500
+  # the ranker service re-ranks when a crawl finished since its last run
+  watch_interval: 30s
 
 crawl_api:
   # lets the search service start crawls (UI and POST /api/runs); anyone who can
@@ -97,8 +105,11 @@ chat:
   temperature: 0.2
   request_timeout: 5m
   max_retries: 2
-  # search results given to the model as sources, one excerpt each
-  context_chunks: 6
+  # search results given to the model as sources, one excerpt each, cut to
+  # source_runes (0 = whole). Reading them is most of the wait before the first
+  # word on a CPU: 4 × 600 halves it against 6 whole chunks.
+  context_chunks: 4
+  source_runes: 600
 
 cache:
   page_ttl: 12h

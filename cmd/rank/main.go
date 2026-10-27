@@ -1,126 +1,67 @@
 // Command rank computes page-level and site-level PageRank over the stored
-// hyperlink graph and replaces the scores search reads.
+// hyperlink graph and replaces the scores search reads. With -watch it keeps
+// running and ranks again whenever a crawl finishes.
 package main
 
 import (
 	"context"
-	"sort"
+	"errors"
+	"flag"
+	"os/signal"
+	"syscall"
 	"time"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
 	"web-crawler/internal/rank"
+	"web-crawler/internal/ranking"
 	"web-crawler/internal/robots"
-	"web-crawler/internal/twins"
-
-	"go.uber.org/zap"
 )
 
-const (
-	timeout = 30 * time.Minute
-	// Twins mostly sit on a handful of hosts; more would hammer them.
-	twinWorkers = 4
-)
+const onceTimeout = 30 * time.Minute
 
 func main() {
+	watch := flag.Bool("watch", false, "keep running and rank again after every finished crawl")
+	flag.Parse()
+
 	platform.LoadEnv()
 
 	logger := platform.NewLogger()
 	cfg := platform.LoadConfig(logger)
 	sm := platform.NewSecretManager(logger)
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	pool := platform.OpenDatabase(ctx, logger, sm, 2)
+	pool := platform.OpenDatabase(ctx, logger, sm, 3)
 	defer pool.Close()
-
-	store := pages.NewGraphStore(pool)
-
-	started := time.Now()
 
 	fetcher := networker.NewNetworker(logger, cfg.Crawler.UserAgent, cfg.Crawler.FetchTimeout.Std())
 	defer fetcher.Stop()
 
-	checker := robots.NewChecker(logger, fetcher, robots.NewMemoryCache(), cfg.Crawler.RobotsAgent(), 0)
+	ranker := ranking.New(logger, pages.NewGraphStore(pool), fetcher,
+		robots.NewChecker(logger, fetcher, robots.NewMemoryCache(), cfg.Crawler.RobotsAgent(), cfg.Cache.RobotsTTL.Std()),
+		ranking.Config{
+			Options:    rank.Options{Damping: cfg.Rank.Damping, Tolerance: cfg.Rank.Tolerance, MaxIterations: cfg.Rank.MaxIterations},
+			TwinChecks: cfg.Rank.TwinChecks,
+		})
 
-	twinStats, err := twins.Resolve(ctx, logger, store, fetcher, checker, cfg.Rank.TwinChecks, twinWorkers)
-	if err != nil {
-		logger.Fatal("Resolving placeholder twins:", err)
-	}
+	if *watch {
+		logger.Infow("Watching for finished crawls", "interval", cfg.Rank.WatchInterval.Std().String())
+		ranker.Watch(ctx, cfg.Rank.WatchInterval.Std())
 
-	logger.Infow("Placeholder twins", "checked", twinStats.Checked, "folded", twinStats.Folded, "retryLater", twinStats.Skipped)
-
-	graph, err := store.LoadLinkGraph(ctx)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	if len(graph.PageIDs) == 0 {
-		logger.Info("No pages yet, nothing to rank")
 		return
 	}
 
-	opts := rank.Options{Damping: cfg.Rank.Damping, Tolerance: cfg.Rank.Tolerance, MaxIterations: cfg.Rank.MaxIterations}
+	ctx, cancel := context.WithTimeout(ctx, onceTimeout)
+	defer cancel()
 
-	pageResult := compute(logger, "page", len(graph.PageIDs), graph.Links, opts)
+	if err := ranker.Run(ctx); err != nil {
+		if errors.Is(err, ranking.ErrBusy) {
+			logger.Info("Another ranker is running; its scores will be current when it finishes")
+			return
+		}
 
-	hostLinks := rank.Collapse(graph.Links, graph.HostOf)
-	hostResult := compute(logger, "site", len(graph.Hosts), hostLinks, opts)
-
-	run := pages.RankRun{
-		Pages:      len(graph.PageIDs),
-		Links:      len(graph.Links),
-		Hosts:      len(graph.Hosts),
-		HostLinks:  len(hostLinks),
-		Iterations: pageResult.Iterations,
-		Residual:   pageResult.Residual,
+		logger.Fatal(err)
 	}
-
-	if err := store.SaveRanks(ctx, run, graph.PageIDs, pageResult.Scores, graph.Hosts, hostResult.Scores); err != nil {
-		logger.Fatal("Saving ranks:", err)
-	}
-
-	logger.Infow("Ranks saved",
-		"pages", run.Pages, "links", run.Links, "hosts", run.Hosts, "siteLinks", run.HostLinks,
-		"took", time.Since(started).String(),
-		"topSites", top(graph.Hosts, hostResult.Scores, 10))
-}
-
-func compute(logger *zap.SugaredLogger, level string, nodes int, edges []rank.Edge, opts rank.Options) rank.Result {
-	graph, err := rank.NewGraph(nodes, edges)
-	if err != nil {
-		logger.Fatalw("Building the graph", "level", level, "error", err)
-	}
-
-	result, err := rank.PageRank(graph, opts)
-	if err != nil {
-		logger.Fatalw("Ranking", "level", level, "error", err)
-	}
-
-	// Scores short of convergence are still usable, only less settled.
-	if !result.Converged {
-		logger.Warnw("PageRank did not converge", "level", level, "iterations", result.Iterations, "residual", result.Residual)
-	}
-
-	logger.Infow("Ranked", "level", level, "nodes", graph.Nodes(), "edges", graph.Edges(),
-		"iterations", result.Iterations, "residual", result.Residual)
-
-	return result
-}
-
-func top(names []string, scores []float64, n int) []string {
-	order := make([]int, len(names))
-	for i := range order {
-		order[i] = i
-	}
-
-	sort.Slice(order, func(a, b int) bool { return scores[order[a]] > scores[order[b]] })
-
-	out := make([]string, 0, n)
-	for _, i := range order[:min(n, len(order))] {
-		out = append(out, names[i])
-	}
-
-	return out
 }

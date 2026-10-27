@@ -74,6 +74,7 @@ func main() {
 	if chat := platform.NewChatClient(logger, cfg, sm); chat != nil {
 		service, err := answer.New(retriever, chat, answer.Config{
 			Sources:     cfg.Chat.ContextChunks,
+			SourceRunes: cfg.Chat.SourceRunes,
 			MaxTokens:   cfg.Chat.MaxTokens,
 			Temperature: cfg.Chat.Temperature,
 		})
@@ -92,7 +93,7 @@ func main() {
 		producer := platform.NewRunsProducer(logger, sm)
 		defer producer.Close()
 
-		services.Runs = runs.NewService(runs.NewStore(db, cfg.RunState.SlotLease.Std()), producer, runs.Limits{
+		services.Runs = runs.NewService(runs.NewStore(logger, db, cfg.RunState.SlotLease.Std()), producer, runs.Limits{
 			DefaultDepth: cfg.CrawlAPI.DefaultDepth,
 			MaxDepth:     cfg.CrawlAPI.MaxDepth,
 			DefaultLinks: cfg.CrawlAPI.DefaultLinks,

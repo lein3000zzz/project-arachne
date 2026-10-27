@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 	"web-crawler/internal/networker"
 
 	"go.uber.org/zap"
@@ -78,5 +79,24 @@ func TestAvailabilityFollowsRFC9309(t *testing.T) {
 		if cached := tc.fetcher.calls == 1; cached != tc.cached {
 			t.Errorf("%s: robots.txt fetched %d times; cached = %v, want %v", tc.name, tc.fetcher.calls, cached, tc.cached)
 		}
+	}
+}
+
+func TestMemoryCacheExpires(t *testing.T) {
+	c := NewMemoryCache()
+	clock := time.Now()
+	c.now = func() time.Time { return clock }
+
+	_ = c.Set("a", "rules", time.Hour)
+	_ = c.Set("b", "forever", 0)
+
+	clock = clock.Add(2 * time.Hour)
+
+	if _, err := c.Get("a"); !errors.Is(err, ErrNotCached) {
+		t.Errorf("an entry past its TTL must be refetched: %v", err)
+	}
+
+	if v, err := c.Get("b"); err != nil || v != "forever" {
+		t.Errorf("no TTL: %q %v", v, err)
 	}
 }

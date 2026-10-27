@@ -19,7 +19,10 @@ type Searcher interface {
 }
 
 type Config struct {
-	Sources     int
+	Sources int
+	// Each source is cut to this many runes. Reading the sources is most of the
+	// wait before the first word on a CPU-bound model; 0 keeps them whole.
+	SourceRunes int
 	MaxTokens   int
 	Temperature *float64
 }
@@ -106,7 +109,7 @@ func (s *Service) Answer(ctx context.Context, req Request, events Events) (Resul
 
 	resp, err := s.chat.Stream(ctx, llm.Request{
 		System:      systemPrompt,
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(strings.TrimSpace(req.Query), sources)}},
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(strings.TrimSpace(req.Query), sources, s.cfg.SourceRunes)}},
 		MaxTokens:   s.cfg.MaxTokens,
 		Temperature: s.cfg.Temperature,
 	}, events.Delta)
@@ -122,19 +125,43 @@ func (s *Service) Answer(ctx context.Context, req Request, events Events) (Resul
 	return result, nil
 }
 
-func prompt(query string, sources []Source) string {
+func prompt(query string, sources []Source, runes int) string {
 	var b strings.Builder
 
 	b.WriteString("Sources:\n\n")
 
 	for _, src := range sources {
-		fmt.Fprintf(&b, "[%d] %s\n%s\n%s\n\n", src.N, src.Title, src.URL, strings.TrimSpace(src.Snippet))
+		fmt.Fprintf(&b, "[%d] %s\n%s\n%s\n\n", src.N, src.Title, src.URL, excerpt(src.Snippet, runes))
 	}
 
 	b.WriteString("Question: ")
 	b.WriteString(query)
 
 	return b.String()
+}
+
+// excerpt cuts text to at most limit runes, at the last sentence or line end in
+// its final third if there is one, else at a word boundary.
+func excerpt(text string, limit int) string {
+	text = strings.TrimSpace(text)
+
+	runes := []rune(text)
+	if limit <= 0 || len(runes) <= limit {
+		return text
+	}
+
+	cut := string(runes[:limit])
+	floor := len(string(runes[:limit*2/3]))
+
+	if i := max(strings.LastIndex(cut, ". "), strings.LastIndex(cut, "\n")); i >= floor {
+		return strings.TrimSpace(cut[:i+1]) + " …"
+	}
+
+	if i := strings.LastIndexAny(cut, " \t"); i > 0 {
+		return strings.TrimSpace(cut[:i]) + " …"
+	}
+
+	return cut + "…"
 }
 
 var citation = regexp.MustCompile(`\[(\d{1,3})\]`)

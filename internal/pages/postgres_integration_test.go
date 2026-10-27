@@ -368,3 +368,51 @@ func TestPlaceholderTwinsResolve(t *testing.T) {
 
 	assertStrings(t, "a later link to the alias", repo.strings(t, linksOf, "https://example.com/"), "https://example.com/learn/ 1")
 }
+
+func TestRankLockAndStaleness(t *testing.T) {
+	repo := testRepo(t)
+	store := NewGraphStore(repo.pool)
+	ctx := context.Background()
+
+	stale, err := store.RanksStale(ctx)
+	if err != nil || stale {
+		t.Fatalf("empty graph: stale=%v, %v", stale, err)
+	}
+
+	repo.save(t, page("https://example.com/", nil, nil))
+
+	if stale, _ = store.RanksStale(ctx); !stale {
+		t.Error("pages and no ranking yet must count as stale")
+	}
+
+	repo.exec(t, `INSERT INTO rank_runs (pages, links, hosts, host_links, iterations, residual) VALUES (1, 0, 1, 0, 1, 0)`)
+
+	if stale, _ = store.RanksStale(ctx); stale {
+		t.Error("ranked after the last crawl: not stale")
+	}
+
+	repo.exec(t, `INSERT INTO runs (id, start_url, max_depth, max_links, finished_at) VALUES ('r', 'https://example.com/', 1, 1, now() + interval '1 second')`)
+	repo.exec(t, `INSERT INTO runs (id, start_url, max_depth, max_links, finished_at, note) VALUES ('d', 'x', 1, 1, now() + interval '1 hour', 'dropped')`)
+
+	if stale, _ = store.RanksStale(ctx); !stale {
+		t.Error("a crawl finished after the last ranking: stale")
+	}
+
+	inner := false
+
+	acquired, err := store.WithRankLock(ctx, func() error {
+		again, err := store.WithRankLock(ctx, func() error { inner = true; return nil })
+		if err != nil || again {
+			t.Errorf("a second ranker must not get the lock: %v %v", again, err)
+		}
+
+		return nil
+	})
+	if err != nil || !acquired || inner {
+		t.Errorf("acquired %v inner %v err %v", acquired, inner, err)
+	}
+
+	if again, _ := store.WithRankLock(ctx, func() error { return nil }); !again {
+		t.Error("the lock must be released after the first ranker")
+	}
+}

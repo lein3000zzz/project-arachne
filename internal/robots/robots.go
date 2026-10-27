@@ -73,33 +73,45 @@ func (c *Checker) Allowed(rawURL string) bool {
 	return grobotstxt.AgentAllowed(rules, c.agent, rawURL)
 }
 
-// MemoryCache is a Cache for short-lived processes; it ignores the TTL.
+// MemoryCache is a Cache for one process.
 type MemoryCache struct {
 	mu    sync.Mutex
-	rules map[string]string
+	rules map[string]cached
+	now   func() time.Time
+}
+
+type cached struct {
+	rules   string
+	expires time.Time
 }
 
 func NewMemoryCache() *MemoryCache {
-	return &MemoryCache{rules: make(map[string]string)}
+	return &MemoryCache{rules: make(map[string]cached), now: time.Now}
 }
 
 func (m *MemoryCache) Get(key string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	rules, ok := m.rules[key]
-	if !ok {
+	entry, ok := m.rules[key]
+	if !ok || !entry.expires.IsZero() && m.now().After(entry.expires) {
 		return "", ErrNotCached
 	}
 
-	return rules, nil
+	return entry.rules, nil
 }
 
-func (m *MemoryCache) Set(key string, value any, _ time.Duration) error {
+// Set keeps value for ttl; zero keeps it for the life of the process.
+func (m *MemoryCache) Set(key string, value any, ttl time.Duration) error {
 	rules, _ := value.(string)
 
+	entry := cached{rules: rules}
+	if ttl > 0 {
+		entry.expires = m.now().Add(ttl)
+	}
+
 	m.mu.Lock()
-	m.rules[key] = rules
+	m.rules[key] = entry
 	m.mu.Unlock()
 
 	return nil

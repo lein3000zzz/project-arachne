@@ -67,7 +67,33 @@ func (f *fakeInner) delivered() []*documents.Document {
 }
 
 func newAsync(inner documents.Sink, workers, queue int, timeout time.Duration) *AsyncSink {
-	return NewAsyncSink(zap.NewNop().Sugar(), inner, workers, queue, timeout)
+	return NewAsyncSink(zap.NewNop().Sugar(), inner, nil, workers, queue, timeout)
+}
+
+type fakeProgress struct {
+	mu                     sync.Mutex
+	queued, indexed, fails map[string]int
+}
+
+func newProgress() *fakeProgress {
+	return &fakeProgress{queued: map[string]int{}, indexed: map[string]int{}, fails: map[string]int{}}
+}
+
+func (f *fakeProgress) Queued(_ context.Context, runID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queued[runID]++
+}
+
+func (f *fakeProgress) Done(_ context.Context, runID string, failed bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if failed {
+		f.fails[runID]++
+	} else {
+		f.indexed[runID]++
+	}
 }
 
 func TestAsyncSinkKeepsPerURLOrder(t *testing.T) {
@@ -207,5 +233,25 @@ func TestAsyncSinkRejectsAfterShutdown(t *testing.T) {
 
 	if err := sink.Submit(context.Background(), nil); !errors.Is(err, ErrNilDocument) {
 		t.Errorf("err = %v, want ErrNilDocument", err)
+	}
+}
+
+func TestAsyncSinkReportsProgressPerRun(t *testing.T) {
+	inner := &fakeInner{failFirst: true}
+	progress := newProgress()
+	sink := NewAsyncSink(zap.NewNop().Sugar(), inner, progress, 1, 8, time.Second)
+
+	for i := range 3 {
+		_ = sink.Submit(context.Background(), &documents.Document{URL: fmt.Sprintf("https://example.com/%d", i), RunID: "r", Content: "text"})
+	}
+
+	_ = sink.Submit(context.Background(), &documents.Document{URL: "https://example.com/startup-removal", Content: "text"})
+	_ = sink.Submit(context.Background(), &documents.Document{URL: "https://example.com/gone", RunID: "r"})
+
+	_ = sink.Shutdown(context.Background())
+
+	if progress.queued["r"] != 3 || progress.indexed["r"] != 2 || progress.fails["r"] != 1 || len(progress.queued) != 1 {
+		t.Errorf("queued %v indexed %v failed %v: documents without a run, and removals, are not counted",
+			progress.queued, progress.indexed, progress.fails)
 	}
 }

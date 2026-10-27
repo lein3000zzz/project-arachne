@@ -68,6 +68,10 @@ func TestStatus(t *testing.T) {
 		{Run{StartedAt: &old, LastFetch: &started}, StatusRunning},
 		{Run{StartedAt: &old, FinishedAt: &started}, StatusFinished},
 		{Run{FinishedAt: &started, Note: "could not be queued"}, StatusDropped},
+		{Run{StartedAt: &old, FinishedAt: &started, DocsQueued: 5, DocsIndexed: 3}, StatusIndexing},
+		{Run{StartedAt: &old, FinishedAt: &started, DocsQueued: 5, DocsIndexed: 4, DocsFailed: 1}, StatusFinished},
+		{Run{StartedAt: &old, FinishedAt: &old, DocsQueued: 5, DocsIndexed: 3}, StatusFinished},
+		{Run{StartedAt: &old, FinishedAt: &old, DocsQueued: 5, DocsIndexed: 3, IndexedAt: &started}, StatusIndexing},
 	}
 
 	for _, tc := range cases {
