@@ -3,11 +3,11 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o search ./cmd/search
+RUN go build -o search ./cmd/search && go build -o rank ./cmd/rank
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 WORKDIR /root/
-COPY --from=builder /app/search .
+COPY --from=builder /app/search /app/rank ./
 COPY --from=builder /app/configs ./configs
 CMD ["./search"]

@@ -11,8 +11,7 @@ ENV_FILE="${ENV_FILE:-main.env}"
 COMPOSE="${COMPOSE:-docker compose}"
 
 REDIS_PASSWORD="${REDIS_PASSWORD:-arachne-redis}"
-NEO4J_USER="${NEO4J_USER:-neo4j}"
-NEO4J_PASSWORD="${NEO4J_PASSWORD:-testtest}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-arachne-postgres}"
 KAFKA_USERNAME="${KAFKA_USERNAME:-arachne}"
 KAFKA_PASSWORD="${KAFKA_PASSWORD:-arachne-secret}"
 KAFKA_TOPIC_TASKS="${KAFKA_TOPIC_TASKS:-arachne.tasks}"
@@ -30,7 +29,7 @@ case "$PROFILE" in
     APP_ENV=prod
     VAULT_ADDRESS=http://vault:8200
     REDIS_URI=redis:6379
-    NEO4J_URI=bolt://neo4j:7687
+    POSTGRES_HOST=postgres:5432
     KAFKA_ADDR=broker:9092
     OTLP_ENDPOINT=jaeger:4318
     MILVUS_ADDR=milvus:19530
@@ -41,7 +40,7 @@ case "$PROFILE" in
     APP_ENV=dev
     VAULT_ADDRESS=http://127.0.0.1:8200
     REDIS_URI=localhost:6379
-    NEO4J_URI=bolt://localhost:7687
+    POSTGRES_HOST=localhost:5432
     KAFKA_ADDR=localhost:29092
     OTLP_ENDPOINT=localhost:4318
     MILVUS_ADDR=localhost:19530
@@ -157,10 +156,10 @@ echo "==> seeding kv/main (profile: $PROFILE)"
 vault_auth kv put kv/main/redis \
   REDIS_URI="$REDIS_URI" \
   REDIS_PASSWORD="$REDIS_PASSWORD" >/dev/null
-vault_auth kv put kv/main/neo4j \
-  NEO4J_URI="$NEO4J_URI" \
-  NEO4J_USER="$NEO4J_USER" \
-  NEO4J_PASSWORD="$NEO4J_PASSWORD" >/dev/null
+vault_auth kv put kv/main/postgres \
+  POSTGRES_DSN="postgres://arachne:${POSTGRES_PASSWORD}@${POSTGRES_HOST}/arachne?sslmode=disable" >/dev/null
+# Left behind by the Neo4j era; vault-config-manager would keep loading it.
+vault_auth kv metadata delete kv/main/neo4j >/dev/null 2>&1 || true
 vault_auth kv put kv/main/kafka \
   KAFKA_ADDR="$KAFKA_ADDR" \
   KAFKA_USERNAME="$KAFKA_USERNAME" \

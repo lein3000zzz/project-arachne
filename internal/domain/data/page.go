@@ -21,17 +21,3 @@ type PageData struct {
 func (p *PageData) MarshalBinary() ([]byte, error) {
 	return json.Marshal(p)
 }
-
-func (p *PageData) ToParams() (map[string]any, error) {
-	var m map[string]any
-	b, err := json.Marshal(p)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}

@@ -9,8 +9,11 @@ import (
 	"os"
 	"strings"
 	"web-crawler/internal/appconfig"
+	"web-crawler/internal/database"
 	"web-crawler/internal/embedding"
 	"web-crawler/internal/vectorstore"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/joho/godotenv"
 	"github.com/lein3000zzz/vault-config-manager/pkg/manager"
@@ -162,4 +165,24 @@ func LoadEnv() {
 	if err != nil {
 		log.Fatalf("Error loading .env file")
 	}
+}
+
+// OpenDatabase connects to Postgres and brings its schema up to date. Every binary
+// migrates on start; the migration lock makes concurrent starts safe.
+func OpenDatabase(ctx context.Context, logger *zap.SugaredLogger, sm manager.SecretManager, maxConns int32) *pgxpool.Pool {
+	dsn, err := sm.GetSecretStringFromConfig("POSTGRES_DSN")
+	if err != nil {
+		logger.Fatal("POSTGRES_DSN is missing in Vault")
+	}
+
+	pool, err := database.Open(ctx, dsn, maxConns)
+	if err != nil {
+		logger.Fatal("Error connecting to postgres:", err)
+	}
+
+	if err := database.Migrate(ctx, pool); err != nil {
+		logger.Fatal("Error migrating postgres:", err)
+	}
+
+	return pool
 }

@@ -22,8 +22,6 @@ import (
 	"web-crawler/internal/webcrawler/runstates"
 
 	"github.com/lein3000zzz/vault-config-manager/pkg/manager"
-	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
-	neoconfig "github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -34,6 +32,11 @@ const (
 	redisDBRobotsCache    = 1
 	redisDBRunState       = 2
 	redisDBDocumentHashes = 3
+)
+
+const (
+	databaseStartupTimeout = time.Minute
+	graphSchemaTimeout     = 10 * time.Minute
 )
 
 // Covers the embedder probe, which may have to load the model first, and
@@ -49,8 +52,7 @@ func InitApp() *CrawlerApp {
 
 	tp := platform.NewTracing(sm, "project-arachne")
 
-	neo4jDriver := initNeo4jDriver(sm, cfg)
-	pageRepo := initPageRepo(logger, neo4jDriver)
+	pageRepo := initPageRepo(logger, sm, cfg)
 
 	tasksQueue := initTasksQueue(logger, sm, cfg)
 	runsQueue := initRunsQueue(logger, sm, cfg)
@@ -92,7 +94,7 @@ func InitApp() *CrawlerApp {
 
 	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, cfg)
 
-	initGraphSchema(logger, pageRepo, crawler, documentSink)
+	initGraphSchema(logger, pageRepo, documentSink)
 
 	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp, cfg)
 }
@@ -240,17 +242,13 @@ func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appc
 	return runsQueue
 }
 
-// The first start against a graph without constraints fetches every page that has
-// a scheme or trailing-slash twin, one at a time.
-const graphSchemaTimeout = 15 * time.Minute
-
-func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, crawler *webcrawler.CrawlerRepo, sink documents.Sink) {
+func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, sink documents.Sink) {
 	ctx, cancel := context.WithTimeout(context.Background(), graphSchemaTimeout)
 	defer cancel()
 
-	removed, err := pageRepo.EnsureSchema(ctx, crawler.ResolveIdentity)
+	removed, err := pageRepo.EnsureCanonical(ctx)
 	if err != nil {
-		logger.Fatal("Error preparing the page graph:", err)
+		logger.Fatal("Error re-canonicalizing stored URLs:", err)
 	}
 
 	for _, pageURL := range removed {
@@ -260,33 +258,12 @@ func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, crawler
 	}
 }
 
-func initPageRepo(logger *zap.SugaredLogger, neo4jDriver neo4j.DriverWithContext) pages.PageRepo {
-	pageRepo := pages.NewNeo4jRepo(logger, neo4jDriver)
+func initPageRepo(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appconfig.Config) pages.PageRepo {
+	ctx, cancel := context.WithTimeout(context.Background(), databaseStartupTimeout)
+	defer cancel()
 
-	err := pageRepo.EnsureConnectivity()
-	if err != nil {
-		logger.Fatal("Error connecting to neo4j:", err)
-	}
+	// One connection per saver, plus one for the startup work running beside them.
+	pool := platform.OpenDatabase(ctx, logger, sm, int32(cfg.Crawler.SaverWorkers+1))
 
-	return pageRepo
-}
-
-func initNeo4jDriver(sm manager.SecretManager, cfg appconfig.Config) neo4j.DriverWithContext {
-	neo4jURI, err1 := sm.GetSecretStringFromConfig("NEO4J_URI")
-	neo4jUser, err2 := sm.GetSecretStringFromConfig("NEO4J_USER")
-	neo4jPassword, err3 := sm.GetSecretStringFromConfig("NEO4J_PASSWORD")
-
-	if err1 != nil || err2 != nil || err3 != nil {
-		log.Fatalf("Error initializing neo4j driver, some key is not found")
-	}
-
-	neo4jDriver, err := neo4j.NewDriverWithContext(neo4jURI, neo4j.BasicAuth(neo4jUser, neo4jPassword, ""), func(config *neoconfig.Config) {
-		config.MaxConnectionPoolSize = cfg.Crawler.TaskWorkers
-	})
-
-	if err != nil {
-		log.Fatal("Error initializing neo4j:", err)
-	}
-
-	return neo4jDriver
+	return pages.NewPostgresRepo(logger, pool)
 }

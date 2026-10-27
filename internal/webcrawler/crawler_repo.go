@@ -315,26 +315,6 @@ func pageIdentity(requested string, fetchRes *networker.FetchResult) (pageURL, a
 	return identity, requested
 }
 
-// ResolveIdentity fetches rawURL and reports the canonical URL it is an alias of,
-// if the server says it is one.
-func (repo *CrawlerRepo) ResolveIdentity(rawURL string) (string, bool) {
-	if !repo.isAllowedByRobots(rawURL) {
-		return "", false
-	}
-
-	fetchRes, err := repo.networker.Fetch(rawURL)
-	if err != nil {
-		return "", false
-	}
-
-	pageURL, alias := pageIdentity(rawURL, fetchRes)
-	if alias == "" {
-		return "", false
-	}
-
-	return pageURL, true
-}
-
 // linkBase is where the document really came from, whatever it is stored under:
 // relative links resolve against it.
 func linkBase(requested string, fetchRes *networker.FetchResult) string {

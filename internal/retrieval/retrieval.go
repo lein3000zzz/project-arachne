@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"web-crawler/internal/embedding"
+	"web-crawler/internal/rank"
 	"web-crawler/internal/vectorstore"
 
 	"golang.org/x/sync/errgroup"
@@ -50,6 +51,13 @@ type Result struct {
 	Score float64 `json:"score"`
 	Dense *Signal `json:"dense,omitempty"`
 	BM25  *Signal `json:"bm25,omitempty"`
+	// Link-graph scores from the last ranking run; absent for a page ranked
+	// never yet. Reported only: they do not affect the order.
+	PageRank *rank.Scores `json:"pagerank,omitempty"`
+}
+
+type RankSource interface {
+	LookupRanks(ctx context.Context, urls []string) (map[string]rank.Scores, error)
 }
 
 type Config struct {
@@ -61,15 +69,17 @@ type Config struct {
 type Retriever struct {
 	embedder embedding.Embedder
 	store    vectorstore.Searcher
+	ranks    RankSource
 	cfg      Config
 }
 
-func New(embedder embedding.Embedder, store vectorstore.Searcher, cfg Config) (*Retriever, error) {
+// New builds a retriever; ranks may be nil, and results then carry no PageRank.
+func New(embedder embedding.Embedder, store vectorstore.Searcher, ranks RankSource, cfg Config) (*Retriever, error) {
 	if embedder == nil || store == nil || cfg.Candidates <= 0 || cfg.RRFK <= 0 {
 		return nil, ErrInvalidConfig
 	}
 
-	return &Retriever{embedder: embedder, store: store, cfg: cfg}, nil
+	return &Retriever{embedder: embedder, store: store, ranks: ranks, cfg: cfg}, nil
 }
 
 func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
@@ -113,7 +123,35 @@ func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
 		results = results[:req.Limit]
 	}
 
+	if err := r.attachRanks(ctx, results); err != nil {
+		return nil, err
+	}
+
 	return results, nil
+}
+
+func (r *Retriever) attachRanks(ctx context.Context, results []Result) error {
+	if r.ranks == nil || len(results) == 0 {
+		return nil
+	}
+
+	urls := make([]string, len(results))
+	for i, res := range results {
+		urls[i] = res.URL
+	}
+
+	ranks, err := r.ranks.LookupRanks(ctx, urls)
+	if err != nil {
+		return fmt.Errorf("looking up page ranks: %w", err)
+	}
+
+	for i := range results {
+		if scores, ok := ranks[results[i].URL]; ok {
+			results[i].PageRank = &scores
+		}
+	}
+
+	return nil
 }
 
 func (r *Retriever) searchDense(ctx context.Context, query string, filter vectorstore.Filter) ([]page, error) {

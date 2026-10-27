@@ -51,6 +51,13 @@ search:
   listen: ":8090"
   request_timeout: 30s
 
+rank:
+  # chance of following a link rather than jumping to a random page
+  damping: 0.85
+  # iteration stops once the scores move less than this in total (L1)
+  tolerance: 1.0e-9
+  max_iterations: 100
+
 cache:
   page_ttl: 12h
   robots_ttl: 12h

@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"web-crawler/internal/rank"
 	"web-crawler/internal/vectorstore"
 )
 
@@ -62,7 +63,7 @@ func hit(url string, score float32, text string) vectorstore.Hit {
 func newRetriever(t *testing.T, store *fakeStore, embedder *fakeEmbedder) *Retriever {
 	t.Helper()
 
-	r, err := New(embedder, store, Config{QueryPrefix: "Query: ", Candidates: 50, RRFK: 60})
+	r, err := New(embedder, store, nil, Config{QueryPrefix: "Query: ", Candidates: 50, RRFK: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,5 +209,42 @@ func TestSearchLimitsAndValidates(t *testing.T) {
 	failing := newRetriever(t, store, &fakeEmbedder{err: errors.New("down")})
 	if _, err := failing.Search(context.Background(), Request{Query: "q", Limit: 1, Mode: ModeHybrid}); err == nil {
 		t.Error("an embedder failure must fail the hybrid search, not silently degrade it to BM25")
+	}
+}
+
+type fakeRanks struct {
+	scores map[string]rank.Scores
+	err    error
+}
+
+func (f fakeRanks) LookupRanks(context.Context, []string) (map[string]rank.Scores, error) {
+	return f.scores, f.err
+}
+
+func TestSearchAttachesRanksWithoutReordering(t *testing.T) {
+	store := &fakeStore{dense: []vectorstore.Hit{hit("a", 0.9, ""), hit("b", 0.5, "")}}
+	ranks := fakeRanks{scores: map[string]rank.Scores{"b": {Page: 0.9, Site: 0.8}}}
+
+	r, err := New(&fakeEmbedder{}, store, ranks, Config{Candidates: 10, RRFK: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := urls(results); got[0] != "a" || got[1] != "b" {
+		t.Errorf("order = %v: ranks are reported, not used for ordering", got)
+	}
+
+	if results[0].PageRank != nil || results[1].PageRank == nil || results[1].PageRank.Site != 0.8 {
+		t.Errorf("ranks = %+v, %+v", results[0].PageRank, results[1].PageRank)
+	}
+
+	failing, _ := New(&fakeEmbedder{}, store, fakeRanks{err: errors.New("postgres down")}, Config{Candidates: 10, RRFK: 60})
+	if _, err := failing.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense}); err == nil {
+		t.Error("a failed rank lookup must fail the search, not drop the scores silently")
 	}
 }

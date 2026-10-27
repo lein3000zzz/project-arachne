@@ -17,7 +17,7 @@ services:
     # kill the crawler while it is still flushing queued tasks and indexing.
     stop_grace_period: 40s
     depends_on:
-      neo4j:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -46,6 +46,8 @@ services:
       - "8090:8090"
     restart: always
     depends_on:
+      postgres:
+        condition: service_healthy
       milvus:
         condition: service_healthy
       ollama:
@@ -54,6 +56,21 @@ services:
       vllm:
         condition: service_healthy
         required: false
+
+  # One-shot: `make rank`. Built from the search image, which carries both binaries.
+  rank:
+    build:
+      context: .
+      dockerfile: deployments/search.Dockerfile
+    command: ["./rank"]
+    profiles: [tools]
+    env_file:
+      - main.env
+    volumes:
+      - ./configs:/root/configs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   vault:
     image: hashicorp/vault
@@ -71,22 +88,24 @@ services:
     command: "server" # -config=/vault/config/vault.hcl # Конфиг подтягивается автоматически из файлов
     restart: always
 
-  neo4j:
-    image: neo4j:5-enterprise
-    env_file:
-      - deployments/neo4j/neo4j.env
-    ports:
-      - '7687:7687'
-      - '7474:7474'
+  postgres:
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+    environment:
+      POSTGRES_USER: arachne
+      # Read on the first start only, when the data directory is created.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arachne-postgres}
+      POSTGRES_DB: arachne
     volumes:
-      - ./deployments/opt/neo4j_data:/data
-      - ./deployments/opt/neo4j_logs:/logs
+      # Postgres 18 images keep the data under a versioned subdirectory of this.
+      - ./deployments/opt/postgres:/var/lib/postgresql
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U arachne -d arachne"]
+      interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 30s
+    restart: unless-stopped
 
   redis:
     image: 'redis'
@@ -162,6 +181,10 @@ services:
   ollama:
     image: ollama/ollama:0.34.4
     profiles: [ollama]
+    # Embedding takes every core it is given. Capped so a crawl does not pin the
+    # whole machine; raise OLLAMA_CPUS when indexing speed matters more.
+    cpus: ${OLLAMA_CPUS:-4}
+    mem_limit: ${OLLAMA_MEMORY:-4g}
     environment:
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_NUM_PARALLEL: 4

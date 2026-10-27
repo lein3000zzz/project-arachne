@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
 	"web-crawler/internal/retrieval"
 	"web-crawler/internal/searchapi"
@@ -14,7 +15,11 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-const startupTimeout = 2 * time.Minute
+const (
+	startupTimeout = 2 * time.Minute
+	// One short rank lookup per request.
+	searchDBConns = 8
+)
 
 func main() {
 	platform.LoadEnv()
@@ -37,9 +42,11 @@ func main() {
 
 	store := platform.NewVectorStore(startCtx, logger, cfg, sm, dimension)
 
+	db := platform.OpenDatabase(startCtx, logger, sm, searchDBConns)
+
 	cancelStart()
 
-	retriever, err := retrieval.New(embedder, store, retrieval.Config{
+	retriever, err := retrieval.New(embedder, store, pages.NewGraphStore(db), retrieval.Config{
 		QueryPrefix: cfg.Embedding.QueryPrefix,
 		Candidates:  cfg.Retrieval.Candidates,
 		RRFK:        cfg.Retrieval.RRFK,
@@ -79,6 +86,8 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Warnw("Search server did not drain in time", "error", err)
 	}
+
+	db.Close()
 
 	if err := store.Close(shutdownCtx); err != nil {
 		logger.Warnw("Failed to close the vector store", "error", err)

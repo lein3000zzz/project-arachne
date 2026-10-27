@@ -16,6 +16,7 @@ type Config struct {
 	Indexer     Indexer     `yaml:"indexer"`
 	Retrieval   Retrieval   `yaml:"retrieval"`
 	Search      Search      `yaml:"search"`
+	Rank        Rank        `yaml:"rank"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -73,6 +74,12 @@ type Retrieval struct {
 type Search struct {
 	Listen         string   `yaml:"listen"`
 	RequestTimeout Duration `yaml:"request_timeout"`
+}
+
+type Rank struct {
+	Damping       float64 `yaml:"damping"`
+	Tolerance     float64 `yaml:"tolerance"`
+	MaxIterations int     `yaml:"max_iterations"`
 }
 
 type Cache struct {
@@ -155,6 +162,11 @@ func Default() Config {
 			Listen:         ":8090",
 			RequestTimeout: Duration(30 * time.Second),
 		},
+		Rank: Rank{
+			Damping:       0.85,
+			Tolerance:     1e-9,
+			MaxIterations: 100,
+		},
 		Cache: Cache{
 			PageTTL:         Duration(12 * time.Hour),
 			RobotsTTL:       Duration(12 * time.Hour),
@@ -208,6 +220,7 @@ func (c *Config) Validate() error {
 		{"retrieval.rrf_k", c.Retrieval.RRFK},
 		{"retrieval.default_limit", c.Retrieval.DefaultLimit},
 		{"retrieval.max_limit", c.Retrieval.MaxLimit},
+		{"rank.max_iterations", c.Rank.MaxIterations},
 	}
 
 	for _, field := range positive {
@@ -292,6 +305,14 @@ func (c *Config) Validate() error {
 	if c.Retrieval.DefaultLimit > c.Retrieval.MaxLimit {
 		return fmt.Errorf("%w: retrieval.default_limit (%d) exceeds retrieval.max_limit (%d)",
 			ErrInvalidConfig, c.Retrieval.DefaultLimit, c.Retrieval.MaxLimit)
+	}
+
+	if c.Rank.Damping <= 0 || c.Rank.Damping >= 1 {
+		return fmt.Errorf("%w: rank.damping must be in (0, 1), got %v", ErrInvalidConfig, c.Rank.Damping)
+	}
+
+	if c.Rank.Tolerance <= 0 {
+		return fmt.Errorf("%w: rank.tolerance must be > 0, got %v", ErrInvalidConfig, c.Rank.Tolerance)
 	}
 
 	if c.Search.Listen == "" {

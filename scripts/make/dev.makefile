@@ -14,9 +14,8 @@ EMBEDDERS    := ollama vllm
 UI           := kafka-ui
 
 REDIS_PASSWORD             ?= arachne-redis
-NEO4J_USER                 ?= neo4j
-NEO4J_PASSWORD             ?= testtest
-NEO4J_DATABASE             ?= pages
+POSTGRES_PASSWORD          ?= arachne-postgres
+export POSTGRES_PASSWORD
 KAFKA_USERNAME             ?= arachne
 KAFKA_PASSWORD             ?= arachne-secret
 KAFKA_TOPIC_TASKS          ?= arachne.tasks
@@ -35,7 +34,7 @@ EMBEDDER ?= $(if $(EMBEDDING_BASE_URL),external,$(or $(shell sed -n 's/^EMBEDDER
 EMBEDDER_SERVICE := $(filter $(EMBEDDER),$(EMBEDDERS))
 export COMPOSE_PROFILES := $(EMBEDDER_SERVICE)
 
-INFRA := vault neo4j redis broker jaeger milvus $(EMBEDDER_SERVICE)
+INFRA := vault postgres redis broker jaeger milvus $(EMBEDDER_SERVICE)
 
 comma := ,
 space := $(subst ,, )
@@ -49,7 +48,7 @@ export EMBEDDING_MODEL
 
 BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	REDIS_PASSWORD=$(REDIS_PASSWORD) \
-	NEO4J_USER=$(NEO4J_USER) NEO4J_PASSWORD=$(NEO4J_PASSWORD) \
+	POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
 	KAFKA_USERNAME=$(KAFKA_USERNAME) KAFKA_PASSWORD=$(KAFKA_PASSWORD) \
 	KAFKA_TOPIC_TASKS=$(KAFKA_TOPIC_TASKS) KAFKA_TOPIC_RUNS=$(KAFKA_TOPIC_RUNS) \
 	KAFKA_TASKS_CONSUMER_GROUP=$(KAFKA_TASKS_CONSUMER_GROUP) \
@@ -59,13 +58,14 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	MILVUS_TOKEN="$(MILVUS_TOKEN)" \
 	scripts/vault-bootstrap.sh
 
-.PHONY: help up dev run crawl search eval down reset restart logs ps env vault-bootstrap neo4j-init models stop-other-embedders build test test-integration vet tidy
+.PHONY: help up dev run crawl search eval rank down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
 
 help:
 	@echo "make up        full stack in docker (crawler included)"
 	@echo "make dev       infra only, addressed for a host-run crawler"
 	@echo "make run       go run the crawler on the host (after make dev)"
 	@echo "make crawl URL=https://example.com/ [DEPTH=2] [LINKS=25]"
+	@echo "make rank      recompute page and site PageRank from the link graph"
 	@echo "make eval [DATASET=eval/sample.yml] [OUT=results.json]   nDCG/MRR/recall per mode"
 	@echo "make search Q=\"query\" [MODE=hybrid|dense|bm25] [HOST=go.dev] [LIMIT=10]"
 	@echo "make logs      follow crawler logs"
@@ -74,18 +74,18 @@ help:
 	@echo "make reset     stop, delete volumes, bind mounts and $(ENV_FILE)"
 	@echo ""
 	@echo "make build / test / vet / tidy"
-	@echo "make test-integration   tests against the running Milvus, Redis and Neo4j"
+	@echo "make test-integration   tests against the running Milvus, Redis and Postgres"
 	@echo ""
 	@echo "tuning:  configs/config.yml  (workers, TTLs, parser engine, embedding model)"
 	@echo "         make up CONFIG_PATH=configs/other.yml to use another file"
 	@echo ""
 	@echo "embedder (remembered in $(ENV_FILE), now: $(EMBEDDER)):"
-	@echo "         make up EMBEDDER=ollama   bundled Ollama, fastest on Apple Silicon"
+	@echo "         make up EMBEDDER=ollama   bundled Ollama, fastest on Apple Silicon (OLLAMA_CPUS=4 by default)"
 	@echo "         make up EMBEDDER=vllm     bundled vLLM (CPU), for x86 servers"
 	@echo "         make up EMBEDDING_BASE_URL=https://... [EMBEDDING_API_KEY=...]   external"
 	@echo ""
 	@echo "UI: kafka-ui http://localhost:8080  jaeger http://localhost:16686"
-	@echo "    neo4j    http://localhost:7474  vault  http://localhost:8200"
+	@echo "    postgres localhost:5432          vault  http://localhost:8200"
 	@echo "    milvus   localhost:19530         ollama http://localhost:11434  vllm http://localhost:8001"
 
 env: $(ENV_FILE)
@@ -105,7 +105,6 @@ up: env
 	$(COMPOSE) up -d --wait $(INFRA)
 	$(COMPOSE) up -d $(UI)
 	$(BOOTSTRAP) docker
-	$(MAKE) neo4j-init
 	$(MAKE) models
 	$(COMPOSE) up -d --build crawler search
 	@echo ""
@@ -117,7 +116,6 @@ dev: env
 	$(COMPOSE_HOST) up -d --wait $(INFRA)
 	$(COMPOSE_HOST) up -d $(UI)
 	$(BOOTSTRAP) host
-	$(MAKE) neo4j-init
 	$(MAKE) models
 	@echo ""
 	@echo "infra is up. start the crawler with: make run"
@@ -130,6 +128,10 @@ search:
 	@curl -sfG http://localhost:8090/search --data-urlencode "q=$(Q)" \
 		$(if $(MODE),--data-urlencode "mode=$(MODE)") $(if $(HOST),--data-urlencode "host=$(HOST)") \
 		$(if $(LIMIT),--data-urlencode "limit=$(LIMIT)") | jq .
+
+# PageRank over the stored link graph; search reports the new scores at once.
+rank:
+	$(COMPOSE) --profile tools run --rm --build rank
 
 # make eval [DATASET=eval/sample.yml] [OUT=eval/results.json]; needs the search service up
 eval:
@@ -154,12 +156,6 @@ endif
 stop-other-embedders:
 	@COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) \
 		$(COMPOSE) stop $(filter-out $(EMBEDDER_SERVICE),$(EMBEDDERS)) 2>/dev/null || true
-
-neo4j-init:
-	@$(COMPOSE) exec -T neo4j cypher-shell \
-		-u $(NEO4J_USER) -p $(NEO4J_PASSWORD) -d system --format plain \
-		"CREATE DATABASE $(NEO4J_DATABASE) IF NOT EXISTS WAIT"
-	@echo "neo4j database '$(NEO4J_DATABASE)' ready"
 
 restart:
 	$(COMPOSE) restart crawler
@@ -189,8 +185,7 @@ test:
 test-integration:
 	MILVUS_ADDR=localhost:19530 REDIS_ADDR=localhost:6379 \
 		REDIS_PASSWORD="$$(sed -n 's/^REDIS_PASSWORD=//p' $(ENV_FILE))" \
-		NEO4J_URI=bolt://localhost:7687 \
-		NEO4J_PASSWORD="$$(sed -n 's/^NEO4J_AUTH="*[^/]*\/\([^"]*\)"*$$/\1/p' deployments/neo4j/neo4j.env)" \
+		POSTGRES_DSN="postgres://arachne:$(POSTGRES_PASSWORD)@localhost:5432/arachne?sslmode=disable" \
 		$(GO) test -tags integration -count=1 ./...
 
 vet:
