@@ -23,7 +23,7 @@
   h1 span { color: var(--muted); font-weight: 400; }
   form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
   input, select, button { font: inherit; color: inherit; }
-  input[type=search], input[type=text], select {
+  input[type=search], input[type=text], input[type=url], input[type=number], select {
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; }
   input[type=search] { font-size: 16px; }
   button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 0 18px; cursor: pointer; }
@@ -52,6 +52,22 @@
   .signals { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
   .signals span { background: var(--chip); border-radius: 5px; padding: 1px 7px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .signals b { color: var(--text); font-weight: 600; }
+  details.crawl { margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  details.crawl summary { cursor: pointer; font-size: 14px; color: var(--muted); }
+  .crawl form { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .crawl form input[type=url] { flex: 1 1 260px; }
+  .crawl form input[type=number] { width: 80px; padding: 7px 9px; }
+  .crawl form input[type=url], .crawl form select { padding: 7px 10px; }
+  .crawl form label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+  .crawl form button { padding: 8px 16px; }
+  .crawl .hint { width: 100%; font-size: 12px; color: var(--muted); }
+  table.runs { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  table.runs td { padding: 6px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  table.runs td.url { word-break: break-all; }
+  table.runs td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .chip { display: inline-block; border-radius: 5px; padding: 0 7px; font-size: 12px; background: var(--chip); color: var(--muted); }
+  .chip.running, .chip.queued { background: var(--accent-soft); color: var(--accent); }
+  .chip.stalled, .chip.dropped { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -83,6 +99,23 @@
       </label>
     </div>
   </form>
+
+  <details id="crawlBox" class="crawl" hidden>
+    <summary>Add a site to the index</summary>
+    <form id="crawlForm">
+      <input id="crawlUrl" type="url" placeholder="https://go.dev/doc/" required>
+      <select id="crawlScope" title="Which links the crawl may follow">
+        <option value="site">this site</option>
+        <option value="section">this section</option>
+        <option value="anywhere">anywhere</option>
+      </select>
+      <label>pages <input id="crawlLinks" type="number" min="1" value="100"></label>
+      <label>depth <input id="crawlDepth" type="number" min="1" value="3"></label>
+      <button id="crawlGo">Crawl</button>
+      <div id="crawlHint" class="hint">Pages become searchable as they are indexed, which takes longer than crawling them. PageRank updates with <code>make rank</code>.</div>
+    </form>
+    <table class="runs"><tbody id="runs"></tbody></table>
+  </details>
 
   <section id="answerBox" class="answer" hidden>
     <div class="label">Answer</div>
@@ -238,11 +271,89 @@ function answer() {
   });
 }
 
+let polling = null;
+
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return Math.round(s) + " s ago";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  return Math.round(s / 3600) + " h ago";
+}
+
+function renderRuns(list) {
+  $("runs").replaceChildren(...list.map((run) => el("tr", {},
+    el("td", { class: "url" }, run.start_url, run.note ? el("div", { class: "hint" }, run.note) : null),
+    el("td", {}, el("span", { class: "chip " + run.status }, run.status)),
+    el("td", { class: "num" }, run.pages + " / " + run.max_links + " pages"),
+    el("td", { class: "num" }, ago(run.submitted_at)))));
+}
+
+async function loadRuns() {
+  try {
+    const res = await fetch("/api/runs?limit=8");
+    if (res.status === 503) { $("crawlBox").hidden = true; return; }
+    const body = await res.json();
+    $("crawlBox").hidden = false;
+    renderRuns(body.runs);
+    const active = body.runs.some((r) => r.status === "queued" || r.status === "running");
+    clearTimeout(polling);
+    if (active) polling = setTimeout(loadRuns, 3000);
+  } catch (_) {
+    clearTimeout(polling);
+    polling = setTimeout(loadRuns, 10000);
+  }
+}
+
+$("crawlForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("crawlGo").disabled = true;
+  try {
+    const res = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: $("crawlUrl").value.trim(),
+        scope: $("crawlScope").value,
+        links: Number($("crawlLinks").value),
+        depth: Number($("crawlDepth").value),
+      }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    $("crawlUrl").value = "";
+    $("crawlHint").textContent = "Queued " + body.start_url + ". Pages become searchable as they are indexed.";
+    loadRuns();
+  } catch (err) {
+    $("crawlHint").textContent = "Not started: " + err.message;
+  } finally {
+    $("crawlGo").disabled = false;
+  }
+});
+
+$("crawlBox").addEventListener("toggle", () => { if ($("crawlBox").open) loadRuns(); });
+if (location.hash === "#crawl") $("crawlBox").open = true;
+loadRuns();
+
 $("form").addEventListener("submit", (e) => {
   e.preventDefault();
   if (!$("q").value.trim()) return;
+  history.replaceState(null, "", "?" + params() + ($("answer").checked ? "" : "&answer=0") + location.hash);
   $("answer").checked ? answer() : search();
 });
+
+// A link with ?q= runs that search, so results can be shared.
+{
+  const p = new URLSearchParams(location.search);
+  if (p.get("q")) {
+    $("q").value = p.get("q");
+    if (p.get("mode")) $("mode").value = p.get("mode");
+    if (p.get("host")) $("host").value = p.get("host");
+    if (p.get("rerank") === "false") $("rerank").checked = false;
+    if (p.get("pagerank")) $("pagerank").value = p.get("pagerank");
+    if (p.get("answer") === "0") $("answer").checked = false;
+    $("answer").checked ? answer() : search();
+  }
+}
 </script>
 </body>
 </html>

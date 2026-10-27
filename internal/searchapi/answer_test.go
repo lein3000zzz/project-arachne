@@ -43,7 +43,12 @@ func (f *fakeAnswerer) Answer(_ context.Context, req answer.Request, events answ
 }
 
 func serveAnswer(answerer Answerer, target string) *httptest.ResponseRecorder {
-	handler := NewHandler(zap.NewNop().Sugar(), &fakeSearcher{}, answerer,
+	services := Services{Searcher: &fakeSearcher{}}
+	if answerer != nil {
+		services.Answerer = answerer
+	}
+
+	handler := NewHandler(zap.NewNop().Sugar(), services,
 		Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second, AnswerTimeout: time.Second})
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))

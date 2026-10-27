@@ -19,6 +19,7 @@ type Config struct {
 	Rank        Rank        `yaml:"rank"`
 	Chat        Chat        `yaml:"chat"`
 	Rerank      Rerank      `yaml:"rerank"`
+	CrawlAPI    CrawlAPI    `yaml:"crawl_api"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -113,6 +114,16 @@ type Chat struct {
 	MaxRetries     int      `yaml:"max_retries"`
 	// Search results handed to the model as sources, one excerpt each.
 	ContextChunks int `yaml:"context_chunks"`
+}
+
+// CrawlAPI lets the search service start crawls. Anyone who can reach it can
+// then make the crawler fetch any site, so it is for a trusted network.
+type CrawlAPI struct {
+	Enabled      bool `yaml:"enabled"`
+	DefaultDepth int  `yaml:"default_depth"`
+	MaxDepth     int  `yaml:"max_depth"`
+	DefaultLinks int  `yaml:"default_links"`
+	MaxLinks     int  `yaml:"max_links"`
 }
 
 type Cache struct {
@@ -214,6 +225,13 @@ func Default() Config {
 			RequestTimeout: Duration(time.Minute),
 			MaxRetries:     2,
 		},
+		CrawlAPI: CrawlAPI{
+			Enabled:      true,
+			DefaultDepth: 3,
+			MaxDepth:     5,
+			DefaultLinks: 100,
+			MaxLinks:     2000,
+		},
 		Chat: Chat{
 			Provider:       ChatProviderOpenAICompatible,
 			Model:          "qwen3:4b-instruct",
@@ -281,6 +299,10 @@ func (c *Config) Validate() error {
 		{"chat.max_tokens", c.Chat.MaxTokens},
 		{"chat.context_chunks", c.Chat.ContextChunks},
 		{"rerank.candidates", c.Rerank.Candidates},
+		{"crawl_api.default_depth", c.CrawlAPI.DefaultDepth},
+		{"crawl_api.max_depth", c.CrawlAPI.MaxDepth},
+		{"crawl_api.default_links", c.CrawlAPI.DefaultLinks},
+		{"crawl_api.max_links", c.CrawlAPI.MaxLinks},
 	}
 
 	for _, field := range positive {
@@ -390,6 +412,10 @@ func (c *Config) Validate() error {
 
 	if c.Rerank.Model == "" || c.Rerank.MaxRetries < 0 {
 		return fmt.Errorf("%w: rerank.model must be set and rerank.max_retries >= 0", ErrInvalidConfig)
+	}
+
+	if c.CrawlAPI.DefaultDepth > c.CrawlAPI.MaxDepth || c.CrawlAPI.DefaultLinks > c.CrawlAPI.MaxLinks {
+		return fmt.Errorf("%w: crawl_api defaults must not exceed their maximums", ErrInvalidConfig)
 	}
 
 	if c.Chat.Model == "" {

@@ -89,6 +89,7 @@ func TestStopAppShutsDownInStages(t *testing.T) {
 		&fakePages{stop: slowStage(log, "pages")},
 		&fakeProcessor{stop: slowStage(log, "queues")},
 		&fakeRunState{stop: slowStage(log, "runstate")},
+		nil,
 		tracesdk.NewTracerProvider(),
 		appconfig.Default(),
 	)

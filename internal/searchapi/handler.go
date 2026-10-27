@@ -45,12 +45,25 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func NewHandler(logger *zap.SugaredLogger, searcher Searcher, answerer Answerer, cfg Config) http.Handler {
-	mux := http.NewServeMux()
+// Services are what the API serves; Answerer and Runs may be nil.
+type Services struct {
+	Searcher Searcher
+	Answerer Answerer
+	Runs     RunService
+}
 
-	answers := &answerHandler{logger: logger, answerer: answerer, timeout: cfg.AnswerTimeout}
+func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
+	mux := http.NewServeMux()
+	searcher := services.Searcher
+
+	answers := &answerHandler{logger: logger, answerer: services.Answerer, timeout: cfg.AnswerTimeout}
 	mux.HandleFunc("GET /answer", answers.serveJSON)
 	mux.HandleFunc("GET /answer/stream", answers.serveStream)
+
+	runsAPI := &runsHandler{logger: logger, service: services.Runs}
+	mux.HandleFunc("POST /api/runs", runsAPI.submit)
+	mux.HandleFunc("GET /api/runs", runsAPI.list)
+	mux.HandleFunc("GET /api/runs/{id}", runsAPI.get)
 
 	mux.HandleFunc("GET /search", func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseRequest(r, cfg)

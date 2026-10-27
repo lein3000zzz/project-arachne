@@ -36,6 +36,7 @@ type CrawlerRepo struct {
 	robots          *robots.Checker
 	runStateManager runstates.RunStateManager
 	documents       documents.Sink
+	runs            RunRecorder
 	settings        appconfig.Config
 
 	cfg     *CrawlerConfig
@@ -51,6 +52,7 @@ func NewCrawlerRepo(
 	cacheRobots cache.CachedStorage,
 	runStateManager runstates.RunStateManager,
 	documentSink documents.Sink,
+	runs RunRecorder,
 	settings appconfig.Config,
 ) *CrawlerRepo {
 	return &CrawlerRepo{
@@ -63,6 +65,7 @@ func NewCrawlerRepo(
 		robots:          robots.NewChecker(logger, networker, cacheRobots, settings.Crawler.RobotsAgent(), settings.Cache.RobotsTTL.Std()),
 		runStateManager: runStateManager,
 		documents:       documentSink,
+		runs:            runs,
 		settings:        settings,
 	}
 }
@@ -220,6 +223,12 @@ func (repo *CrawlerRepo) completeTask(task *config.Task) {
 
 	if err := repo.runStateManager.CleanupRun(ctx, task.Run.ID); err != nil {
 		repo.logger.Warnw("Failed to clean up run state", "runID", task.Run.ID, "error", err)
+	}
+
+	if repo.runs != nil {
+		if err := repo.runs.Finished(ctx, task.Run, ""); err != nil {
+			repo.logger.Warnw("Failed to record the end of the run", "runID", task.Run.ID, "error", err)
+		}
 	}
 
 	repo.logger.Infow("Run finished", "runID", task.Run.ID)

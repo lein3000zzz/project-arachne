@@ -11,6 +11,7 @@ import (
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
 	"web-crawler/internal/retrieval"
+	"web-crawler/internal/runs"
 	"web-crawler/internal/searchapi"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -85,7 +86,23 @@ func main() {
 		logger.Infow("Answering enabled", "provider", cfg.Chat.Provider, "model", chat.Model())
 	}
 
-	handler := searchapi.NewHandler(logger, retriever, answerer, searchapi.Config{
+	services := searchapi.Services{Searcher: retriever, Answerer: answerer}
+
+	if cfg.CrawlAPI.Enabled {
+		producer := platform.NewRunsProducer(logger, sm)
+		defer producer.Close()
+
+		services.Runs = runs.NewService(runs.NewStore(db, cfg.RunState.SlotLease.Std()), producer, runs.Limits{
+			DefaultDepth: cfg.CrawlAPI.DefaultDepth,
+			MaxDepth:     cfg.CrawlAPI.MaxDepth,
+			DefaultLinks: cfg.CrawlAPI.DefaultLinks,
+			MaxLinks:     cfg.CrawlAPI.MaxLinks,
+		})
+
+		logger.Infow("Crawl submission enabled", "maxDepth", cfg.CrawlAPI.MaxDepth, "maxLinks", cfg.CrawlAPI.MaxLinks)
+	}
+
+	handler := searchapi.NewHandler(logger, services, searchapi.Config{
 		DefaultLimit:   cfg.Retrieval.DefaultLimit,
 		MaxLimit:       cfg.Retrieval.MaxLimit,
 		RequestTimeout: cfg.Search.RequestTimeout.Std(),

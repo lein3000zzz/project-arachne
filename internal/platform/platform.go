@@ -15,6 +15,10 @@ import (
 	"web-crawler/internal/rerank"
 	"web-crawler/internal/vectorstore"
 
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
+	"github.com/twmb/franz-go/plugin/kotel"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/joho/godotenv"
@@ -230,6 +234,31 @@ func NewReranker(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.Sec
 	})
 	if err != nil {
 		logger.Fatal("Error initializing the reranker:", err)
+	}
+
+	return client
+}
+
+// NewRunsProducer publishes to the runs topic, where the crawler takes runs from.
+func NewRunsProducer(logger *zap.SugaredLogger, sm manager.SecretManager) *kgo.Client {
+	addr, err1 := sm.GetSecretStringFromConfig("KAFKA_ADDR")
+	user, err2 := sm.GetSecretStringFromConfig("KAFKA_USERNAME")
+	password, err3 := sm.GetSecretStringFromConfig("KAFKA_PASSWORD")
+	topic, err4 := sm.GetSecretStringFromConfig("KAFKA_TOPIC_RUNS")
+
+	if err := errors.Join(err1, err2, err3, err4); err != nil {
+		logger.Fatal("Kafka settings missing in Vault:", err)
+	}
+
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(addr),
+		kgo.DefaultProduceTopic(topic),
+		kgo.AllowAutoTopicCreation(),
+		kgo.SASL(plain.Auth{User: user, Pass: password}.AsMechanism()),
+		kgo.WithHooks(kotel.NewKotel().Hooks()),
+	)
+	if err != nil {
+		logger.Fatal("Error creating the Kafka producer:", err)
 	}
 
 	return client

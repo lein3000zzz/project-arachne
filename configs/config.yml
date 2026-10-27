@@ -77,6 +77,15 @@ rank:
   # slash; each is fetched once to ask whether it redirects there
   twin_checks: 500
 
+crawl_api:
+  # lets the search service start crawls (UI and POST /api/runs); anyone who can
+  # reach it can then make the crawler fetch any site
+  enabled: true
+  default_depth: 3
+  max_depth: 5
+  default_links: 100
+  max_links: 2000
+
 chat:
   # openai-compatible: Ollama, vLLM, OpenRouter, DeepSeek… — openai: OpenAI itself
   # (sends max_completion_tokens) — anthropic: the Messages API. The endpoint and

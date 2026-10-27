@@ -16,11 +16,13 @@ import (
 	"web-crawler/internal/platform"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
+	"web-crawler/internal/runs"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lein3000zzz/vault-config-manager/pkg/manager"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
@@ -52,7 +54,9 @@ func InitApp() *CrawlerApp {
 
 	tp := platform.NewTracing(sm, "project-arachne")
 
-	pageRepo := initPageRepo(logger, sm, cfg)
+	db := initDatabase(logger, sm, cfg)
+	pageRepo := pages.NewPostgresRepo(logger, db)
+	runStore := runs.NewStore(db, cfg.RunState.SlotLease.Std())
 
 	tasksQueue := initTasksQueue(logger, sm, cfg)
 	runsQueue := initRunsQueue(logger, sm, cfg)
@@ -92,11 +96,11 @@ func InitApp() *CrawlerApp {
 		logger.Fatal("Error initializing extra worker parser:", errRod)
 	}
 
-	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, cfg)
+	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, runStore, cfg)
 
 	initGraphSchema(logger, pageRepo, documentSink)
 
-	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp, cfg)
+	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, runStore, tp, cfg)
 }
 
 func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
@@ -258,12 +262,12 @@ func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, sink do
 	}
 }
 
-func initPageRepo(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appconfig.Config) pages.PageRepo {
+// The page repository owns the pool and closes it last, after the crawl workers
+// that also record runs through it have stopped.
+func initDatabase(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appconfig.Config) *pgxpool.Pool {
 	ctx, cancel := context.WithTimeout(context.Background(), databaseStartupTimeout)
 	defer cancel()
 
-	// One connection per saver, plus one for the startup work running beside them.
-	pool := platform.OpenDatabase(ctx, logger, sm, int32(cfg.Crawler.SaverWorkers+1))
-
-	return pages.NewPostgresRepo(logger, pool)
+	// A connection per saver, plus a few for run bookkeeping and startup work.
+	return platform.OpenDatabase(ctx, logger, sm, int32(cfg.Crawler.SaverWorkers+3))
 }

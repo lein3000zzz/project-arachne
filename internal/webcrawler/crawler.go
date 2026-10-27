@@ -22,3 +22,9 @@ type Crawler interface {
 	StartCrawler(cfg *CrawlerConfig)
 	Shutdown(ctx context.Context) error
 }
+
+// RunRecorder keeps the record of runs that progress reports are read from. It is
+// told only: a failure to record never affects the crawl.
+type RunRecorder interface {
+	Finished(ctx context.Context, run *config.Run, note string) error
+}

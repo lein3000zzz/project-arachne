@@ -29,6 +29,7 @@ type CrawlerApp struct {
 	processorQueue  processor.Processor
 	pageRepo        pages.PageRepo
 	runStateManager runstates.RunStateManager
+	runs            RunRecorder
 	tracerProvider  *tracesdk.TracerProvider
 	secretManager   manager.SecretManager
 
@@ -36,8 +37,16 @@ type CrawlerApp struct {
 	cfg               appconfig.Config
 }
 
-func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageRepo, processorQueue processor.Processor, runStateManager runstates.RunStateManager, tp *tracesdk.TracerProvider, cfg appconfig.Config) *CrawlerApp {
+// RunRecorder keeps the record of runs that progress reports are read from;
+// recording never affects the crawl.
+type RunRecorder interface {
+	Started(ctx context.Context, run *config.Run, startURL string) error
+	Finished(ctx context.Context, run *config.Run, note string) error
+}
+
+func NewCrawlerApp(logger *zap.SugaredLogger, crawler webcrawler.Crawler, pagesRepo pages.PageRepo, processorQueue processor.Processor, runStateManager runstates.RunStateManager, runs RunRecorder, tp *tracesdk.TracerProvider, cfg appconfig.Config) *CrawlerApp {
 	return &CrawlerApp{
+		runs:              runs,
 		logger:            logger,
 		crawler:           crawler,
 		processorQueue:    processorQueue,
@@ -101,12 +110,16 @@ func (app *CrawlerApp) startRunListener(ctx context.Context) {
 func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run *config.Run) bool {
 	if run.MaxDepth < 1 || run.MaxLinks < 1 {
 		app.logger.Warnw("Dropping run that can never crawl anything", "runID", run.ID, "maxDepth", run.MaxDepth, "maxLinks", run.MaxLinks)
+		app.recordDropped(run, "depth and link limit must be at least 1")
+
 		return true
 	}
 
 	startURL, ok := urlnorm.FromUserInput(run.StartURL)
 	if !ok {
 		app.logger.Warnw("Dropping run with an unusable start URL", "runID", run.ID, "startURL", run.StartURL)
+		app.recordDropped(run, "the start URL is not a web address")
+
 		return true
 	}
 
@@ -114,6 +127,8 @@ func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run 
 		scope, ok := urlnorm.FromUserInput(run.Scope)
 		if !ok || !strings.HasPrefix(startURL, scope) {
 			app.logger.Warnw("Dropping run whose start URL is outside its scope", "runID", run.ID, "startURL", startURL, "scope", run.Scope)
+			app.recordDropped(run, "the start URL is outside the scope")
+
 			return true
 		}
 
@@ -149,9 +164,30 @@ func (app *CrawlerApp) processRun(ctx context.Context, tracer trace.Tracer, run 
 		}
 
 		app.processorQueue.QueueRun(run)
+
+		return true
+	}
+
+	if app.runs != nil {
+		if err := app.runs.Started(ctx, run, startURL); err != nil {
+			app.logger.Warnw("Failed to record the start of the run", "runID", run.ID, "error", err)
+		}
 	}
 
 	return true
+}
+
+func (app *CrawlerApp) recordDropped(run *config.Run, note string) {
+	if app.runs == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := app.runs.Finished(ctx, run, note); err != nil {
+		app.logger.Warnw("Failed to record a dropped run", "runID", run.ID, "error", err)
+	}
 }
 
 func (app *CrawlerApp) waitForRunSlot(ctx context.Context, tracer trace.Tracer, run *config.Run) error {

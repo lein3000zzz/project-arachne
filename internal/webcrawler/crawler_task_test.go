@@ -171,12 +171,17 @@ func TestOnlyTheCompletionThatReachesZeroReleasesTheSlot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness()
 			h.state.left, h.state.counted = tc.left, tc.counted
+			h.repo.runs = &fakeRecorder{log: h.log}
 
 			got := h.run()
 			released := slices.Contains(got, "release") && slices.Contains(got, "cleanup")
 
 			if released != tc.wantRelease {
 				t.Errorf("events = %v, want release=%v", got, tc.wantRelease)
+			}
+
+			if recorded := slices.Contains(got, "run finished"); recorded != tc.wantRelease {
+				t.Errorf("events = %v: the run is recorded as finished exactly when its slot is released", got)
 			}
 
 			if !slices.Contains(got, "ack") {
@@ -289,4 +294,13 @@ func TestChildrenOutsideTheScopeAreNotFollowed(t *testing.T) {
 	if got := h.run(); !slices.Equal(got, want) {
 		t.Errorf("events = %v, want %v", got, want)
 	}
+}
+
+type fakeRecorder struct {
+	log *eventLog
+}
+
+func (f *fakeRecorder) Finished(context.Context, *config.Run, string) error {
+	f.log.add("run finished")
+	return nil
 }
