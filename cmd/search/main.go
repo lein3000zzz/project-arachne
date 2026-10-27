@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"web-crawler/internal/answer"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
 	"web-crawler/internal/retrieval"
@@ -55,10 +56,28 @@ func main() {
 		logger.Fatal("Error initializing retriever:", err)
 	}
 
-	handler := searchapi.NewHandler(logger, retriever, searchapi.Config{
+	var answerer searchapi.Answerer
+
+	if chat := platform.NewChatClient(logger, cfg, sm); chat != nil {
+		service, err := answer.New(retriever, chat, answer.Config{
+			Sources:     cfg.Chat.ContextChunks,
+			MaxTokens:   cfg.Chat.MaxTokens,
+			Temperature: cfg.Chat.Temperature,
+		})
+		if err != nil {
+			logger.Fatal("Error initializing answering:", err)
+		}
+
+		answerer = service
+
+		logger.Infow("Answering enabled", "provider", cfg.Chat.Provider, "model", chat.Model())
+	}
+
+	handler := searchapi.NewHandler(logger, retriever, answerer, searchapi.Config{
 		DefaultLimit:   cfg.Retrieval.DefaultLimit,
 		MaxLimit:       cfg.Retrieval.MaxLimit,
 		RequestTimeout: cfg.Search.RequestTimeout.Std(),
+		AnswerTimeout:  cfg.Chat.RequestTimeout.Std(),
 	})
 
 	server := &http.Server{

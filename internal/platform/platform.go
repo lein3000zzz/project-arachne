@@ -11,6 +11,7 @@ import (
 	"web-crawler/internal/appconfig"
 	"web-crawler/internal/database"
 	"web-crawler/internal/embedding"
+	"web-crawler/internal/llm"
 	"web-crawler/internal/vectorstore"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -185,4 +186,27 @@ func OpenDatabase(ctx context.Context, logger *zap.SugaredLogger, sm manager.Sec
 	}
 
 	return pool
+}
+
+// NewChatClient returns nil when no chat endpoint is configured: search still
+// works, only answering is off.
+func NewChatClient(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) llm.Client {
+	baseURL, err := sm.GetSecretStringFromConfig("CHAT_BASE_URL")
+	if err != nil || baseURL == "" {
+		logger.Warn("CHAT_BASE_URL is not in Vault; answering is disabled")
+		return nil
+	}
+
+	client, err := llm.New(llm.Config{
+		Provider:   cfg.Chat.Provider,
+		BaseURL:    baseURL,
+		APIKey:     optionalSecret(sm, "CHAT_API_KEY"),
+		Model:      cfg.Chat.Model,
+		MaxRetries: cfg.Chat.MaxRetries,
+	})
+	if err != nil {
+		logger.Fatal("Error initializing the chat model:", err)
+	}
+
+	return client
 }

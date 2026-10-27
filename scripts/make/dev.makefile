@@ -47,10 +47,22 @@ space := $(subst ,, )
 CONFIG_OVERLAY_vllm := ,configs/vllm.yml
 CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
 
-# The config files are the single source of truth for the model name; the last
-# file naming one wins, as in the crawler.
-EMBEDDING_MODEL ?= $(shell sed -n 's/^[[:space:]]*model:[[:space:]]*//p' $(subst $(comma), ,$(CONFIG_PATH)) | tail -1)
+# $(call config_value,section,key): what the binaries will read - the last of the
+# config files to set section.key wins. Top-level sections, scalar keys only.
+config_value = $(shell awk -v section="$(1):" -v key="$(2):" \
+	'/^[^[:space:]\#]/ { insec = ($$1 == section) } insec && $$1 == key { v = $$2 } END { gsub(/["\047]/, "", v); print v }' \
+	$(subst $(comma), ,$(CONFIG_PATH)))
+
+EMBEDDING_MODEL ?= $(call config_value,embedding,model)
 export EMBEDDING_MODEL
+
+# Chat model for answers. Without CHAT_BASE_URL it runs on the bundled Ollama,
+# when there is one; otherwise answering is off until an endpoint is given.
+CHAT_BASE_URL ?=
+CHAT_API_KEY  ?=
+CHAT_MODEL    ?= $(call config_value,chat,model)
+CHAT_PROVIDER ?= $(call config_value,chat,provider)
+CHAT_LOCAL    := $(if $(and $(filter ollama,$(EMBEDDER)),$(if $(CHAT_BASE_URL),,yes),$(filter openai-compatible,$(CHAT_PROVIDER))),yes)
 
 BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	REDIS_PASSWORD=$(REDIS_PASSWORD) \
@@ -62,6 +74,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	CONFIG_PATH=$(CONFIG_PATH) EMBEDDER=$(EMBEDDER) \
 	EMBEDDING_BASE_URL="$(EMBEDDING_BASE_URL)" EMBEDDING_API_KEY="$(EMBEDDING_API_KEY)" \
 	MILVUS_TOKEN="$(MILVUS_TOKEN)" \
+	CHAT_BASE_URL="$(CHAT_BASE_URL)" CHAT_API_KEY="$(CHAT_API_KEY)" \
 	scripts/vault-bootstrap.sh
 
 .PHONY: help up dev run crawl search eval rank down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
@@ -89,6 +102,11 @@ help:
 	@echo "         make up EMBEDDER=ollama   bundled Ollama, fastest on Apple Silicon (OLLAMA_CPUS=4 by default)"
 	@echo "         make up EMBEDDER=vllm     bundled vLLM (CPU), for x86 servers"
 	@echo "         make up EMBEDDING_BASE_URL=https://... [EMBEDDING_API_KEY=...]   external"
+	@echo ""
+	@echo "chat model (answers): configs/config.yml chat.*, endpoint and key in Vault"
+	@echo "         make up                   local $(CHAT_MODEL) on the bundled Ollama"
+	@echo "         make up CONFIG_PATH=configs/config.yml,configs/chat-anthropic.yml \\"
+	@echo "                 CHAT_BASE_URL=https://api.anthropic.com/v1 CHAT_API_KEY=..."
 	@echo ""
 	@echo "UI: kafka-ui http://localhost:8080  jaeger http://localhost:16686"
 	@echo "    postgres localhost:5432          vault  http://localhost:8200"
@@ -159,6 +177,12 @@ models:
 ifeq ($(EMBEDDER),ollama)
 	@$(COMPOSE) exec -T ollama ollama pull $(EMBEDDING_MODEL) >/dev/null
 	@$(COMPOSE) exec -T ollama sh -c 'printf "FROM %s\nPARAMETER num_thread %s\n" "$(EMBEDDING_MODEL)" "$(OLLAMA_CPUS)" > /tmp/Modelfile && ollama create "$(EMBEDDING_MODEL)" -f /tmp/Modelfile >/dev/null && ollama stop "$(EMBEDDING_MODEL)" 2>/dev/null || true'
+endif
+ifeq ($(CHAT_LOCAL),yes)
+	@$(COMPOSE) exec -T ollama ollama pull $(CHAT_MODEL) >/dev/null
+	@# Ollama's default 4k context would silently cut off the sources.
+	@$(COMPOSE) exec -T ollama sh -c 'printf "FROM %s\nPARAMETER num_thread %s\nPARAMETER num_ctx 8192\n" "$(CHAT_MODEL)" "$(OLLAMA_CPUS)" > /tmp/Modelfile && ollama create "$(CHAT_MODEL)" -f /tmp/Modelfile >/dev/null && ollama stop "$(CHAT_MODEL)" 2>/dev/null || true'
+	@echo "chat model '$(CHAT_MODEL)' ready (ollama on $(OLLAMA_CPUS) cores)"
 endif
 	@echo "embedding model '$(EMBEDDING_MODEL)' ready ($(EMBEDDER)$(if $(filter ollama,$(EMBEDDER)), on $(OLLAMA_CPUS) cores))"
 

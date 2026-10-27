@@ -227,3 +227,28 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 		t.Errorf("an empty file is a valid overlay: %v", err)
 	}
 }
+
+func TestShippedChatOverlaysAreValid(t *testing.T) {
+	for _, overlay := range []string{"chat-anthropic.yml", "chat-openai.yml"} {
+		cfg, err := Load("../../configs/config.yml,../../configs/" + overlay)
+		if err != nil {
+			t.Errorf("%s: %v", overlay, err)
+			continue
+		}
+
+		if cfg.Chat.Provider == Default().Chat.Provider {
+			t.Errorf("%s must switch the provider", overlay)
+		}
+	}
+
+	cfg, _ := Load("../../configs/config.yml,../../configs/chat-openai.yml")
+	if cfg.Chat.Temperature != nil {
+		t.Errorf("temperature: null must unset the default, got %v", *cfg.Chat.Temperature)
+	}
+}
+
+func TestLoadRejectsUnknownChatProvider(t *testing.T) {
+	if _, err := Load(writeConfig(t, "chat:\n  provider: gemini\n")); err == nil {
+		t.Error("an unknown chat provider must be rejected at startup")
+	}
+}

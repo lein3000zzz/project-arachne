@@ -20,6 +20,8 @@ KAFKA_TASKS_CONSUMER_GROUP="${KAFKA_TASKS_CONSUMER_GROUP:-arachne-tasks}"
 KAFKA_RUNS_CONSUMER_GROUP="${KAFKA_RUNS_CONSUMER_GROUP:-arachne-runs}"
 CONFIG_PATH="${CONFIG_PATH:-configs/config.yml}"
 EMBEDDER="${EMBEDDER:-ollama}"
+CHAT_BASE_URL="${CHAT_BASE_URL:-}"
+CHAT_API_KEY="${CHAT_API_KEY:-}"
 EMBEDDING_BASE_URL_OVERRIDE="${EMBEDDING_BASE_URL:-}"
 EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
 MILVUS_TOKEN="${MILVUS_TOKEN:-}"
@@ -184,6 +186,19 @@ fi
 # re-running the bootstrap never erases a key someone set by hand.
 if [ -n "$EMBEDDING_API_KEY" ]; then
   vault_auth kv put kv/main/embedding_key EMBEDDING_API_KEY="$EMBEDDING_API_KEY" >/dev/null
+fi
+# The chat endpoint follows the same rule as the embedding one: given once, it
+# stays. Without one, answers use the bundled Ollama when it runs; a pointer to
+# Ollama left over from an earlier profile is removed rather than left to fail.
+if [ -n "$CHAT_BASE_URL" ]; then
+  vault_auth kv put kv/main/chat CHAT_BASE_URL="$CHAT_BASE_URL" >/dev/null
+elif [ "$EMBEDDER" = ollama ]; then
+  vault_auth kv put kv/main/chat CHAT_BASE_URL="$OLLAMA_URL" >/dev/null
+elif [ "$(vault_auth kv get -field=CHAT_BASE_URL kv/main/chat 2>/dev/null)" = "$OLLAMA_URL" ]; then
+  vault_auth kv metadata delete kv/main/chat >/dev/null
+fi
+if [ -n "$CHAT_API_KEY" ]; then
+  vault_auth kv put kv/main/chat_key CHAT_API_KEY="$CHAT_API_KEY" >/dev/null
 fi
 if [ -n "$MILVUS_TOKEN" ]; then
   vault_auth kv put kv/main/milvus_token MILVUS_TOKEN="$MILVUS_TOKEN" >/dev/null

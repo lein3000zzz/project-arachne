@@ -63,6 +63,20 @@ rank:
   # slash; each is fetched once to ask whether it redirects there
   twin_checks: 500
 
+chat:
+  # openai-compatible: Ollama, vLLM, OpenRouter, DeepSeek… — openai: OpenAI itself
+  # (sends max_completion_tokens) — anthropic: the Messages API. The endpoint and
+  # key are in Vault (CHAT_BASE_URL, CHAT_API_KEY); see configs/chat-*.yml.
+  provider: openai-compatible
+  model: qwen3:4b-instruct
+  max_tokens: 1024
+  # remove to send none; OpenAI's reasoning models accept only their default
+  temperature: 0.2
+  request_timeout: 5m
+  max_retries: 2
+  # search results given to the model as sources, one excerpt each
+  context_chunks: 6
+
 cache:
   page_ttl: 12h
   robots_ttl: 12h

@@ -185,7 +185,8 @@ services:
     # model's thread count to match (OLLAMA_CPUS). Ollama counts every host core
     # on its own, and oversubscribed cores make a batch take minutes.
     cpuset: ${OLLAMA_CPUSET:-0-3}
-    mem_limit: ${OLLAMA_MEMORY:-4g}
+    # the embedding model and the chat model with its 8k context, both loaded
+    mem_limit: ${OLLAMA_MEMORY:-8g}
     environment:
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_NUM_PARALLEL: 2

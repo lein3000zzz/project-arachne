@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"web-crawler/internal/answer"
 	"web-crawler/internal/retrieval"
 
 	"go.uber.org/zap"
@@ -18,10 +19,16 @@ type Searcher interface {
 	Search(ctx context.Context, req retrieval.Request) ([]retrieval.Result, error)
 }
 
+// Answerer is optional: without a chat model the answer endpoints report 503.
+type Answerer interface {
+	Answer(ctx context.Context, req answer.Request, events answer.Events) (answer.Result, error)
+}
+
 type Config struct {
 	DefaultLimit   int
 	MaxLimit       int
 	RequestTimeout time.Duration
+	AnswerTimeout  time.Duration
 }
 
 type Response struct {
@@ -36,8 +43,12 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func NewHandler(logger *zap.SugaredLogger, searcher Searcher, cfg Config) http.Handler {
+func NewHandler(logger *zap.SugaredLogger, searcher Searcher, answerer Answerer, cfg Config) http.Handler {
 	mux := http.NewServeMux()
+
+	answers := &answerHandler{logger: logger, answerer: answerer, timeout: cfg.AnswerTimeout}
+	mux.HandleFunc("GET /answer", answers.serveJSON)
+	mux.HandleFunc("GET /answer/stream", answers.serveStream)
 
 	mux.HandleFunc("GET /search", func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseRequest(r, cfg)
@@ -75,6 +86,8 @@ func NewHandler(logger *zap.SugaredLogger, searcher Searcher, cfg Config) http.H
 			Results: results,
 		})
 	})
+
+	mux.HandleFunc("GET /{$}", serveIndex)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -31,7 +31,7 @@ func (f *fakeSearcher) Search(_ context.Context, req retrieval.Request) ([]retri
 func serve(t *testing.T, searcher Searcher, target string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	handler := NewHandler(zap.NewNop().Sugar(), searcher, Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second})
+	handler := NewHandler(zap.NewNop().Sugar(), searcher, nil, Config{DefaultLimit: 10, MaxLimit: 50, RequestTimeout: time.Second})
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
 

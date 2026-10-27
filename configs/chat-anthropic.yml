@@ -1,0 +1,6 @@
+# make up CONFIG_PATH=configs/config.yml,configs/chat-anthropic.yml \
+#         CHAT_BASE_URL=https://api.anthropic.com/v1 CHAT_API_KEY=sk-ant-...
+chat:
+  provider: anthropic
+  # claude-haiku-4-5 is cheaper and faster, claude-opus-5-5 the most capable
+  model: claude-sonnet-5

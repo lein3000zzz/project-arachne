@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arachne Search</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #ffffff; --text: #1d1f23; --muted: #6b7079; --line: #e4e5e7;
+    --accent: #2f5bd3; --accent-soft: #e8eefc; --chip: #f1f2f4; --warn: #a1530b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141518; --panel: #1c1e22; --text: #e7e8ea; --muted: #9a9fa8; --line: #2c2f35;
+      --accent: #7f9ef0; --accent-soft: #23293a; --chip: #262930; --warn: #e3a35b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 18px; letter-spacing: -0.01em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  input, select, button { font: inherit; color: inherit; }
+  input[type=search], input[type=text], select {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; }
+  input[type=search] { font-size: 16px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 0 18px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  .options { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; color: var(--muted); font-size: 13px; }
+  .options label { display: flex; gap: 6px; align-items: center; }
+  .options input[type=text] { padding: 5px 9px; width: 180px; }
+  .options select { padding: 5px 8px; }
+  section { margin-top: 24px; }
+  .answer { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .answer .label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+  .answer .text { white-space: pre-wrap; }
+  .answer .meta { margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .answer .error { color: var(--warn); }
+  .cite { display: inline-block; min-width: 1.4em; padding: 0 4px; margin: 0 1px; border-radius: 4px; text-align: center;
+          font-size: 12px; line-height: 1.6; background: var(--accent-soft); color: var(--accent); text-decoration: none; }
+  .status { color: var(--muted); font-size: 13px; margin-top: 16px; }
+  ol.results { list-style: none; padding: 0; margin: 0; }
+  ol.results li { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  ol.results li.flash { background: var(--accent-soft); transition: background 1s; }
+  .title { font-size: 16px; color: var(--accent); text-decoration: none; }
+  .title:hover { text-decoration: underline; }
+  .n { color: var(--muted); font-size: 13px; margin-right: 6px; }
+  .url { color: var(--muted); font-size: 12.5px; word-break: break-all; }
+  .snippet { margin: 6px 0 8px; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .signals { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+  .signals span { background: var(--chip); border-radius: 5px; padding: 1px 7px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .signals b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Arachne <span>hybrid search over crawled pages</span></h1>
+
+  <form id="form">
+    <input id="q" type="search" placeholder="Ask or search…" autocomplete="off" autofocus required>
+    <button id="go">Search</button>
+    <div class="options">
+      <label><input id="answer" type="checkbox" checked> Answer with sources</label>
+      <label>Mode
+        <select id="mode">
+          <option value="hybrid">hybrid</option>
+          <option value="dense">dense</option>
+          <option value="bm25">bm25</option>
+        </select>
+      </label>
+      <label>Site <input id="host" type="text" placeholder="any, or e.g. go.dev"></label>
+    </div>
+  </form>
+
+  <section id="answerBox" class="answer" hidden>
+    <div class="label">Answer</div>
+    <div id="answerText" class="text"></div>
+    <div id="answerMeta" class="meta"></div>
+  </section>
+
+  <div id="status" class="status"></div>
+
+  <section>
+    <ol id="results" class="results"></ol>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let stream = null;
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") node.className = v; else node.setAttribute(k, v);
+  }
+  for (const child of children) {
+    if (child != null) node.append(child);
+  }
+  return node;
+}
+
+const fmt = (x, digits) => Number(x).toPrecision(digits);
+
+function signals(r) {
+  const out = [el("span", {}, "score ", el("b", {}, fmt(r.score, 4)))];
+  if (r.dense) out.push(el("span", {}, "dense #", el("b", {}, r.dense.rank), " · ", fmt(r.dense.score, 3)));
+  if (r.bm25) out.push(el("span", {}, "bm25 #", el("b", {}, r.bm25.rank), " · ", fmt(r.bm25.score, 3)));
+  if (r.pagerank) out.push(el("span", {}, "pagerank ", el("b", {}, fmt(r.pagerank.page, 3)), " · site ", fmt(r.pagerank.site, 3)));
+  return el("div", { class: "signals" }, ...out);
+}
+
+function renderResults(results, numbered) {
+  const list = $("results");
+  list.replaceChildren();
+  results.forEach((r, i) => {
+    list.append(el("li", { id: "src-" + (numbered ? r.n : i + 1) },
+      el("div", {},
+        el("span", { class: "n" }, "[" + (numbered ? r.n : i + 1) + "]"),
+        el("a", { class: "title", href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url)),
+      el("div", { class: "url" }, r.url),
+      el("div", { class: "snippet" }, r.snippet || ""),
+      signals(r)));
+  });
+}
+
+// The answer is plain text: only [n] citations become links.
+function renderAnswer(text, sources) {
+  const box = $("answerText");
+  box.replaceChildren();
+  let last = 0;
+  for (const m of text.matchAll(/\[(\d{1,3})\]/g)) {
+    const n = Number(m[1]);
+    if (n < 1 || n > sources) continue;
+    box.append(text.slice(last, m.index));
+    const link = el("a", { class: "cite", href: "#src-" + n }, String(n));
+    link.addEventListener("click", () => flash(n));
+    box.append(link);
+    last = m.index + m[0].length;
+  }
+  box.append(text.slice(last));
+}
+
+function flash(n) {
+  const item = $("src-" + n);
+  if (!item) return;
+  item.classList.add("flash");
+  setTimeout(() => item.classList.remove("flash"), 1200);
+}
+
+function params() {
+  const p = new URLSearchParams({ q: $("q").value.trim(), mode: $("mode").value });
+  if ($("host").value.trim()) p.set("host", $("host").value.trim());
+  return p;
+}
+
+function busy(on, message) {
+  $("go").disabled = on;
+  $("status").textContent = message || "";
+}
+
+async function search() {
+  busy(true, "Searching…");
+  $("answerBox").hidden = true;
+  try {
+    const p = params();
+    p.set("limit", "10");
+    const res = await fetch("/search?" + p);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    renderResults(body.results, false);
+    busy(false, body.results.length ? `${body.results.length} results in ${body.took_ms} ms` : "Nothing found.");
+  } catch (err) {
+    busy(false, "Search failed: " + err.message);
+  }
+}
+
+function answer() {
+  if (stream) stream.close();
+  const started = performance.now();
+  let text = "", sources = 0, first = null;
+
+  busy(true, "Searching…");
+  $("results").replaceChildren();
+  $("answerBox").hidden = false;
+  $("answerText").replaceChildren();
+  $("answerMeta").replaceChildren();
+
+  stream = new EventSource("/answer/stream?" + params());
+
+  stream.addEventListener("sources", (e) => {
+    const list = JSON.parse(e.data);
+    sources = list.length;
+    renderResults(list, true);
+    busy(true, "Writing the answer…");
+  });
+
+  stream.addEventListener("delta", (e) => {
+    if (first === null) first = performance.now();
+    text += JSON.parse(e.data).text;
+    renderAnswer(text, sources);
+  });
+
+  stream.addEventListener("done", (e) => {
+    const done = JSON.parse(e.data);
+    stream.close();
+    const total = ((performance.now() - started) / 1000).toFixed(1);
+    const wait = first ? ((first - started) / 1000).toFixed(1) : "–";
+    $("answerMeta").textContent =
+      `${done.model} · first words after ${wait} s, done in ${total} s · ${done.usage.output_tokens} tokens · cites ${done.cited.length} of ${sources} sources`;
+    busy(false);
+  });
+
+  stream.addEventListener("error", (e) => {
+    stream.close();
+    let message = "the connection was lost";
+    try { message = JSON.parse(e.data).error; } catch (_) {}
+    const note = el("div", { class: "error" }, "No answer: " + message);
+    $("answerMeta").replaceChildren(note);
+    busy(false);
+  });
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!$("q").value.trim()) return;
+  $("answer").checked ? answer() : search();
+});
+</script>
+</body>
+</html>

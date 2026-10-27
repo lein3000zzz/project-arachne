@@ -17,6 +17,7 @@ type Config struct {
 	Retrieval   Retrieval   `yaml:"retrieval"`
 	Search      Search      `yaml:"search"`
 	Rank        Rank        `yaml:"rank"`
+	Chat        Chat        `yaml:"chat"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -84,6 +85,20 @@ type Rank struct {
 	TwinChecks int `yaml:"twin_checks"`
 }
 
+type Chat struct {
+	// openai-compatible (Ollama, vLLM, OpenRouter…), openai, or anthropic. The
+	// endpoint and key are in Vault.
+	Provider  string `yaml:"provider"`
+	Model     string `yaml:"model"`
+	MaxTokens int    `yaml:"max_tokens"`
+	// Unset sends none: some models accept only their default.
+	Temperature    *float64 `yaml:"temperature"`
+	RequestTimeout Duration `yaml:"request_timeout"`
+	MaxRetries     int      `yaml:"max_retries"`
+	// Search results handed to the model as sources, one excerpt each.
+	ContextChunks int `yaml:"context_chunks"`
+}
+
 type Cache struct {
 	PageTTL         Duration `yaml:"page_ttl"`
 	RobotsTTL       Duration `yaml:"robots_ttl"`
@@ -111,6 +126,12 @@ type Shutdown struct {
 
 // The instruction the Qwen3 embedding models were trained with for web search.
 const Qwen3QueryPrefix = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+
+const (
+	ChatProviderOpenAICompatible = "openai-compatible"
+	ChatProviderOpenAI           = "openai"
+	ChatProviderAnthropic        = "anthropic"
+)
 
 const (
 	ParserEngineKatana = "katana"
@@ -170,6 +191,15 @@ func Default() Config {
 			MaxIterations: 100,
 			TwinChecks:    500,
 		},
+		Chat: Chat{
+			Provider:       ChatProviderOpenAICompatible,
+			Model:          "qwen3:4b-instruct",
+			MaxTokens:      1024,
+			Temperature:    ptr(0.2),
+			RequestTimeout: Duration(5 * time.Minute),
+			MaxRetries:     2,
+			ContextChunks:  6,
+		},
 		Cache: Cache{
 			PageTTL:         Duration(12 * time.Hour),
 			RobotsTTL:       Duration(12 * time.Hour),
@@ -225,6 +255,8 @@ func (c *Config) Validate() error {
 		{"retrieval.max_limit", c.Retrieval.MaxLimit},
 		{"rank.max_iterations", c.Rank.MaxIterations},
 		{"rank.twin_checks", c.Rank.TwinChecks},
+		{"chat.max_tokens", c.Chat.MaxTokens},
+		{"chat.context_chunks", c.Chat.ContextChunks},
 	}
 
 	for _, field := range positive {
@@ -251,6 +283,7 @@ func (c *Config) Validate() error {
 		{"shutdown.timeout", c.Shutdown.Timeout},
 		{"shutdown.component_timeout", c.Shutdown.ComponentTimeout},
 		{"search.request_timeout", c.Search.RequestTimeout},
+		{"chat.request_timeout", c.Chat.RequestTimeout},
 	}
 
 	for _, field := range durations {
@@ -319,6 +352,25 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("%w: rank.tolerance must be > 0, got %v", ErrInvalidConfig, c.Rank.Tolerance)
 	}
 
+	switch c.Chat.Provider {
+	case ChatProviderOpenAICompatible, ChatProviderOpenAI, ChatProviderAnthropic:
+	default:
+		return fmt.Errorf("%w: chat.provider %q must be %q, %q or %q", ErrInvalidConfig, c.Chat.Provider,
+			ChatProviderOpenAICompatible, ChatProviderOpenAI, ChatProviderAnthropic)
+	}
+
+	if c.Chat.Model == "" {
+		return fmt.Errorf("%w: chat.model must not be empty", ErrInvalidConfig)
+	}
+
+	if c.Chat.MaxRetries < 0 {
+		return fmt.Errorf("%w: chat.max_retries must be >= 0, got %d", ErrInvalidConfig, c.Chat.MaxRetries)
+	}
+
+	if t := c.Chat.Temperature; t != nil && (*t < 0 || *t > 2) {
+		return fmt.Errorf("%w: chat.temperature must be in [0, 2], got %v", ErrInvalidConfig, *t)
+	}
+
 	if c.Search.Listen == "" {
 		return fmt.Errorf("%w: search.listen must not be empty", ErrInvalidConfig)
 	}
@@ -335,4 +387,8 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }

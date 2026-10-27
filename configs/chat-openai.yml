@@ -1,0 +1,8 @@
+# make up CONFIG_PATH=configs/config.yml,configs/chat-openai.yml \
+#         CHAT_BASE_URL=https://api.openai.com/v1 CHAT_API_KEY=sk-...
+chat:
+  provider: openai
+  # any chat model the key can use
+  model: gpt-5-mini
+  # reasoning models reject anything but their default temperature
+  temperature: null
