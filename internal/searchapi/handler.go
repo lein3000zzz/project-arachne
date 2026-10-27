@@ -104,6 +104,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	})
 
 	mux.HandleFunc("GET /{$}", serveIndex)
+	mux.HandleFunc("GET /favicon.svg", serveFavicon)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

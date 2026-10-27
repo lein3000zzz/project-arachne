@@ -3,132 +3,349 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Arachne Search</title>
+<title>arachne</title>
+<meta name="description" content="Hybrid search, cited answers">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+// Blocking, before first paint: applied any later, the wrong theme flashes.
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem("theme"); } catch (_) {}
+  if (stored === "light" || stored === "dark") document.documentElement.setAttribute("data-theme", stored);
+})();
+</script>
 <style>
-  :root {
-    --bg: #fbfbfa; --panel: #ffffff; --text: #1d1f23; --muted: #6b7079; --line: #e4e5e7;
-    --accent: #2f5bd3; --accent-soft: #e8eefc; --chip: #f1f2f4; --warn: #a1530b;
+/* The design system of lein3000.dev, dot-matrix variant: monochrome, thin lines,
+   pill outlines, wide-tracked labels. Colour appears in one place only - the
+   live status badge - so that it keeps meaning something. */
+
+:root {
+  color-scheme: light dark;
+
+  --accent-h: 250;
+  --accent-l: 44%;
+  --accent-c: 0.14;
+  --pod: oklch(var(--accent-l) var(--accent-c) var(--accent-h));
+
+  --bg: #ffffff;
+  --raised: #ffffff;
+  --fg: #000000;
+  --muted: #7a7a7a;
+  --line: #d8d8d8;
+  --accent: var(--fg);
+  --accent-soft: rgb(0 0 0 / 0.05);
+  --ok: oklch(52% 0.13 150);
+  --bad: oklch(52% 0.17 25);
+  --dots: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='1' fill='%23000' fill-opacity='0.18'/%3E%3C/svg%3E");
+
+  --nd: "Ndot", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, monospace;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent-l: 76%; --accent-c: 0.13;
+    --bg: #000000; --raised: #0a0a0a; --fg: #ffffff; --muted: #8a8a8a; --line: #262626;
+    --accent-soft: rgb(255 255 255 / 0.06);
+    --ok: oklch(74% 0.14 150); --bad: oklch(68% 0.16 25);
+    --dots: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='1' fill='%23fff' fill-opacity='0.16'/%3E%3C/svg%3E");
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #141518; --panel: #1c1e22; --text: #e7e8ea; --muted: #9a9fa8; --line: #2c2f35;
-      --accent: #7f9ef0; --accent-soft: #23293a; --chip: #262930; --warn: #e3a35b;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
-  h1 { font-size: 20px; margin: 0 0 18px; letter-spacing: -0.01em; }
-  h1 span { color: var(--muted); font-weight: 400; }
-  form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-  input, select, button { font: inherit; color: inherit; }
-  input[type=search], input[type=text], input[type=url], input[type=number], select {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; }
-  input[type=search] { font-size: 16px; }
-  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 0 18px; cursor: pointer; }
-  button:disabled { opacity: .6; cursor: default; }
-  .options { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; color: var(--muted); font-size: 13px; }
-  .options label { display: flex; gap: 6px; align-items: center; }
-  .options input[type=text] { padding: 5px 9px; width: 180px; }
-  .options select { padding: 5px 8px; }
-  section { margin-top: 24px; }
-  .answer { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
-  .answer .label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
-  .answer .text { white-space: pre-wrap; }
-  .answer .meta { margin-top: 10px; font-size: 12px; color: var(--muted); }
-  .answer .error { color: var(--warn); }
-  .cite { display: inline-block; min-width: 1.4em; padding: 0 4px; margin: 0 1px; border-radius: 4px; text-align: center;
-          font-size: 12px; line-height: 1.6; background: var(--accent-soft); color: var(--accent); text-decoration: none; }
-  .status { color: var(--muted); font-size: 13px; margin-top: 16px; }
-  ol.results { list-style: none; padding: 0; margin: 0; }
-  ol.results li { padding: 14px 0; border-bottom: 1px solid var(--line); }
-  ol.results li.flash { background: var(--accent-soft); transition: background 1s; }
-  .title { font-size: 16px; color: var(--accent); text-decoration: none; }
-  .title:hover { text-decoration: underline; }
-  .n { color: var(--muted); font-size: 13px; margin-right: 6px; }
-  .url { color: var(--muted); font-size: 12.5px; word-break: break-all; }
-  .snippet { margin: 6px 0 8px; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-  .signals { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
-  .signals span { background: var(--chip); border-radius: 5px; padding: 1px 7px; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .signals b { color: var(--text); font-weight: 600; }
-  details.crawl { margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
-  details.crawl summary { cursor: pointer; font-size: 14px; color: var(--muted); }
-  .crawl form { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .crawl form input[type=url] { flex: 1 1 260px; }
-  .crawl form input[type=number] { width: 80px; padding: 7px 9px; }
-  .crawl form input[type=url], .crawl form select { padding: 7px 10px; }
-  .crawl form label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
-  .crawl form button { padding: 8px 16px; }
-  .crawl .hint { width: 100%; font-size: 12px; color: var(--muted); }
-  table.runs { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
-  table.runs td { padding: 6px 4px; border-top: 1px solid var(--line); vertical-align: top; }
-  table.runs td.url { word-break: break-all; }
-  table.runs td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .chip { display: inline-block; border-radius: 5px; padding: 0 7px; font-size: 12px; background: var(--chip); color: var(--muted); }
-  .chip.running, .chip.queued { background: var(--accent-soft); color: var(--accent); }
-  .chip.stalled, .chip.dropped { color: var(--warn); }
+}
+:root[data-theme="dark"] {
+  --accent-l: 76%; --accent-c: 0.13;
+  --bg: #000000; --raised: #0a0a0a; --fg: #ffffff; --muted: #8a8a8a; --line: #262626;
+  --accent-soft: rgb(255 255 255 / 0.06);
+  --ok: oklch(74% 0.14 150); --bad: oklch(68% 0.16 25);
+  --dots: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='1' fill='%23fff' fill-opacity='0.16'/%3E%3C/svg%3E");
+}
+:root[data-theme="light"] {
+  --accent-l: 44%; --accent-c: 0.14;
+  --bg: #ffffff; --raised: #ffffff; --fg: #000000; --muted: #7a7a7a; --line: #d8d8d8;
+  --accent-soft: rgb(0 0 0 / 0.05);
+  --ok: oklch(52% 0.13 150); --bad: oklch(52% 0.17 25);
+  --dots: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='1' fill='%23000' fill-opacity='0.18'/%3E%3C/svg%3E");
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg) var(--dots) 0 0 / 16px 16px;
+  color: var(--fg);
+  font-family: var(--nd);
+  font-size: 16px;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  -webkit-text-size-adjust: 100%;
+}
+
+a { color: var(--fg); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; border-radius: 3px; }
+.skip { position: absolute; left: -9999px; }
+.skip:focus { left: 1rem; top: 1rem; z-index: 20; background: var(--fg); color: var(--bg); padding: 0.5rem 0.8rem; border-radius: 6px; }
+
+h1, h2, h3 { line-height: 1.2; letter-spacing: -0.015em; }
+h1 { font-size: clamp(1.9rem, 0.9rem + 4vw, 4rem); font-weight: 500; letter-spacing: 0.02em; line-height: 1.1; margin: 0 0 0.6rem; max-width: 20ch; }
+h2 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.22em; color: var(--muted); font-weight: 400; margin: 0 0 1.8rem; }
+h3 { font-size: 1.02rem; font-weight: 550; letter-spacing: 0.01em; margin: 0 0 0.15rem; }
+p { margin: 0 0 1rem; }
+.eyebrow { font-size: 0.78rem; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 0.5rem; }
+.lede { color: var(--muted); max-width: 54ch; margin-top: 1.2rem; font-size: 1rem; }
+.note { color: var(--muted); font-size: 0.85rem; }
+
+.shell { max-width: 78rem; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 3rem); }
+
+.site { display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; padding: 1.6rem 0; border-bottom: 1px solid var(--line); }
+.brand { font-weight: 650; color: var(--fg); text-decoration: none; margin-right: auto; font-size: 0.9rem; }
+.nav { display: flex; gap: 1.3rem; flex-wrap: wrap; font-size: 0.72rem; }
+.nav a { color: var(--muted); text-decoration: none; }
+.nav a:hover { color: var(--fg); }
+.brand, .nav a, .action, .theme, .seg, .chip, .field label, .control-label, .row-when, .table th {
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+
+main { padding-bottom: 5rem; }
+section { padding: clamp(2.5rem, 5vw, 4.5rem) 0; border-bottom: 1px solid var(--line); }
+section:last-of-type { border-bottom: 0; }
+.hero { padding-top: clamp(3rem, 8vw, 6rem); }
+
+/* Thin outlines only: no fills, no shadows, no radius but circles. */
+.action, .theme {
+  font: inherit; font-size: 0.72rem; color: var(--fg); background: transparent;
+  border: 1px solid var(--fg); border-radius: 999px; cursor: pointer; text-decoration: none;
+}
+.action { padding: 0.4rem 1.1rem; }
+.theme { padding: 0.15rem 0.7rem; }
+.action:hover, .theme:hover { background: var(--accent-soft); }
+.action.primary { background: var(--fg); color: var(--bg); }
+.action.primary:hover { background: var(--fg); color: var(--bg); opacity: 0.82; }
+.action:disabled { opacity: 0.5; cursor: default; }
+
+.chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.68rem;
+  border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.55rem;
+  color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.chip b { color: var(--fg); font-weight: 500; }
+
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.seg {
+  font: inherit; font-size: 0.68rem; background: transparent; border: 0; color: var(--muted);
+  padding: 0.35rem 0.85rem; cursor: pointer;
+}
+.seg + .seg { border-left: 1px solid var(--line); }
+.seg:hover { color: var(--fg); }
+.seg[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+
+.field { display: grid; gap: 0.3rem; min-width: 0; }
+.field label, .control-label { font-size: 0.68rem; letter-spacing: 0.12em; color: var(--muted); }
+.field input {
+  font: inherit; font-family: var(--mono); font-size: 0.95rem; color: var(--fg); background: transparent;
+  border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 0.35rem 0; min-width: 0; width: 100%;
+}
+.field input:focus { outline: 0; border-bottom-color: var(--fg); }
+.field input::placeholder { color: var(--muted); }
+.field input[type=search]::-webkit-search-cancel-button { filter: grayscale(1); }
+
+.query { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; margin: 2.2rem 0 1.4rem; max-width: 56rem; }
+.query .field { flex: 1 1 22rem; }
+.query .field input { font-size: 1.15rem; padding: 0.45rem 0; }
+.controls { display: flex; gap: 1.1rem 1.6rem; flex-wrap: wrap; align-items: flex-end; margin: 0 0 1.6rem; }
+.control { display: grid; gap: 0.35rem; }
+.controls .field { width: 13rem; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  border: 1px solid var(--pod); border-radius: 999px; padding: 0.3rem 0.9rem;
+  font-family: var(--mono); font-size: 0.8rem; font-variant-numeric: tabular-nums;
+}
+.badge-dot { font-size: 0.65rem; line-height: 1; color: var(--pod); }
+.badge.failed { border-color: var(--bad); }
+.badge.failed .badge-dot { color: var(--bad); }
+@media (prefers-reduced-motion: no-preference) {
+  .badge.busy .badge-dot { animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.25; } }
+}
+
+.answer { font-family: var(--mono); font-size: 0.98rem; line-height: 1.7; white-space: pre-wrap; max-width: 72ch; margin: 0 0 1rem; }
+.cite {
+  display: inline-block; font-family: var(--nd); font-size: 0.68rem; line-height: 1.5; vertical-align: 0.12em;
+  border: 1px solid var(--fg); border-radius: 999px; padding: 0 0.42rem; margin: 0 0.08rem;
+  color: var(--fg); text-decoration: none;
+}
+.cite:hover { background: var(--fg); color: var(--bg); }
+.answer-meta { font-family: var(--mono); }
+.error { color: var(--bad); }
+
+.row { display: grid; gap: 0.4rem; padding: 1.4rem 0; border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+@media (min-width: 44rem) { .row { grid-template-columns: 10rem minmax(0, 1fr); gap: 2rem; } }
+.row-when { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.12em; margin: 0.2rem 0 0; overflow-wrap: anywhere; }
+.row-when .n { display: block; color: var(--fg); }
+.row h3 a { text-decoration: none; }
+.row h3 a:hover { text-decoration: underline; }
+.result-url { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); margin: 0 0 0.6rem; overflow-wrap: anywhere; }
+.snippet {
+  font-family: var(--mono); font-size: 0.88rem; color: var(--muted); white-space: pre-wrap; margin: 0 0 0.8rem;
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; max-width: 80ch;
+}
+@media (prefers-reduced-motion: no-preference) { .row { transition: background 0.6s ease; } }
+.row.flash { background: var(--accent-soft); }
+
+.tool-row { display: flex; gap: 1rem 1.4rem; align-items: flex-end; flex-wrap: wrap; margin: 0 0 1.2rem; }
+.tool-row .field { flex: 1 1 15rem; }
+.tool-row .field.narrow { flex: 0 0 6rem; }
+.tool-row .action { flex: 0 0 auto; }
+
+.table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 1.6rem; }
+.table th, .table td { text-align: left; padding: 0.5rem 0.8rem 0.5rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.table th { font-size: 0.68rem; color: var(--muted); font-weight: 400; }
+.table td { font-family: var(--mono); }
+.table td.url { overflow-wrap: anywhere; }
+.table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 0; }
+.table tbody tr:last-child td { border-bottom: 0; }
+/* Never colour alone: the glyph differs by state as well as the hue. */
+.state { white-space: nowrap; }
+.state-glyph { display: inline-block; width: 1rem; color: var(--muted); }
+.state.running .state-glyph { color: var(--ok); }
+.state.dropped .state-glyph, .state.stalled .state-glyph { color: var(--bad); }
+
+.footer { border-top: 1px solid var(--line); padding: 1.8rem 0 3rem; }
+.footer .convert { margin: 0 0 0.7rem; }
+.contact { display: flex; gap: 1.1rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+.colophon { font-size: 0.8rem; color: var(--muted); margin: 0; font-family: var(--mono); }
 </style>
 </head>
 <body>
-<main>
-  <h1>Arachne <span>hybrid search over crawled pages</span></h1>
+<a class="skip" href="#main">Skip to content</a>
 
-  <form id="form">
-    <input id="q" type="search" placeholder="Ask or search…" autocomplete="off" autofocus required>
-    <button id="go">Search</button>
-    <div class="options">
-      <label><input id="answer" type="checkbox" checked> Answer with sources</label>
-      <label>Mode
-        <select id="mode">
-          <option value="hybrid">hybrid</option>
-          <option value="dense">dense</option>
-          <option value="bm25">bm25</option>
-        </select>
-      </label>
-      <label>Site <input id="host" type="text" placeholder="any, or e.g. go.dev"></label>
-      <label><input id="rerank" type="checkbox" checked> Rerank</label>
-      <label>PageRank weight
-        <select id="pagerank">
-          <option value="">default</option>
-          <option value="0">0</option>
-          <option value="0.25">0.25</option>
-          <option value="0.5">0.5</option>
-          <option value="1">1</option>
-        </select>
-      </label>
-    </div>
-  </form>
+<div class="shell">
 
-  <details id="crawlBox" class="crawl" hidden>
-    <summary>Add a site to the index</summary>
-    <form id="crawlForm">
-      <input id="crawlUrl" type="url" placeholder="https://go.dev/doc/" required>
-      <select id="crawlScope" title="Which links the crawl may follow">
-        <option value="site">this site</option>
-        <option value="section">this section</option>
-        <option value="anywhere">anywhere</option>
-      </select>
-      <label>pages <input id="crawlLinks" type="number" min="1" value="100"></label>
-      <label>depth <input id="crawlDepth" type="number" min="1" value="3"></label>
-      <button id="crawlGo">Crawl</button>
-      <div id="crawlHint" class="hint">Pages become searchable as they are indexed, which takes longer than crawling them. PageRank updates with <code>make rank</code>.</div>
+<header class="site">
+  <a class="brand" href="/">arachne</a>
+  <nav class="nav" aria-label="Primary">
+    <a href="#search">Search</a>
+    <a href="#crawl">Crawl</a>
+    <a href="https://lein3000.dev">lein3000.dev</a>
+  </nav>
+  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+</header>
+
+<main id="main">
+  <section class="hero" id="search">
+    <p class="eyebrow">@arachne</p>
+    <h1>Ask the crawled web.</h1>
+    <p class="lede">Hybrid search, cited answers.</p>
+
+    <form id="form" class="query" role="search">
+      <div class="field">
+        <label for="q">Query</label>
+        <input id="q" type="search" placeholder="how do goroutines communicate?" autocomplete="off" autofocus required>
+      </div>
+      <button class="action primary" id="go">Search</button>
     </form>
-    <table class="runs"><tbody id="runs"></tbody></table>
-  </details>
 
-  <section id="answerBox" class="answer" hidden>
-    <div class="label">Answer</div>
-    <div id="answerText" class="text"></div>
-    <div id="answerMeta" class="meta"></div>
+    <div class="controls">
+      <div class="control">
+        <span class="control-label" id="l-answer">Answer</span>
+        <div class="segmented" data-name="answer" aria-labelledby="l-answer">
+          <button type="button" class="seg" data-value="on" aria-pressed="true">on</button>
+          <button type="button" class="seg" data-value="off" aria-pressed="false">off</button>
+        </div>
+      </div>
+      <div class="control">
+        <span class="control-label" id="l-mode">Mode</span>
+        <div class="segmented" data-name="mode" aria-labelledby="l-mode">
+          <button type="button" class="seg" data-value="hybrid" aria-pressed="true">hybrid</button>
+          <button type="button" class="seg" data-value="dense" aria-pressed="false">dense</button>
+          <button type="button" class="seg" data-value="bm25" aria-pressed="false">bm25</button>
+        </div>
+      </div>
+      <div class="control">
+        <span class="control-label" id="l-rerank">Rerank</span>
+        <div class="segmented" data-name="rerank" aria-labelledby="l-rerank">
+          <button type="button" class="seg" data-value="on" aria-pressed="true">on</button>
+          <button type="button" class="seg" data-value="off" aria-pressed="false">off</button>
+        </div>
+      </div>
+      <div class="control">
+        <span class="control-label" id="l-pagerank">PageRank</span>
+        <div class="segmented" data-name="pagerank" aria-labelledby="l-pagerank">
+          <button type="button" class="seg" data-value="" aria-pressed="true">auto</button>
+          <button type="button" class="seg" data-value="0" aria-pressed="false">0</button>
+          <button type="button" class="seg" data-value="0.25" aria-pressed="false">.25</button>
+          <button type="button" class="seg" data-value="0.5" aria-pressed="false">.5</button>
+          <button type="button" class="seg" data-value="1" aria-pressed="false">1</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="host">Site</label>
+        <input id="host" type="text" placeholder="any" autocomplete="off">
+      </div>
+    </div>
+
+    <div class="badge" id="badge" aria-live="polite" hidden>
+      <span class="badge-dot" aria-hidden="true">&#9679;</span>
+      <span id="badge-text"></span>
+    </div>
   </section>
 
-  <div id="status" class="status"></div>
+  <section id="answerBox" hidden>
+    <h2>Answer</h2>
+    <div id="answerText" class="answer"></div>
+    <p id="answerMeta" class="note answer-meta"></p>
+  </section>
 
-  <section>
-    <ol id="results" class="results"></ol>
+  <section id="resultsBox" hidden>
+    <h2 id="resultsTitle">Sources</h2>
+    <div id="results"></div>
+  </section>
+
+  <section id="crawl" hidden>
+    <h2>Crawl</h2>
+    <form id="crawlForm" class="tool-row">
+      <div class="field">
+        <label for="crawlUrl">Start URL</label>
+        <input id="crawlUrl" type="url" placeholder="https://go.dev/doc/" required>
+      </div>
+      <div class="field narrow">
+        <label for="crawlLinks">Pages</label>
+        <input id="crawlLinks" type="number" min="1" value="100">
+      </div>
+      <div class="field narrow">
+        <label for="crawlDepth">Depth</label>
+        <input id="crawlDepth" type="number" min="1" value="3">
+      </div>
+      <div class="control">
+        <span class="control-label" id="l-scope">Scope</span>
+        <div class="segmented" data-name="scope" aria-labelledby="l-scope">
+          <button type="button" class="seg" data-value="site" aria-pressed="true">site</button>
+          <button type="button" class="seg" data-value="section" aria-pressed="false">section</button>
+          <button type="button" class="seg" data-value="anywhere" aria-pressed="false">anywhere</button>
+        </div>
+      </div>
+      <button class="action primary" id="crawlGo">Crawl</button>
+    </form>
+    <p id="crawlHint" class="note">Searchable once indexed.</p>
+
+    <table class="table">
+      <thead><tr><th>URL</th><th>Status</th><th class="num">Pages</th><th class="num">When</th></tr></thead>
+      <tbody id="runs"></tbody>
+    </table>
   </section>
 </main>
+
+<footer class="footer">
+  <p class="convert">arachne</p>
+  <nav class="contact" aria-label="Links">
+    <a href="https://github.com/lein3000zzz/project-arachne">GitHub</a>
+    <a href="https://lein3000.dev">lein3000.dev</a>
+  </nav>
+</footer>
+
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -147,28 +364,73 @@ function el(tag, attrs, ...children) {
 
 const fmt = (x, digits) => Number(x).toPrecision(digits);
 
+// ---- theme: system → light → dark, as on lein3000.dev ----
+{
+  const modes = ["system", "light", "dark"];
+  let current = document.documentElement.getAttribute("data-theme") || "system";
+  const button = $("theme");
+  const label = () => { button.textContent = "theme: " + current; };
+  label();
+  button.addEventListener("click", () => {
+    current = modes[(modes.indexOf(current) + 1) % modes.length];
+    try { localStorage.setItem("theme", current); } catch (_) {}
+    if (current === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", current);
+    label();
+  });
+}
+
+// ---- segmented controls ----
+function segValue(name) {
+  const on = document.querySelector(`.segmented[data-name="${name}"] .seg[aria-pressed="true"]`);
+  return on ? on.dataset.value : "";
+}
+
+function setSeg(name, value) {
+  const buttons = document.querySelectorAll(`.segmented[data-name="${name}"] .seg`);
+  if (![...buttons].some((b) => b.dataset.value === value)) return;
+  buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.value === value)));
+}
+
+document.querySelectorAll(".segmented").forEach((group) => {
+  group.addEventListener("click", (e) => {
+    const button = e.target.closest(".seg");
+    if (button) setSeg(group.dataset.name, button.dataset.value);
+  });
+});
+
+// ---- status badge: the one coloured element ----
+function badge(text, state) {
+  $("badge").hidden = false;
+  $("badge").className = "badge" + (state ? " " + state : "");
+  $("badge-text").textContent = text;
+}
+
+// ---- results ----
 function signals(r) {
+  const chip = (...parts) => el("li", { class: "chip" }, ...parts);
   const out = [];
-  if (r.rerank) out.push(el("span", {}, "rerank #", el("b", {}, r.rerank.rank), " · ", fmt(r.rerank.score, 3)));
-  out.push(el("span", {}, "fused ", el("b", {}, fmt(r.score, 4))));
-  if (r.dense) out.push(el("span", {}, "dense #", el("b", {}, r.dense.rank), " · ", fmt(r.dense.score, 3)));
-  if (r.bm25) out.push(el("span", {}, "bm25 #", el("b", {}, r.bm25.rank), " · ", fmt(r.bm25.score, 3)));
-  if (r.pagerank) out.push(el("span", {}, "pagerank ", el("b", {}, fmt(r.pagerank.page, 3)), " · site ", fmt(r.pagerank.site, 3)));
-  return el("div", { class: "signals" }, ...out);
+  if (r.rerank) out.push(chip("rerank ", el("b", {}, "#" + r.rerank.rank), " " + fmt(r.rerank.score, 3)));
+  out.push(chip("fused ", el("b", {}, fmt(r.score, 4))));
+  if (r.dense) out.push(chip("dense ", el("b", {}, "#" + r.dense.rank), " " + fmt(r.dense.score, 3)));
+  if (r.bm25) out.push(chip("bm25 ", el("b", {}, "#" + r.bm25.rank), " " + fmt(r.bm25.score, 3)));
+  if (r.pagerank) out.push(chip("pagerank ", el("b", {}, fmt(r.pagerank.page, 3)), " site " + fmt(r.pagerank.site, 3)));
+  return el("ul", { class: "chips" }, ...out);
 }
 
 function renderResults(results, numbered) {
-  const list = $("results");
-  list.replaceChildren();
-  results.forEach((r, i) => {
-    list.append(el("li", { id: "src-" + (numbered ? r.n : i + 1) },
+  $("resultsBox").hidden = results.length === 0;
+  $("resultsTitle").textContent = numbered ? "Sources" : "Results";
+  $("results").replaceChildren(...results.map((r, i) => {
+    const n = numbered ? r.n : i + 1;
+    return el("article", { class: "row", id: "src-" + n },
+      el("p", { class: "row-when" }, el("span", { class: "n" }, String(n).padStart(2, "0")), r.host || ""),
       el("div", {},
-        el("span", { class: "n" }, "[" + (numbered ? r.n : i + 1) + "]"),
-        el("a", { class: "title", href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url)),
-      el("div", { class: "url" }, r.url),
-      el("div", { class: "snippet" }, r.snippet || ""),
-      signals(r)));
-  });
+        el("h3", {}, el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url)),
+        el("p", { class: "result-url" }, r.url),
+        el("p", { class: "snippet" }, r.snippet || ""),
+        signals(r)));
+  }));
 }
 
 // The answer is plain text: only [n] citations become links.
@@ -180,7 +442,7 @@ function renderAnswer(text, sources) {
     const n = Number(m[1]);
     if (n < 1 || n > sources) continue;
     box.append(text.slice(last, m.index));
-    const link = el("a", { class: "cite", href: "#src-" + n }, String(n));
+    const link = el("a", { class: "cite", href: "#src-" + n, title: "Source " + n }, String(n));
     link.addEventListener("click", () => flash(n));
     box.append(link);
     last = m.index + m[0].length;
@@ -196,22 +458,18 @@ function flash(n) {
 }
 
 function params() {
-  const p = new URLSearchParams({ q: $("q").value.trim(), mode: $("mode").value });
+  const p = new URLSearchParams({ q: $("q").value.trim(), mode: segValue("mode") });
   if ($("host").value.trim()) p.set("host", $("host").value.trim());
-  // Checked leaves the server's default, so a stack without a reranker still works.
-  if (!$("rerank").checked) p.set("rerank", "false");
-  if ($("pagerank").value !== "") p.set("pagerank", $("pagerank").value);
+  // "on" leaves the server's default, so a stack without a reranker still works.
+  if (segValue("rerank") === "off") p.set("rerank", "false");
+  if (segValue("pagerank") !== "") p.set("pagerank", segValue("pagerank"));
   return p;
 }
 
-function busy(on, message) {
-  $("go").disabled = on;
-  $("status").textContent = message || "";
-}
-
 async function search() {
-  busy(true, "Searching…");
+  $("go").disabled = true;
   $("answerBox").hidden = true;
+  badge("searching…", "busy");
   try {
     const p = params();
     p.set("limit", "10");
@@ -219,9 +477,11 @@ async function search() {
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || res.statusText);
     renderResults(body.results, false);
-    busy(false, body.results.length ? `${body.results.length} results in ${body.took_ms} ms` : "Nothing found.");
+    badge(body.results.length ? `${body.results.length} results · ${body.took_ms} ms` : "nothing found");
   } catch (err) {
-    busy(false, "Search failed: " + err.message);
+    badge("search failed: " + err.message, "failed");
+  } finally {
+    $("go").disabled = false;
   }
 }
 
@@ -230,11 +490,13 @@ function answer() {
   const started = performance.now();
   let text = "", sources = 0, first = null;
 
-  busy(true, "Searching…");
+  $("go").disabled = true;
   $("results").replaceChildren();
+  $("resultsBox").hidden = true;
   $("answerBox").hidden = false;
   $("answerText").replaceChildren();
   $("answerMeta").replaceChildren();
+  badge("searching…", "busy");
 
   stream = new EventSource("/answer/stream?" + params());
 
@@ -242,11 +504,14 @@ function answer() {
     const list = JSON.parse(e.data);
     sources = list.length;
     renderResults(list, true);
-    busy(true, "Writing the answer…");
+    badge(`${sources} sources · reading…`, "busy");
   });
 
   stream.addEventListener("delta", (e) => {
-    if (first === null) first = performance.now();
+    if (first === null) {
+      first = performance.now();
+      badge("writing…", "busy");
+    }
     text += JSON.parse(e.data).text;
     renderAnswer(text, sources);
   });
@@ -256,44 +521,61 @@ function answer() {
     stream.close();
     const total = ((performance.now() - started) / 1000).toFixed(1);
     const wait = first ? ((first - started) / 1000).toFixed(1) : "–";
-    $("answerMeta").textContent =
-      `${done.model} · first words after ${wait} s, done in ${total} s · ${done.usage.output_tokens} tokens · cites ${done.cited.length} of ${sources} sources`;
-    busy(false);
+    $("answerMeta").textContent = `${done.cited.length}/${sources} cited · ${done.usage.output_tokens} tokens · first word ${wait} s`;
+    badge(`${done.model} · ${total} s`);
+    $("go").disabled = false;
   });
 
   stream.addEventListener("error", (e) => {
     stream.close();
     let message = "the connection was lost";
     try { message = JSON.parse(e.data).error; } catch (_) {}
-    const note = el("div", { class: "error" }, "No answer: " + message);
-    $("answerMeta").replaceChildren(note);
-    busy(false);
+    $("answerMeta").replaceChildren();
+    badge("no answer: " + message, "failed");
+    $("go").disabled = false;
   });
 }
 
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!$("q").value.trim()) return;
+  const on = segValue("answer") === "on";
+  history.replaceState(null, "", "?" + params() + (on ? "" : "&answer=0") + location.hash);
+  on ? answer() : search();
+});
+
+// ---- crawls ----
 let polling = null;
+
+const glyphs = { queued: "○", running: "●", finished: "✓", dropped: "✕", stalled: "!" };
 
 function ago(iso) {
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
   if (s < 60) return Math.round(s) + " s ago";
   if (s < 3600) return Math.round(s / 60) + " min ago";
-  return Math.round(s / 3600) + " h ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
 }
 
 function renderRuns(list) {
+  if (list.length === 0) {
+    $("runs").replaceChildren(el("tr", {}, el("td", { colspan: "4", class: "note" }, "None yet.")));
+    return;
+  }
   $("runs").replaceChildren(...list.map((run) => el("tr", {},
-    el("td", { class: "url" }, run.start_url, run.note ? el("div", { class: "hint" }, run.note) : null),
-    el("td", {}, el("span", { class: "chip " + run.status }, run.status)),
-    el("td", { class: "num" }, run.pages + " / " + run.max_links + " pages"),
+    el("td", { class: "url" }, run.start_url, run.note ? el("div", { class: "note" }, run.note) : null),
+    el("td", {}, el("span", { class: "state " + run.status },
+      el("span", { class: "state-glyph", "aria-hidden": "true" }, glyphs[run.status] || "·"), run.status)),
+    el("td", { class: "num" }, run.pages + " / " + run.max_links),
     el("td", { class: "num" }, ago(run.submitted_at)))));
 }
 
 async function loadRuns() {
   try {
     const res = await fetch("/api/runs?limit=8");
-    if (res.status === 503) { $("crawlBox").hidden = true; return; }
+    if (res.status === 503) { $("crawl").hidden = true; return; }
     const body = await res.json();
-    $("crawlBox").hidden = false;
+    $("crawl").hidden = false;
     renderRuns(body.runs);
     const active = body.runs.some((r) => r.status === "queued" || r.status === "running");
     clearTimeout(polling);
@@ -313,7 +595,7 @@ $("crawlForm").addEventListener("submit", async (e) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: $("crawlUrl").value.trim(),
-        scope: $("crawlScope").value,
+        scope: segValue("scope"),
         links: Number($("crawlLinks").value),
         depth: Number($("crawlDepth").value),
       }),
@@ -321,37 +603,28 @@ $("crawlForm").addEventListener("submit", async (e) => {
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || res.statusText);
     $("crawlUrl").value = "";
-    $("crawlHint").textContent = "Queued " + body.start_url + ". Pages become searchable as they are indexed.";
+    $("crawlHint").textContent = "Queued " + body.start_url;
     loadRuns();
   } catch (err) {
-    $("crawlHint").textContent = "Not started: " + err.message;
+    $("crawlHint").replaceChildren(el("span", { class: "error" }, err.message));
   } finally {
     $("crawlGo").disabled = false;
   }
 });
 
-$("crawlBox").addEventListener("toggle", () => { if ($("crawlBox").open) loadRuns(); });
-if (location.hash === "#crawl") $("crawlBox").open = true;
 loadRuns();
-
-$("form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  if (!$("q").value.trim()) return;
-  history.replaceState(null, "", "?" + params() + ($("answer").checked ? "" : "&answer=0") + location.hash);
-  $("answer").checked ? answer() : search();
-});
 
 // A link with ?q= runs that search, so results can be shared.
 {
   const p = new URLSearchParams(location.search);
   if (p.get("q")) {
     $("q").value = p.get("q");
-    if (p.get("mode")) $("mode").value = p.get("mode");
+    if (p.get("mode")) setSeg("mode", p.get("mode"));
     if (p.get("host")) $("host").value = p.get("host");
-    if (p.get("rerank") === "false") $("rerank").checked = false;
-    if (p.get("pagerank")) $("pagerank").value = p.get("pagerank");
-    if (p.get("answer") === "0") $("answer").checked = false;
-    $("answer").checked ? answer() : search();
+    if (p.get("rerank") === "false") setSeg("rerank", "off");
+    if (p.get("pagerank")) setSeg("pagerank", p.get("pagerank"));
+    if (p.get("answer") === "0") setSeg("answer", "off");
+    segValue("answer") === "on" ? answer() : search();
   }
 }
 </script>

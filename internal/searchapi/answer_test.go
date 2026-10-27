@@ -119,12 +119,16 @@ func TestAnswerFailures(t *testing.T) {
 func TestIndexPageIsServed(t *testing.T) {
 	rec := serveAnswer(nil, "/")
 
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>Arachne Search</title>") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>arachne</title>") {
 		t.Errorf("status %d", rec.Code)
 	}
 
 	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
 		t.Errorf("CSP = %q", csp)
+	}
+
+	if rec := serveAnswer(nil, "/favicon.svg"); rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/svg+xml" {
+		t.Errorf("favicon: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 
 	if rec := serveAnswer(nil, "/nope"); rec.Code != http.StatusNotFound {
