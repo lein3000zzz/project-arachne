@@ -31,6 +31,9 @@ func (p *KatanaParser) extractLinks(body []byte, base *url.URL, mediaType string
 	}
 
 	text := string(body)
+	if doc != nil && len(doc.Nodes) > 0 {
+		text = ScanText(doc.Nodes[0])
+	}
 
 	if base != nil {
 		for _, request := range p.links.ParseResponse(katanaResponse(text, base, mediaType, doc)) {

@@ -272,3 +272,34 @@ func TestParseJavaScriptRecoversEndpoints(t *testing.T) {
 		t.Errorf("JS should yield no indexable content, got %q", res.Content)
 	}
 }
+
+func TestScrapedLinksAreReadFromTheDecodedDocument(t *testing.T) {
+	page := `<html><body>
+<div data-config="https://example.com/attr?x=1&amp;y=2&amp;copy=3"></div>
+<p>Mirror: https://example.com/text?x=1&amp;y=2 and {&quot;u&quot;:&quot;https://example.com/json&quot;}</p>
+<pre>GOPROXY=https://proxy.example.com,direct&quot;</pre>
+<noscript><img src="https://example.com/pixel?a=1&amp;b=2" alt=""></noscript>
+</body></html>`
+
+	res := parse(t, newTestParser(t), page, "https://example.com/", "text/html")
+
+	got := map[string]bool{}
+	for _, link := range res.Links {
+		got[link.URL] = true
+
+		if strings.Contains(link.URL, "amp;") || strings.Contains(link.URL, "quot") {
+			t.Errorf("entity left in %q", link.URL)
+		}
+	}
+
+	for _, want := range []string{
+		"https://example.com/attr?x=1&y=2&copy=3",
+		"https://example.com/text?x=1&y=2",
+		"https://example.com/json",
+		"https://example.com/pixel?a=1&b=2",
+	} {
+		if !got[want] {
+			t.Errorf("missing %q in %v", want, res.Links)
+		}
+	}
+}

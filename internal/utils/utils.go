@@ -18,16 +18,6 @@ func GetBaseURL(urlToParse string) (string, error) {
 	return u.String(), nil
 }
 
-func CorrectURLScheme(URL string) string {
-	startURL := URL
-	if u, err := url.Parse(startURL); err != nil || u.Scheme == "" || u.Host == "" {
-		if parsed, err2 := url.Parse("https://" + URL); err2 == nil {
-			startURL = parsed.String()
-		}
-	}
-	return startURL
-}
-
 func DrainTimer(timer *time.Timer) {
 	if !timer.Stop() {
 		select {

@@ -1,8 +1,9 @@
 deployments/opt
 
-
 # Ultimate Go gitignore
 main.env
+.DS_Store
+local
 *.exe
 *.exe~
 *.dll

@@ -1,10 +1,13 @@
 package appconfig
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -55,22 +58,33 @@ func Path() (string, bool) {
 }
 
 // Load layers the file over Default(), so a partial file only overrides the keys
-// it names. A missing file yields ErrNotFound with usable defaults still returned.
+// it names. path may list several files, comma-separated, each layered over the
+// ones before it. A missing file yields ErrNotFound with usable defaults returned.
 func Load(path string) (Config, error) {
 	cfg := Default()
 
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return cfg, fmt.Errorf("%w: %s", ErrNotFound, path)
+	decoded := cfg
+
+	for _, file := range strings.Split(path, ",") {
+		file = strings.TrimSpace(file)
+
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return cfg, fmt.Errorf("%w: %s", ErrNotFound, file)
+			}
+
+			return cfg, fmt.Errorf("reading %s: %w", file, err)
 		}
 
-		return cfg, fmt.Errorf("reading %s: %w", path, err)
-	}
+		// A misspelled or misplaced key would otherwise be ignored and its setting
+		// silently left at the default.
+		dec := yaml.NewDecoder(bytes.NewReader(raw))
+		dec.KnownFields(true)
 
-	decoded := cfg
-	if err := yaml.Unmarshal(raw, &decoded); err != nil {
-		return cfg, fmt.Errorf("parsing %s: %w", path, err)
+		if err := dec.Decode(&decoded); err != nil && !errors.Is(err, io.EOF) {
+			return cfg, fmt.Errorf("parsing %s: %w", file, err)
+		}
 	}
 
 	if err := decoded.Validate(); err != nil {

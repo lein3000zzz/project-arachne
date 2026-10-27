@@ -73,11 +73,31 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		body string
 	}{
 		{"zero workers", "crawler:\n  task_workers: 0\n"},
+		{"empty user agent", "crawler:\n  user_agent: \"\"\n"},
+		{"header injection in user agent", "crawler:\n  user_agent: \"bot/1\\r\\nX-Evil: 1\"\n"},
+		{"user agent without a product name", "crawler:\n  user_agent: \"/1.0 (+https://x)\"\n"},
 		{"negative workers", "crawler:\n  run_workers: -1\n"},
 		{"unknown parser engine", "crawler:\n  parser_engine: goja\n"},
 		{"unparseable duration", "cache:\n  page_ttl: half an hour\n"},
 		{"duration as bare number", "cache:\n  page_ttl: 3600\n"},
 		{"empty redis maxmemory", "cache:\n  redis_max_memory: \"\"\n"},
+		{"zero document hash ttl", "cache:\n  document_hash_ttl: 0s\n"},
+		{"zero chunk size", "chunker:\n  max_runes: 0\n"},
+		{"negative overlap", "chunker:\n  overlap_runes: -1\n"},
+		{"overlap as large as chunk", "chunker:\n  max_runes: 500\n  overlap_runes: 500\n"},
+		{"negative document minimum", "chunker:\n  min_document_runes: -1\n"},
+		{"chunk too big for milvus", "chunker:\n  max_runes: 20000\n"},
+		{"empty embedding model", "embedding:\n  model: \"\"\n"},
+		{"negative dimensions", "embedding:\n  dimensions: -1\n"},
+		{"zero embedding batch", "embedding:\n  batch_size: 0\n"},
+		{"negative retries", "embedding:\n  max_retries: -1\n"},
+		{"zero embedding timeout", "embedding:\n  request_timeout: 0s\n"},
+		{"prefix with a dash", "vector_store:\n  collection_prefix: my-chunks\n"},
+		{"prefix starting with a digit", "vector_store:\n  collection_prefix: 1chunks\n"},
+		{"zero indexer workers", "indexer:\n  workers: 0\n"},
+		{"zero slot lease", "run_state:\n  slot_lease: 0s\n"},
+		{"zero indexer queue", "indexer:\n  queue_size: 0\n"},
+		{"zero enqueue timeout", "indexer:\n  enqueue_timeout: 0s\n"},
 		{"component timeout over budget", "shutdown:\n  timeout: 5s\n  component_timeout: 10s\n"},
 		{"malformed yaml", "crawler: [\n"},
 	}
@@ -126,5 +146,84 @@ func TestShippedConfigFileIsValid(t *testing.T) {
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("the committed configs/config.yml must validate: %v", err)
+	}
+}
+
+func TestRobotsAgentIsTheProductName(t *testing.T) {
+	cases := map[string]string{
+		"project-arachne/0.1 (+https://github.com/x)": "project-arachne",
+		"MyBot":        "MyBot",
+		"my_bot/2.0":   "my_bot",
+		"arachne2/1.0": "arachne",
+		"/1.0":         "",
+	}
+
+	for ua, want := range cases {
+		if got := (Crawler{UserAgent: ua}).RobotsAgent(); got != want {
+			t.Errorf("RobotsAgent(%q) = %q, want %q", ua, got, want)
+		}
+	}
+}
+
+func TestLoadLayersSeveralFiles(t *testing.T) {
+	base := writeConfig(t, `
+crawler:
+  task_workers: 4
+embedding:
+  model: base-model
+  batch_size: 8
+`)
+	overlay := filepath.Join(t.TempDir(), "overlay.yml")
+	if err := os.WriteFile(overlay, []byte("embedding:\n  model: overlay-model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(base + ", " + overlay)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Embedding.Model != "overlay-model" || cfg.Embedding.BatchSize != 8 || cfg.Crawler.TaskWorkers != 4 {
+		t.Errorf("got model %q batch %d workers %d: the overlay must override only what it names",
+			cfg.Embedding.Model, cfg.Embedding.BatchSize, cfg.Crawler.TaskWorkers)
+	}
+
+	if _, err := Load(base + "," + filepath.Join(t.TempDir(), "absent.yml")); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a missing overlay must be reported, got %v", err)
+	}
+}
+
+func TestShippedVLLMOverlayIsValid(t *testing.T) {
+	cfg, err := Load("../../configs/config.yml,../../configs/vllm.yml")
+	if err != nil {
+		t.Fatalf("config.yml + vllm.yml must load: %v", err)
+	}
+
+	if cfg.Embedding.Model == Default().Embedding.Model {
+		t.Error("the vllm overlay must name its own model")
+	}
+}
+
+func TestShippedQueryPrefixMatchesTheDefault(t *testing.T) {
+	cfg, err := Load("../../configs/config.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Embedding.QueryPrefix != Qwen3QueryPrefix {
+		t.Errorf("query_prefix = %q, want %q: YAML escaping must yield a real newline", cfg.Embedding.QueryPrefix, Qwen3QueryPrefix)
+	}
+}
+
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	path := writeConfig(t, "search:\n  listen: \":1\"\n  page_ttl: 1h\n")
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("a key in the wrong section must be rejected, not ignored")
+	}
+
+	empty := writeConfig(t, "")
+	if _, err := Load(empty); err != nil {
+		t.Errorf("an empty file is a valid overlay: %v", err)
 	}
 }

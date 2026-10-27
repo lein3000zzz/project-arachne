@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/url"
 	"strings"
+	"web-crawler/internal/parser"
 
 	"golang.org/x/net/html"
 )
@@ -24,6 +25,7 @@ func (p *ParserBasic) ParseHTML(body []byte, base string) []string {
 	doc, err := html.Parse(bytes.NewReader(body))
 	if err == nil {
 		p.extractLinksFromNode(doc, seen, baseURL)
+		body = []byte(parser.ScanText(doc))
 	}
 
 	p.regexFallback(body, seen, baseURL)
@@ -51,10 +53,6 @@ func (p *ParserBasic) normalizeURL(url string) string {
 	if url == "" {
 		return ""
 	}
-	if strings.HasPrefix(url, "//") {
-		url = "http:" + url
-	}
-
 	if !p.checkAllowedPrefixes(url) {
 		if i := strings.Index(url, ":"); i >= 0 {
 			if j := strings.IndexAny(url, "/?#"); j == -1 || i < j {

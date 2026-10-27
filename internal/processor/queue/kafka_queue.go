@@ -9,7 +9,6 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/plugin/kotel"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type KafkaConfig struct {
@@ -19,22 +18,42 @@ type KafkaConfig struct {
 	User          string
 	Password      string
 
-	ChannelBuffer   int
-	RequestTimeout  time.Duration
-	ConsumerTimeout time.Duration
-	FlushInterval   time.Duration
+	ChannelBuffer  int
+	RequestTimeout time.Duration
+	FlushInterval  time.Duration
 }
 
 type KafkaQueue struct {
 	logger       *zap.SugaredLogger
 	kafkaClient  *kgo.Client
-	consumerChan chan []byte
+	consumerChan chan Message
 	producerChan chan []byte
 	cfg          *KafkaConfig
+	offsets      *offsetTracker
+
+	stop       context.Context
+	cancelStop context.CancelFunc
+	loops      sync.WaitGroup
+
+	// Guards the producer channel across shutdown: Produce holds it shared while
+	// sending, the producer loop takes it exclusively before its final drain, so
+	// nothing can land in the channel after that drain.
+	sendMu sync.RWMutex
+	sealed bool
 }
 
 func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue, error) {
-	kotelClient := kotel.NewKotel()
+	stop, cancel := context.WithCancel(context.Background())
+
+	q := &KafkaQueue{
+		logger:       logger,
+		consumerChan: make(chan Message, config.ChannelBuffer),
+		producerChan: make(chan []byte, config.ChannelBuffer),
+		cfg:          config,
+		offsets:      newOffsetTracker(),
+		stop:         stop,
+		cancelStop:   cancel,
+	}
 
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(config.Seeds...),
@@ -48,139 +67,174 @@ func NewKafkaQueue(logger *zap.SugaredLogger, config *KafkaConfig) (*KafkaQueue,
 			User: config.User,
 			Pass: config.Password,
 		}.AsMechanism()),
-		kgo.WithHooks(kotelClient.Hooks()),
+		kgo.WithHooks(kotel.NewKotel().Hooks()),
+		// Offsets are committed only for processed records, by the committer loop.
+		// franz-go's autocommit would commit whatever was polled.
+		kgo.DisableAutoCommit(),
+		kgo.OnPartitionsRevoked(q.onRevoked),
+		kgo.OnPartitionsLost(q.onLost),
 	)
-
 	if err != nil {
+		cancel()
 		logger.Errorw("error creating kafka client", "error", err)
+
 		return nil, err
 	}
 
-	return &KafkaQueue{
-		logger:       logger,
-		kafkaClient:  client,
-		consumerChan: make(chan []byte, config.ChannelBuffer),
-		producerChan: make(chan []byte, config.ChannelBuffer),
-		cfg:          config,
-	}, nil
+	q.kafkaClient = client
+	q.loops.Add(3)
+
+	return q, nil
 }
 
-func (q *KafkaQueue) GetProducerChan() chan<- []byte {
-	return q.producerChan
+func (q *KafkaQueue) Produce(ctx context.Context, payload []byte) error {
+	q.sendMu.RLock()
+	defer q.sendMu.RUnlock()
+
+	if q.sealed {
+		return ErrQueueClosed
+	}
+
+	select {
+	case q.producerChan <- payload:
+		return nil
+	case <-q.stop.Done():
+		return ErrQueueClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-func (q *KafkaQueue) GetConsumerChan() <-chan []byte {
+func (q *KafkaQueue) GetConsumerChan() <-chan Message {
 	return q.consumerChan
 }
 
+// StartQueueConsumer delivers records in partition order and commits a record's
+// offset only once it and everything before it were acked. A record that is never
+// acked - its consumer died, the queue stopped first - is redelivered.
 func (q *KafkaQueue) StartQueueConsumer() {
+	go q.runCommitter()
+
+	defer q.loops.Done()
+	defer close(q.consumerChan)
+
 	for {
-		fetches := q.getFetches()
-		iter := fetches.RecordIter()
+		fetches := q.kafkaClient.PollFetches(q.stop)
+		if q.stop.Err() != nil {
+			return
+		}
 
-		var recordsToCommit []*kgo.Record
+		fetches.EachError(func(topic string, partition int32, err error) {
+			q.logger.Warnw("Kafka fetch error", "topic", topic, "partition", partition, "err", err)
+		})
 
-		q.logger.Infow("working with some fetches", "fetches", fetches, "iter.Done()", iter.Done())
-
-		for !iter.Done() {
+		for iter := fetches.RecordIter(); !iter.Done(); {
 			record := iter.Next()
+			q.offsets.track(record)
 
-			if record == nil {
-				continue
+			select {
+			case q.consumerChan <- Message{Value: record.Value, ack: func() { q.offsets.done(record) }}:
+			case <-q.stop.Done():
+				return
 			}
-
-			q.processConsumedRecord(record)
-
-			recordsToCommit = append(recordsToCommit, record)
-		}
-
-		if len(recordsToCommit) > 0 {
-			q.commitRecords(recordsToCommit...)
 		}
 	}
 }
 
-// TODO сейчас те задачки, которые долго висят в очереди, просто пропускаются, то есть коммитятся как выполненные,
-// даже когда это не так, пока что так и нужно
-// TODO potential improvement: возвращать bool, чтобы в консьюмере коммитить только то, что было отправлено в канал,
-// но не коммитить то, что ушло в таймаут
-func (q *KafkaQueue) processConsumedRecord(record *kgo.Record) {
-	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.ConsumerTimeout)
-	defer cancel()
+func (q *KafkaQueue) runCommitter() {
+	defer q.loops.Done()
 
-	select {
-	case q.consumerChan <- record.Value:
-		q.logger.Infow("sent record into the consumerChan", "record", record)
-	case <-ctx.Done():
-		q.logger.Warnw("Dropping record due to slow consumer or full channel", "record", record)
+	ticker := time.NewTicker(q.cfg.FlushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			q.commit(q.kafkaClient, q.offsets.take())
+		case <-q.stop.Done():
+			q.commit(q.kafkaClient, q.offsets.take())
+			return
+		}
 	}
 }
 
-func (q *KafkaQueue) getFetches() kgo.Fetches {
-	ctx := context.Background()
-
-	return q.kafkaClient.PollFetches(ctx)
-}
-
-func (q *KafkaQueue) commitRecords(records ...*kgo.Record) {
+func (q *KafkaQueue) commit(client *kgo.Client, records []*kgo.Record) {
 	if len(records) == 0 {
-		q.logger.Warnw("No records to commit", "records", records)
 		return
 	}
 
-	commitCtx, commitCancel := context.WithTimeout(context.Background(), q.cfg.RequestTimeout)
-	defer commitCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.RequestTimeout)
+	defer cancel()
 
-	err := q.kafkaClient.CommitRecords(commitCtx, records...)
-	if err != nil {
-		q.logger.Warnw("Failed to commit task records in kafka", "records", records)
+	if err := client.CommitRecords(ctx, records...); err != nil {
+		q.offsets.restore(records)
+		q.logger.Warnw("Failed to commit offsets, will retry", "records", len(records), "err", err)
 	}
+}
+
+// onRevoked commits what is already done in partitions moving to another
+// consumer. Records still in flight from them are redelivered there.
+func (q *KafkaQueue) onRevoked(_ context.Context, client *kgo.Client, revoked map[string][]int32) {
+	q.commit(client, q.offsets.release(revoked))
+}
+
+// onLost cannot commit: the partitions already belong to someone else.
+func (q *KafkaQueue) onLost(_ context.Context, _ *kgo.Client, lost map[string][]int32) {
+	q.offsets.release(lost)
 }
 
 func (q *KafkaQueue) StartQueueProducer() {
-	items := make([][]byte, 0, q.cfg.ChannelBuffer)
-	flushTicker := time.NewTicker(q.cfg.FlushInterval)
-	defer flushTicker.Stop()
+	defer q.loops.Done()
 
-	for {
-		select {
-		case item := <-q.producerChan:
-			items = append(items, item)
-			q.logger.Debugw("Received item in the producerChan", "item", item)
+	runProducer(q.stop.Done(), q.producerChan, q.cfg.ChannelBuffer, q.cfg.FlushInterval, q.seal, q.sendToKafka)
+}
 
-			if len(items) >= q.cfg.ChannelBuffer {
-				q.flushItems(&items)
-			}
-		case <-flushTicker.C:
-			q.flushItems(&items)
+func (q *KafkaQueue) seal() {
+	q.sendMu.Lock()
+	q.sealed = true
+	q.sendMu.Unlock()
+}
+
+// runProducer batches payloads and flushes them. On stop it flushes what is still
+// buffered instead of dropping it: every queued task was already counted in its
+// run's active-task counter, and a lost one keeps the run from ever completing.
+func runProducer(stop <-chan struct{}, in <-chan []byte, batchSize int, interval time.Duration, seal func(), flush func([][]byte)) {
+	items := make([][]byte, 0, batchSize)
+
+	send := func() {
+		if len(items) > 0 {
+			flush(items)
+			items = make([][]byte, 0, batchSize)
 		}
 	}
-}
 
-func (q *KafkaQueue) flushItems(items *[][]byte) {
-	if len(*items) == 0 {
-		return
-	}
-	q.logger.Debugw("Producing items", "items", *items)
-
-	q.sendToKafka(*items)
-	*items = (*items)[:0]
-}
-
-func (q *KafkaQueue) drainLoop(capacity int) [][]byte {
-	drainedItems := make([][]byte, 0, capacity)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case item := <-q.producerChan:
-			drainedItems = append(drainedItems, item)
-			q.logger.Infow("Received item in the procuderChan", "item", item)
-
-			if len(drainedItems) >= capacity {
-				return drainedItems
+		case item := <-in:
+			items = append(items, item)
+			if len(items) >= batchSize {
+				send()
 			}
-		default:
-			return drainedItems
+		case <-ticker.C:
+			send()
+		case <-stop:
+			seal()
+
+			for {
+				select {
+				case item := <-in:
+					items = append(items, item)
+					if len(items) >= batchSize {
+						send()
+					}
+				default:
+					send()
+					return
+				}
+			}
 		}
 	}
 }
@@ -220,18 +274,21 @@ func (q *KafkaQueue) produceRecords(records []*kgo.Record) {
 }
 
 func (q *KafkaQueue) CloseQueue(ctx context.Context) error {
-	eg := &errgroup.Group{}
+	q.cancelStop()
 
-	eg.SetLimit(2)
-	eg.Go(func() error {
-		return drainAncCloseChannel(ctx, q.consumerChan)
-	})
+	finished := make(chan struct{})
+	go func() {
+		q.loops.Wait()
+		close(finished)
+	}()
 
-	eg.Go(func() error {
-		return drainAncCloseChannel(ctx, q.producerChan)
-	})
+	var err error
 
-	err := eg.Wait()
+	select {
+	case <-finished:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
 
 	q.kafkaClient.Close()
 

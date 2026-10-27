@@ -42,4 +42,7 @@ const (
 
 const htmlSniffLimit = 1024
 
+// Every chunk embeds the title, and the vector store bounds chunk text in bytes.
+const maxTitleRunes = 512
+
 const maxJSONDepth = 32

@@ -6,12 +6,14 @@ import (
 	"web-crawler/internal/domain/data"
 )
 
+type TaskSender interface {
+	SendTask(task *config.Task) error
+}
+
 type CrawlerConfig struct {
 	TaskConsumerChan <-chan *config.Task
 	SaverChan        chan<- *data.PageData
-	TaskProducerChan chan<- []*config.Task
-
-	CrawlCallbackChan chan<- struct{}
+	TaskSender       TaskSender
 
 	WorkersNumber int
 }

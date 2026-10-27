@@ -2,17 +2,18 @@ package app
 
 import (
 	"context"
-	"errors"
 	"log"
-	"os"
-	"strings"
+	"time"
 	"web-crawler/internal/appconfig"
+	"web-crawler/internal/chunker"
 	"web-crawler/internal/documents"
+	"web-crawler/internal/indexing"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/networker/sugaredworker"
 	"web-crawler/internal/pageparser"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/parser"
+	"web-crawler/internal/platform"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/utils"
@@ -20,28 +21,33 @@ import (
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
 
-	"github.com/joho/godotenv"
 	"github.com/lein3000zzz/vault-config-manager/pkg/manager"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	neoconfig "github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.uber.org/zap"
 )
 
+const (
+	redisDBPageCache      = 0
+	redisDBRobotsCache    = 1
+	redisDBRunState       = 2
+	redisDBDocumentHashes = 3
+)
+
+// Covers the embedder probe, which may have to load the model first, and
+// creating and loading the collection on a fresh Milvus.
+const indexingStartupTimeout = 2 * time.Minute
+
 func InitApp() *CrawlerApp {
-	initEnv()
+	platform.LoadEnv()
 
-	logger := initLogger()
-	cfg := initConfig(logger)
-	sm := initSecretManager(logger)
+	logger := platform.NewLogger()
+	cfg := platform.LoadConfig(logger)
+	sm := platform.NewSecretManager(logger)
 
-	tp := initTracing(sm)
+	tp := platform.NewTracing(sm, "project-arachne")
 
 	neo4jDriver := initNeo4jDriver(sm, cfg)
 	pageRepo := initPageRepo(logger, neo4jDriver)
@@ -56,7 +62,7 @@ func InitApp() *CrawlerApp {
 		log.Fatalf("Redis URI or password is missing")
 	}
 
-	redisRunStateClient := initRedisClient(logger, redisURI, redisPassword, 2, cfg)
+	redisRunStateClient := initRedisClient(logger, redisURI, redisPassword, redisDBRunState, cfg)
 
 	nodeID, err := utils.GenerateID()
 	if err != nil {
@@ -67,43 +73,28 @@ func InitApp() *CrawlerApp {
 
 	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue, runStateManager)
 
-	fetcher := networker.NewNetworker(logger)
+	fetcher := networker.NewNetworker(logger, cfg.Crawler.UserAgent, cfg.Crawler.FetchTimeout.Std())
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
-	documentSink := documents.NewLogSink(logger)
+	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword)
 
-	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, 0, cfg)
-	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, 1, cfg)
+	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBPageCache, cfg)
+	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBRobotsCache, cfg)
 
 	redisPagesCache := cache.NewRedisCache(redisPagesCacheClient, logger)
 	redisRobotsCache := cache.NewRedisCache(redisRobotsCacheClient, logger)
 
-	extraWorker, errRod := sugaredworker.NewExtraRodParser(logger)
+	extraWorker, errRod := sugaredworker.NewExtraRodParser(logger, cfg.Crawler.UserAgent)
 	if errRod != nil {
 		logger.Fatal("Error initializing extra worker parser:", errRod)
 	}
 
 	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, cfg)
 
+	initGraphSchema(logger, pageRepo, crawler, documentSink)
+
 	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, tp, cfg)
-}
-
-func initConfig(logger *zap.SugaredLogger) appconfig.Config {
-	path, explicit := appconfig.Path()
-
-	cfg, err := appconfig.Load(path)
-
-	switch {
-	case err == nil:
-		logger.Infow("Loaded config", "path", path)
-	case errors.Is(err, appconfig.ErrNotFound) && !explicit:
-		logger.Warnw("No config file found, using defaults", "path", path)
-	default:
-		logger.Fatalf("Error loading config from %s: %v", path, err)
-	}
-
-	return cfg
 }
 
 func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
@@ -120,6 +111,43 @@ func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
 	}
 
 	return katana
+}
+
+func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, redisURI, redisPassword string) documents.Sink {
+	ctx, cancel := context.WithTimeout(context.Background(), indexingStartupTimeout)
+	defer cancel()
+
+	textChunker, err := chunker.NewParagraphChunker(chunker.Settings{
+		MaxRunes:         cfg.Chunker.MaxRunes,
+		OverlapRunes:     cfg.Chunker.OverlapRunes,
+		MinDocumentRunes: cfg.Chunker.MinDocumentRunes,
+	})
+	if err != nil {
+		logger.Fatal("Error initializing chunker:", err)
+	}
+
+	embedder := platform.NewEmbedder(logger, cfg, sm)
+
+	dimension, err := embedder.Probe(ctx)
+	if err != nil {
+		logger.Fatalw("Embedding endpoint is not usable", "model", cfg.Embedding.Model, "error", err)
+	}
+
+	store := platform.NewVectorStore(ctx, logger, cfg, sm, dimension)
+
+	logger.Infow("Indexing ready",
+		"chunker", textChunker.Fingerprint(),
+		"model", embedder.Model(),
+		"dimension", dimension,
+		"collection", store.Collection(),
+	)
+
+	hashClient := initRedisClient(logger, redisURI, redisPassword, redisDBDocumentHashes, cfg)
+	hashes := indexing.NewRedisHashStore(hashClient, cfg.Cache.DocumentHashTTL.Std())
+
+	chunking := indexing.NewChunkingSink(logger, textChunker, hashes, indexing.NewVectorSink(embedder, store))
+
+	return indexing.NewAsyncSink(logger, chunking, cfg.Indexer.Workers, cfg.Indexer.QueueSize, cfg.Indexer.EnqueueTimeout.Std())
 }
 
 func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int, cfg appconfig.Config) *redis.Client {
@@ -168,10 +196,9 @@ func initTasksQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg app
 		User:          kafkaUser,
 		Password:      kafkaPassword,
 
-		ChannelBuffer:   cfg.Queue.ChannelBuffer,
-		RequestTimeout:  cfg.Queue.RequestTimeout.Std(),
-		ConsumerTimeout: cfg.Queue.ConsumerTimeout.Std(),
-		FlushInterval:   cfg.Queue.FlushInterval.Std(),
+		ChannelBuffer:  cfg.Queue.ChannelBuffer,
+		RequestTimeout: cfg.Queue.RequestTimeout.Std(),
+		FlushInterval:  cfg.Queue.FlushInterval.Std(),
 	}
 
 	tasksQueue, err := queue.NewKafkaQueue(logger, &kafkaTasksCfg)
@@ -200,10 +227,9 @@ func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appc
 		User:          kafkaUser,
 		Password:      kafkaPassword,
 
-		ChannelBuffer:   cfg.Queue.ChannelBuffer,
-		RequestTimeout:  cfg.Queue.RequestTimeout.Std(),
-		ConsumerTimeout: cfg.Queue.ConsumerTimeout.Std(),
-		FlushInterval:   cfg.Queue.FlushInterval.Std(),
+		ChannelBuffer:  cfg.Queue.ChannelBuffer,
+		RequestTimeout: cfg.Queue.RequestTimeout.Std(),
+		FlushInterval:  cfg.Queue.FlushInterval.Std(),
 	}
 
 	runsQueue, err := queue.NewKafkaQueue(logger, &kafkaRunsCfg)
@@ -212,6 +238,26 @@ func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appc
 	}
 
 	return runsQueue
+}
+
+// The first start against a graph without constraints fetches every page that has
+// a scheme or trailing-slash twin, one at a time.
+const graphSchemaTimeout = 15 * time.Minute
+
+func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, crawler *webcrawler.CrawlerRepo, sink documents.Sink) {
+	ctx, cancel := context.WithTimeout(context.Background(), graphSchemaTimeout)
+	defer cancel()
+
+	removed, err := pageRepo.EnsureSchema(ctx, crawler.ResolveIdentity)
+	if err != nil {
+		logger.Fatal("Error preparing the page graph:", err)
+	}
+
+	for _, pageURL := range removed {
+		if err := sink.Submit(ctx, &documents.Document{URL: pageURL, FetchedAt: time.Now()}); err != nil {
+			logger.Warnw("Failed to drop a merged page from the index", "url", pageURL, "err", err)
+		}
+	}
 }
 
 func initPageRepo(logger *zap.SugaredLogger, neo4jDriver neo4j.DriverWithContext) pages.PageRepo {
@@ -243,79 +289,4 @@ func initNeo4jDriver(sm manager.SecretManager, cfg appconfig.Config) neo4j.Drive
 	}
 
 	return neo4jDriver
-}
-
-func initTracing(sm manager.SecretManager) *trace.TracerProvider {
-	oltpString, err := sm.GetSecretStringFromConfig("OTLP_ENDPOINT")
-	if err != nil {
-		log.Fatalf("Error initializing tracing: %v", err)
-	}
-
-	exp, err := otlptracehttp.New(context.Background(), otlptracehttp.WithEndpoint(oltpString), otlptracehttp.WithInsecure())
-	if err != nil {
-		log.Fatalf("Error initializing jaeger: %v", err)
-	}
-
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(semconv.ServiceNameKey.String("project-arachne")),
-	)
-	if err != nil {
-		log.Fatal("Error initializing otel resource:", err)
-	}
-
-	tracerProvider := trace.NewTracerProvider(
-		trace.WithBatcher(exp),
-		trace.WithResource(res),
-	)
-
-	otel.SetTracerProvider(tracerProvider)
-
-	return tracerProvider
-}
-
-func initSecretManager(logger *zap.SugaredLogger) manager.SecretManager {
-	sm, err := manager.NewSecretManager(
-		os.Getenv("VAULT_ADDRESS"),
-		os.Getenv("VAULT_TOKEN"),
-		manager.DefaultBasePathData+"main/",
-		manager.DefaultBasePathMetaData+"main/",
-		logger,
-	)
-	if err != nil {
-		logger.Fatalf("Error initializing secret manager: %v", err)
-	}
-
-	keys := strings.Split(os.Getenv("VAULT_KEYS"), ",")
-
-	sm.UnsealVault(keys)
-
-	err = sm.ResetConfig()
-	if err != nil {
-		logger.Fatalw("failed to update config on start", "error", err)
-	}
-
-	return sm
-}
-
-func initLogger() *zap.SugaredLogger {
-	zapLogger, err := zap.NewProduction()
-	if err != nil {
-		log.Fatalf("Error initializing zap logger: %v", err)
-		return nil
-	}
-
-	logger := zapLogger.Sugar()
-	return logger
-}
-
-func initEnv() {
-	if os.Getenv("APP_ENV") == "prod" {
-		return
-	}
-
-	err := godotenv.Load("main.env")
-
-	if err != nil {
-		log.Fatalf("Error loading .env file")
-	}
 }
