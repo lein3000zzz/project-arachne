@@ -138,3 +138,41 @@ func TestNamesBoilerplate(t *testing.T) {
 		}
 	}
 }
+
+// pkg.go.dev's shape: a mega-menu whose items carry a sentence each, then a page
+// with little content - where readability, finding too little, used to return
+// the menu as the article.
+const megaMenuShaped = `<!doctype html><html><head><title>semaphore package versions</title></head><body>
+<header class="go-Header">
+  <nav class="go-Header-nav"><ul>
+    <li><a href="#">Why Go</a><ul>
+      <li><div><a href="/solutions/case-studies"><span>Case Studies</span></a></div><p>Common problems companies solve with Go</p></li>
+      <li><div><a href="/solutions/use-cases"><span>Use Cases</span></a></div><p>Stories about how and why companies use Go</p></li>
+      <li><div><a href="/security/"><span>Security</span></a></div><p>How Go can help keep you secure by default</p></li>
+    </ul></li>
+  </ul></nav>
+</header>
+<main>
+  <header><h1>Package semaphore</h1><p>Published: Mar 3, 2026</p></header>
+  <p>Package semaphore provides a weighted semaphore implementation.</p>
+  <nav class="toc"><a href="#pkg-overview">Overview</a> <a href="#pkg-index">Index</a></nav>
+</main>
+<div role="navigation"><a href="/a">Previous</a> <a href="/b">Next</a></div>
+<footer class="go-Footer"><p>Copyright 2026 The Go Authors. Terms of Service and Privacy Policy apply.</p></footer>
+</body></html>`
+
+func TestSiteChromeIsRemovedButArticleHeadersStay(t *testing.T) {
+	text := cleanedText(t, megaMenuShaped)
+
+	for _, leaked := range []string{"Common problems companies", "Stories about", "Overview", "Previous", "Copyright", "Terms of Service"} {
+		if strings.Contains(text, leaked) {
+			t.Errorf("%q leaked into %q", leaked, text)
+		}
+	}
+
+	for _, kept := range []string{"Package semaphore", "Published: Mar 3, 2026", "weighted semaphore implementation"} {
+		if !strings.Contains(text, kept) {
+			t.Errorf("%q was removed from %q", kept, text)
+		}
+	}
+}

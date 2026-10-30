@@ -47,6 +47,8 @@ type Run struct {
 	IndexedAt   *time.Time `json:"indexed_at,omitempty"`
 	// PageRank has been recomputed since the crawl finished.
 	Ranked bool `json:"ranked"`
+	// The lab source the run crawled for, if any.
+	SourceID int64 `json:"source_id,omitempty"`
 }
 
 const countTimeout = 2 * time.Second
@@ -63,11 +65,14 @@ func NewStore(logger *zap.SugaredLogger, pool *pgxpool.Pool, stallAfter time.Dur
 	return &Store{pool: pool, logger: logger, stallAfter: stallAfter}
 }
 
-func (s *Store) Submitted(ctx context.Context, run *config.Run) error {
+// Submitted records the run before it is produced, so its row - and with it
+// the lab source its pages join - exists before the crawler saves any of them.
+func (s *Store) Submitted(ctx context.Context, run *config.Run, origin Origin) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO runs (id, start_url, scope, max_depth, max_links) VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO runs (id, start_url, scope, max_depth, max_links, submitted_by, source_id)
+		VALUES ($1, $2, $3, $4, $5, nullif($6, 0), nullif($7, 0))
 		ON CONFLICT (id) DO NOTHING`,
-		run.ID, run.StartURL, run.Scope, run.MaxDepth, run.MaxLinks)
+		run.ID, run.StartURL, run.Scope, run.MaxDepth, run.MaxLinks, origin.UserID, origin.SourceID)
 
 	return err
 }
@@ -127,7 +132,8 @@ const selectRuns = `
 	SELECT r.id, r.start_url, r.scope, r.max_depth, r.max_links, r.submitted_at, r.started_at, r.finished_at, r.note,
 	       count(p.id) FILTER (WHERE p.fetched_at IS NOT NULL), max(p.fetched_at),
 	       r.docs_queued, r.docs_indexed, r.docs_failed, r.indexed_at,
-	       coalesce((SELECT max(computed_at) FROM rank_runs) >= r.finished_at, false)
+	       coalesce((SELECT max(computed_at) FROM rank_runs) >= r.finished_at, false),
+	       coalesce(r.source_id, 0)
 	FROM runs r LEFT JOIN pages p ON p.last_run_id = r.id`
 
 func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {
@@ -174,7 +180,7 @@ func scanRun(row pgx.CollectableRow) (Run, error) {
 
 	err := row.Scan(&r.ID, &r.StartURL, &r.Scope, &r.MaxDepth, &r.MaxLinks, &r.SubmittedAt,
 		&r.StartedAt, &r.FinishedAt, &r.Note, &r.Pages, &r.LastFetch,
-		&r.DocsQueued, &r.DocsIndexed, &r.DocsFailed, &r.IndexedAt, &r.Ranked)
+		&r.DocsQueued, &r.DocsIndexed, &r.DocsFailed, &r.IndexedAt, &r.Ranked, &r.SourceID)
 
 	return r, err
 }

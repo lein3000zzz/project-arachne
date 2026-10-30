@@ -124,6 +124,8 @@ func TestEverythingButSigningInNeedsAUser(t *testing.T) {
 	for _, target := range []string{
 		"GET /search?q=x", "GET /answer?q=x", "GET /answer/stream?q=x",
 		"GET /api/runs", "POST /api/runs", "GET /api/runs/r1", "GET /api/me", "POST /api/me/password",
+		"GET /api/labs", "POST /api/labs", "POST /api/labs/plan", "GET /api/labs/1", "DELETE /api/labs/1",
+		"GET /api/labs/1/pages", "POST /api/labs/1/sources", "POST /api/labs/1/sources/2/refresh", "DELETE /api/labs/1/sources/2",
 	} {
 		method, path, _ := strings.Cut(target, " ")
 
@@ -145,7 +147,11 @@ func TestEverythingButSigningInNeedsAUser(t *testing.T) {
 		t.Errorf("the page without a user: %d → %q", rec.Code, rec.Header().Get("Location"))
 	}
 
-	for _, open := range []string{"/login", "/healthz", "/favicon.svg", "/static/site.css", "/static/theme.js"} {
+	if rec := do(handler, httptest.NewRequest(http.MethodGet, "/labs/3", nil)); rec.Code != http.StatusSeeOther {
+		t.Errorf("a lab page without a user: %d", rec.Code)
+	}
+
+	for _, open := range []string{"/login", "/healthz", "/favicon.svg", "/static/site.css", "/static/theme.js", "/static/common.js"} {
 		if rec := do(handler, httptest.NewRequest(http.MethodGet, open, nil)); rec.Code != http.StatusOK {
 			t.Errorf("%s: %d, want it open", open, rec.Code)
 		}

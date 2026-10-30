@@ -28,6 +28,14 @@ type Request struct {
 	UseCache bool   `json:"use_cache"`
 }
 
+// Origin says who asked for a run and for which lab source. It is never read
+// from a request body: a source taken from one would let anyone crawl pages
+// into another user's lab.
+type Origin struct {
+	UserID   int64
+	SourceID int64
+}
+
 type Limits struct {
 	DefaultDepth, MaxDepth int
 	DefaultLinks, MaxLinks int
@@ -55,15 +63,30 @@ func (s *Service) Get(ctx context.Context, id string) (Run, error) {
 	return s.store.Get(ctx, id)
 }
 
+// Prepare checks a request and fills in its defaults - canonical URL, depth,
+// links, scope - without submitting anything.
+func (s *Service) Prepare(req Request) (Request, error) {
+	run, err := s.build(req)
+	if err != nil {
+		return Request{}, err
+	}
+
+	if req.Scope == "" {
+		req.Scope = ScopeSite
+	}
+
+	return Request{URL: run.StartURL, Depth: run.MaxDepth, Links: run.MaxLinks, Scope: req.Scope, UseCache: req.UseCache}, nil
+}
+
 // Submit records the run, then puts it on the runs topic, where the crawler takes
 // it as it would one from `make crawl`.
-func (s *Service) Submit(ctx context.Context, req Request) (Run, error) {
+func (s *Service) Submit(ctx context.Context, req Request, origin Origin) (Run, error) {
 	run, err := s.build(req)
 	if err != nil {
 		return Run{}, err
 	}
 
-	if err := s.store.Submitted(ctx, run); err != nil {
+	if err := s.store.Submitted(ctx, run, origin); err != nil {
 		return Run{}, err
 	}
 

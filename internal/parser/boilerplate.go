@@ -39,6 +39,7 @@ const (
 
 func removeBoilerplate(sel *goquery.Selection) {
 	sel.Find(`[hidden], [aria-hidden="true"]`).Remove()
+	removeChrome(sel)
 
 	sel.Find("[class]").Each(func(_ int, s *goquery.Selection) {
 		switch goquery.NodeName(s) {
@@ -53,6 +54,21 @@ func removeBoilerplate(sel *goquery.Selection) {
 		class, _ := s.Attr("class")
 
 		if namesBoilerplate(class) && textRunes(s) <= maxBoilerplateRunes {
+			s.Remove()
+		}
+	})
+}
+
+// removeChrome drops the site around the content: navigation anywhere, and a
+// header or footer that is the page's rather than an article's. Readability
+// usually discards these itself, but on a page with little content it retries
+// without that rule and returns the menu as the article - and a mega-menu whose
+// items carry descriptions is no link list to removeLinkLists.
+func removeChrome(sel *goquery.Selection) {
+	sel.Find(`nav, [role="navigation"]`).Remove()
+
+	sel.Find(`header, footer, [role="banner"], [role="contentinfo"]`).Each(func(_ int, s *goquery.Selection) {
+		if s.Closest("main, article, [role=\"main\"]").Length() == 0 {
 			s.Remove()
 		}
 	})

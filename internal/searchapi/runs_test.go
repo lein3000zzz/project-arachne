@@ -14,12 +14,13 @@ import (
 )
 
 type fakeRuns struct {
-	got runs.Request
-	err error
+	got    runs.Request
+	origin runs.Origin
+	err    error
 }
 
-func (f *fakeRuns) Submit(_ context.Context, req runs.Request) (runs.Run, error) {
-	f.got = req
+func (f *fakeRuns) Submit(_ context.Context, req runs.Request, origin runs.Origin) (runs.Run, error) {
+	f.got, f.origin = req, origin
 	return runs.Run{ID: "r1", StartURL: "https://go.dev/", Status: runs.StatusQueued}, f.err
 }
 
@@ -58,6 +59,14 @@ func TestSubmitRun(t *testing.T) {
 
 	if service.got != (runs.Request{URL: "go.dev", Depth: 2, Links: 50, Scope: "section"}) {
 		t.Errorf("request = %+v", service.got)
+	}
+
+	if service.origin != (runs.Origin{UserID: testUser.ID}) {
+		t.Errorf("origin = %+v, want the signed-in user and no source", service.origin)
+	}
+
+	if rec := serveRuns(&fakeRuns{}, http.MethodPost, "/api/runs", `{"url":"go.dev","source_id":7}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a source named in the body: %d, want it refused", rec.Code)
 	}
 
 	var run runs.Run

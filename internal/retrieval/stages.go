@@ -86,9 +86,23 @@ func (r *Retriever) rerank(ctx context.Context, query string, results []Result) 
 		return nil
 	}
 
-	documents := make([]string, len(top))
+	var (
+		documents []string
+		owner     []int
+		texts     []string
+	)
+
 	for i, res := range top {
-		documents[i] = rerankDocument(res)
+		chunks := res.chunks
+		if len(chunks) == 0 {
+			chunks = []string{res.Snippet}
+		}
+
+		for _, text := range chunks {
+			documents = append(documents, rerankDocument(res.Title, text))
+			owner = append(owner, i)
+			texts = append(texts, text)
+		}
 	}
 
 	scores, err := r.reranker.Rerank(ctx, query, documents)
@@ -96,8 +110,12 @@ func (r *Retriever) rerank(ctx context.Context, query string, results []Result) 
 		return fmt.Errorf("reranking: %w", err)
 	}
 
-	for i := range top {
-		top[i].Rerank = &Signal{Score: scores[i]}
+	for d, score := range scores {
+		res := &top[owner[d]]
+		if res.Rerank == nil || score > res.Rerank.Score {
+			res.Rerank = &Signal{Score: score}
+			res.Snippet = texts[d]
+		}
 	}
 
 	sort.SliceStable(top, func(i, j int) bool { return top[i].Rerank.Score > top[j].Rerank.Score })
@@ -109,8 +127,8 @@ func (r *Retriever) rerank(ctx context.Context, query string, results []Result) 
 	return nil
 }
 
-func rerankDocument(res Result) string {
-	text := strings.TrimSpace(res.Title + "\n\n" + res.Snippet)
+func rerankDocument(title, chunk string) string {
+	text := strings.TrimSpace(title + "\n\n" + chunk)
 
 	if runes := []rune(text); len(runes) > maxRerankRunes {
 		text = string(runes[:maxRerankRunes])

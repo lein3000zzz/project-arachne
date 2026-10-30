@@ -148,3 +148,140 @@ func TestExcerpt(t *testing.T) {
 		}
 	}
 }
+
+// scopedSearch answers a search restricted to lab pages from lab, any other
+// from shared.
+type scopedSearch struct {
+	lab, shared []retrieval.Result
+	requests    []retrieval.Request
+}
+
+func (f *scopedSearch) Search(_ context.Context, req retrieval.Request) ([]retrieval.Result, error) {
+	f.requests = append(f.requests, req)
+
+	if req.URLs != nil {
+		return f.lab, nil
+	}
+
+	return f.shared, nil
+}
+
+func reranked(url string, score float64) retrieval.Result {
+	return retrieval.Result{URL: url, Title: url, Snippet: "text of " + url, Rerank: &retrieval.Signal{Rank: 1, Score: score}}
+}
+
+func labService(t *testing.T, search Searcher, chat llm.Client) *Service {
+	t.Helper()
+
+	s, err := New(search, chat, Config{Sources: 3, MaxTokens: 256, MinRelevance: 0, MinLabSources: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return s
+}
+
+func urlsOf(sources []Source) string {
+	var b strings.Builder
+	for _, s := range sources {
+		b.WriteString(s.URL)
+		if s.InLab {
+			b.WriteString("(lab)")
+		}
+		b.WriteString(" ")
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+func TestIrrelevantSourcesAreLeftOutWhileRelevantOnesExist(t *testing.T) {
+	search := &fakeSearch{results: []retrieval.Result{reranked("a", 2.1), reranked("b", -4), reranked("c", 0.5)}}
+	chat := &fakeChat{reply: "x [1]"}
+
+	res, err := labService(t, search, chat).Answer(context.Background(), Request{Query: "q"}, Events{})
+	if err != nil || urlsOf(res.Sources) != "a c" || res.Sources[1].N != 2 || res.Scope != ScopeShared || res.Weak {
+		t.Errorf("sources %q scope %s weak %v, %v", urlsOf(res.Sources), res.Scope, res.Weak, err)
+	}
+
+	if strings.Contains(chat.got.Messages[0].Content, "none of these sources looked clearly relevant") {
+		t.Error("relevant sources were called weak")
+	}
+}
+
+// Search found something, so the model reads it: it can still say the sources
+// do not answer, and it is told they may not.
+func TestWithNothingRelevantTheBestFoundIsReadAndMarkedWeak(t *testing.T) {
+	search := &fakeSearch{results: []retrieval.Result{reranked("a", -0.5), reranked("b", -6)}}
+	chat := &fakeChat{reply: "x"}
+
+	res, err := labService(t, search, chat).Answer(context.Background(), Request{Query: "q"}, Events{})
+	if err != nil || !res.Weak || urlsOf(res.Sources) != "a b" || res.Scope != ScopeShared {
+		t.Fatalf("weak %v, sources %q, scope %s, %v", res.Weak, urlsOf(res.Sources), res.Scope, err)
+	}
+
+	if !strings.Contains(chat.got.Messages[0].Content, "none of these sources looked clearly relevant") {
+		t.Errorf("the model was not told the sources are weak:\n%s", chat.got.Messages[0].Content)
+	}
+}
+
+func TestLabsThatHoldEnoughAreNotWidened(t *testing.T) {
+	search := &scopedSearch{lab: []retrieval.Result{reranked("l1", 3), reranked("l2", 1)}, shared: []retrieval.Result{reranked("s1", 5)}}
+
+	res, err := labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
+		Request{Query: "q", LabURLs: []string{"l1", "l2", "l3"}}, Events{})
+	if err != nil || len(search.requests) != 1 || res.Scope != ScopeLabs || urlsOf(res.Sources) != "l1(lab) l2(lab)" {
+		t.Errorf("%d searches, scope %s, sources %q, %v", len(search.requests), res.Scope, urlsOf(res.Sources), err)
+	}
+
+	if got := search.requests[0].URLs; len(got) != 3 {
+		t.Errorf("searched URLs %v", got)
+	}
+}
+
+func TestThinLabsWidenToTheSharedBase(t *testing.T) {
+	search := &scopedSearch{
+		lab:    []retrieval.Result{reranked("l1", 2), reranked("l2", -3)},
+		shared: []retrieval.Result{reranked("l1", 2), reranked("s1", 1.5), reranked("s2", -1), reranked("s3", 0.2), reranked("s4", 0.1)},
+	}
+
+	res, err := labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
+		Request{Query: "q", LabURLs: []string{"l1", "l2"}}, Events{})
+	if err != nil || res.Scope != ScopeWidened || urlsOf(res.Sources) != "l1(lab) s1 s3" {
+		t.Errorf("scope %s, sources %q, %v: lab first, duplicates and irrelevant ones skipped, up to 3", res.Scope, urlsOf(res.Sources), err)
+	}
+
+	if len(search.requests) != 2 || search.requests[1].URLs != nil {
+		t.Errorf("searches: %+v", search.requests)
+	}
+
+	search.lab = nil
+
+	res, err = labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
+		Request{Query: "q", LabURLs: []string{}}, Events{})
+	if err != nil || res.Scope != ScopeWidened || urlsOf(res.Sources) != "l1 s1 s3" {
+		t.Errorf("empty labs: scope %s, sources %q, %v", res.Scope, urlsOf(res.Sources), err)
+	}
+}
+
+func TestWeakLabsAndSharedBaseAreReadLabsFirst(t *testing.T) {
+	search := &scopedSearch{
+		lab:    []retrieval.Result{reranked("l1", -3), reranked("l2", -4)},
+		shared: []retrieval.Result{reranked("s1", -2), reranked("l1", -3), reranked("s2", -5)},
+	}
+
+	res, err := labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
+		Request{Query: "q", LabURLs: []string{"l1", "l2"}}, Events{})
+	if err != nil || !res.Weak || res.Scope != ScopeWidened || urlsOf(res.Sources) != "l1(lab) l2(lab) s1" {
+		t.Errorf("weak %v, scope %s, sources %q, %v", res.Weak, res.Scope, urlsOf(res.Sources), err)
+	}
+}
+
+func TestOnlyAnEmptySearchGoesUnanswered(t *testing.T) {
+	search := &scopedSearch{}
+	chat := &fakeChat{reply: "x"}
+
+	res, err := labService(t, search, chat).Answer(context.Background(), Request{Query: "q", LabURLs: []string{"l1"}}, Events{})
+	if !errors.Is(err, ErrNoSources) || res.Scope != ScopeNone || len(chat.got.Messages) != 0 || len(search.requests) != 2 {
+		t.Errorf("scope %s, err %v, searches %d, model asked %v", res.Scope, err, len(search.requests), len(chat.got.Messages) != 0)
+	}
+}

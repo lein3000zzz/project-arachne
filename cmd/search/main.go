@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 	"web-crawler/internal/answer"
+	"web-crawler/internal/labs"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
 	"web-crawler/internal/retrieval"
@@ -77,12 +78,16 @@ func main() {
 
 	var answerer searchapi.Answerer
 
-	if chat := platform.NewChatClient(logger, cfg, sm); chat != nil {
+	chat := platform.NewChatClient(logger, cfg, sm)
+
+	if chat != nil {
 		service, err := answer.New(retriever, chat, answer.Config{
-			Sources:     cfg.Chat.ContextChunks,
-			SourceRunes: cfg.Chat.SourceRunes,
-			MaxTokens:   cfg.Chat.MaxTokens,
-			Temperature: cfg.Chat.Temperature,
+			Sources:       cfg.Chat.ContextChunks,
+			SourceRunes:   cfg.Chat.SourceRunes,
+			MinRelevance:  cfg.Chat.MinRelevance,
+			MinLabSources: cfg.Labs.MinSources,
+			MaxTokens:     cfg.Chat.MaxTokens,
+			Temperature:   cfg.Chat.Temperature,
 		})
 		if err != nil {
 			logger.Fatal("Error initializing answering:", err)
@@ -95,19 +100,26 @@ func main() {
 
 	services := searchapi.Services{Auth: accounts, Searcher: retriever, Answerer: answerer}
 
+	// Interfaces, left nil when off: a nil *runs.Service inside one would not
+	// compare equal to nil.
+	var labRuns labs.Runs
+
 	if cfg.CrawlAPI.Enabled {
 		producer := platform.NewRunsProducer(logger, sm)
 		defer producer.Close()
 
-		services.Runs = runs.NewService(runs.NewStore(logger, db, cfg.RunState.SlotLease.Std()), producer, runs.Limits{
+		runService := runs.NewService(runs.NewStore(logger, db, cfg.RunState.SlotLease.Std()), producer, runs.Limits{
 			DefaultDepth: cfg.CrawlAPI.DefaultDepth,
 			MaxDepth:     cfg.CrawlAPI.MaxDepth,
 			DefaultLinks: cfg.CrawlAPI.DefaultLinks,
 			MaxLinks:     cfg.CrawlAPI.MaxLinks,
 		})
+		services.Runs, labRuns = runService, runService
 
 		logger.Infow("Crawl submission enabled", "maxDepth", cfg.CrawlAPI.MaxDepth, "maxLinks", cfg.CrawlAPI.MaxLinks)
 	}
+
+	services.Labs = labs.NewService(labs.NewPostgresStore(db), labRuns, chat, labs.Limits{MaxSources: cfg.Labs.MaxSources})
 
 	handler := searchapi.NewHandler(logger, services, searchapi.Config{
 		DefaultLimit:   cfg.Retrieval.DefaultLimit,

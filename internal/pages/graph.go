@@ -56,6 +56,18 @@ const (
 
 	repointAliases = `UPDATE aliases SET target_id = $2 WHERE target_id = $1`
 
+	moveMembership = `
+		INSERT INTO source_pages (source_id, page_id, added_at)
+		SELECT source_id, $2, added_at FROM source_pages WHERE page_id = $1
+		ON CONFLICT (source_id, page_id) DO NOTHING`
+
+	// A run submitted for a lab's source brings the page into that lab; other
+	// runs have no source, or no row at all, and add nothing.
+	recordMembership = `
+		INSERT INTO source_pages (source_id, page_id)
+		SELECT source_id, $2 FROM runs WHERE id = $1 AND source_id IS NOT NULL
+		ON CONFLICT (source_id, page_id) DO NOTHING`
+
 	deletePage = `DELETE FROM pages WHERE id = $1`
 
 	recordAlias = `
@@ -78,6 +90,12 @@ func savePage(ctx context.Context, tx pgx.Tx, page *data.PageData) error {
 
 	if err := replaceLinks(ctx, tx, id, page); err != nil {
 		return err
+	}
+
+	if page.LastRunID != "" {
+		if _, err := tx.Exec(ctx, recordMembership, page.LastRunID, id); err != nil {
+			return err
+		}
 	}
 
 	for _, alias := range page.Aliases {
@@ -243,7 +261,7 @@ func resolveThroughAliases(ctx context.Context, tx pgx.Tx, kinds map[string]int1
 }
 
 // fold merges page row old into keep: links into old now point at keep, aliases
-// of old name keep, and old is deleted. withOutgoing also gives keep old's
+// of old name keep, its labs hold keep, and old is deleted. withOutgoing also gives keep old's
 // outgoing links, for merging two stored spellings of one URL.
 func fold(ctx context.Context, tx pgx.Tx, old, keep int64, withOutgoing bool) error {
 	if old == keep {
@@ -255,7 +273,7 @@ func fold(ctx context.Context, tx pgx.Tx, old, keep int64, withOutgoing bool) er
 		statements = append(statements, moveOutgoing)
 	}
 
-	statements = append(statements, repointAliases)
+	statements = append(statements, repointAliases, moveMembership)
 
 	for _, statement := range statements {
 		if _, err := tx.Exec(ctx, statement, old, keep); err != nil {

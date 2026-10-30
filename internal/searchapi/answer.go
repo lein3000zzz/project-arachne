@@ -16,6 +16,7 @@ import (
 type answerHandler struct {
 	logger   *zap.SugaredLogger
 	answerer Answerer
+	labs     LabService
 	timeout  time.Duration
 }
 
@@ -57,6 +58,13 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.context(r)
 	defer cancel()
 
+	if req.LabURLs, err = labURLs(ctx, h.labs, r); err != nil {
+		status, message := labFailure(h.logger, err)
+		writeJSON(w, status, errorResponse{Error: message})
+
+		return
+	}
+
 	res, err := h.answerer.Answer(ctx, req, answer.Events{})
 	if err != nil {
 		status, message := h.failure(req, err)
@@ -88,6 +96,16 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx, cancel := h.context(r)
+	defer cancel()
+
+	if req.LabURLs, err = labURLs(ctx, h.labs, r); err != nil {
+		status, message := labFailure(h.logger, err)
+		writeJSON(w, status, errorResponse{Error: message})
+
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -108,9 +126,6 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
-	ctx, cancel := h.context(r)
-	defer cancel()
-
 	// A write failing means the reader is gone; returning the error stops the
 	// model generating for nobody.
 	res, err := h.answerer.Answer(ctx, req, answer.Events{
@@ -124,7 +139,7 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = send("done", map[string]any{"cited": res.Cited, "model": res.Model, "usage": res.Usage})
+	_ = send("done", map[string]any{"cited": res.Cited, "scope": res.Scope, "weak": res.Weak, "model": res.Model, "usage": res.Usage})
 }
 
 func (h *answerHandler) failure(req answer.Request, err error) (int, string) {

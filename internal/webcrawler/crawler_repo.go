@@ -177,7 +177,7 @@ func (repo *CrawlerRepo) sendChildren(parent *config.Task, links []string) error
 	var failed error
 
 	for _, link := range links {
-		if !parent.Run.InScope(link) || repo.excluded(link) {
+		if !parent.Run.InScope(link) || repo.Excluded(link) {
 			continue
 		}
 
@@ -408,9 +408,9 @@ func compileExclude(patterns []string) []*regexp.Regexp {
 	return out
 }
 
-// excluded matches the decoded URL: canonical URLs percent-encode every
+// Excluded matches the decoded URL: canonical URLs percent-encode every
 // non-ASCII character, and the patterns are written in plain text.
-func (repo *CrawlerRepo) excluded(link string) bool {
+func (repo *CrawlerRepo) Excluded(link string) bool {
 	decoded, err := url.PathUnescape(link)
 	if err != nil {
 		decoded = link

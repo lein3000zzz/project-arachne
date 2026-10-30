@@ -42,6 +42,10 @@ type Request struct {
 	MaxTokens int
 	// Nil leaves the provider's default: some models reject any other value.
 	Temperature *float64
+	// Asks for a single JSON object where the protocol can enforce it (OpenAI's
+	// JSON mode). Anthropic's cannot: the prompt must ask, and the caller parse
+	// leniently.
+	JSON bool
 }
 
 type Usage struct {

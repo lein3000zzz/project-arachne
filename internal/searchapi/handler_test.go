@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 	"web-crawler/internal/retrieval"
@@ -45,7 +46,7 @@ func TestSearchPassesTheRequestThrough(t *testing.T) {
 	}
 
 	want := retrieval.Request{Query: "goroutines leak", Limit: 5, Host: "go.dev", Mode: retrieval.ModeBM25}
-	if searcher.got != want {
+	if !reflect.DeepEqual(searcher.got, want) {
 		t.Errorf("request = %+v, want %+v", searcher.got, want)
 	}
 

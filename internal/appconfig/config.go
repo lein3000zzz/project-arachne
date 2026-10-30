@@ -21,6 +21,7 @@ type Config struct {
 	Rerank      Rerank      `yaml:"rerank"`
 	CrawlAPI    CrawlAPI    `yaml:"crawl_api"`
 	Auth        Auth        `yaml:"auth"`
+	Labs        Labs        `yaml:"labs"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -122,6 +123,17 @@ type Chat struct {
 	ContextChunks int `yaml:"context_chunks"`
 	// Each excerpt is cut to this many runes; 0 keeps the whole chunk.
 	SourceRunes int `yaml:"source_runes"`
+	// Reranked results scoring below this are left out while any score above it;
+	// when none does, the best found are read and the answer is marked weak. In
+	// the reranker's own units.
+	MinRelevance float64 `yaml:"min_relevance"`
+}
+
+type Labs struct {
+	MaxSources int `yaml:"max_sources"`
+	// An answer from labs with fewer good sources in them than this fills the
+	// rest from the shared base.
+	MinSources int `yaml:"min_sources"`
 }
 
 // CrawlAPI lets the search service start crawls: any signed-in user can then
@@ -177,11 +189,17 @@ type Shutdown struct {
 // (talk, user, special, project and file pages, in English and Russian), and
 // its edit, history and raw views. An article title may contain a colon, so the
 // namespaces are named rather than matched as "anything before a colon".
+// On pkg.go.dev the versions, imports and licenses tabs of every package are
+// pages of their own, and the versions tab links every old release: crawling
+// x/sync for 100 pages once brought 6 of documentation and 47 of those. The
+// releases themselves (@v0.1.0) cannot be excluded: the current one is how
+// pkg.go.dev links a module's packages, and only the tab leads to the others.
 var DefaultExclude = []string{
 	`/wiki/(Special|Talk|User|User_talk|Wikipedia|Wikipedia_talk|File|File_talk|Template|Template_talk|Help|Help_talk|Category|Category_talk|Portal|Draft|Module|MediaWiki|TimedText):`,
 	`/wiki/(Служебная|Обсуждение|Участник|Участница|Обсуждение_участника|Обсуждение_участницы|Википедия|Обсуждение_Википедии|Файл|Обсуждение_файла|Шаблон|Обсуждение_шаблона|Справка|Обсуждение_справки|Категория|Обсуждение_категории|Портал|Обсуждение_портала|Проект|Модуль|Инкубатор):`,
 	`/w/index\.php`,
 	`[?&](action|oldid|diff|printable)=`,
+	`^https?://pkg\.go\.dev/.*[?&]tab=(versions|imports|importedby|licenses)`,
 }
 
 // The instruction the Qwen3 embedding models were trained with for web search.
@@ -267,6 +285,10 @@ func Default() Config {
 			DefaultLinks: 100,
 			MaxLinks:     2000,
 		},
+		Labs: Labs{
+			MaxSources: 20,
+			MinSources: 2,
+		},
 		Auth: Auth{
 			SessionTTL:      Duration(30 * 24 * time.Hour),
 			UserFailures:    5,
@@ -351,6 +373,7 @@ func (c *Config) Validate() error {
 		{"auth.user_failures", c.Auth.UserFailures},
 		{"auth.ip_failures", c.Auth.IPFailures},
 		{"auth.hash_concurrency", c.Auth.HashConcurrency},
+		{"labs.max_sources", c.Labs.MaxSources},
 	}
 
 	for _, field := range positive {
@@ -475,6 +498,10 @@ func (c *Config) Validate() error {
 
 	if c.CrawlAPI.DefaultDepth > c.CrawlAPI.MaxDepth || c.CrawlAPI.DefaultLinks > c.CrawlAPI.MaxLinks {
 		return fmt.Errorf("%w: crawl_api defaults must not exceed their maximums", ErrInvalidConfig)
+	}
+
+	if c.Labs.MinSources < 0 || c.Labs.MinSources > c.Chat.ContextChunks {
+		return fmt.Errorf("%w: labs.min_sources must be in [0, chat.context_chunks]", ErrInvalidConfig)
 	}
 
 	if c.Auth.Lockout > c.Auth.MaxLockout {

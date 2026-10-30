@@ -35,6 +35,9 @@ type Hit struct {
 // Filter narrows a search. The zero value searches everything.
 type Filter struct {
 	Host string
+	// Non-nil restricts the search to these page URLs, so an empty, non-nil
+	// list matches nothing: a lab without pages is not the whole index.
+	URLs []string
 }
 
 // Searcher returns chunks best first. Dense scores are cosine similarities, text

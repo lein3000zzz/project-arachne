@@ -169,7 +169,7 @@ func TestSearchPrefixesOnlyTheEmbeddedQuery(t *testing.T) {
 	embedder := &fakeEmbedder{}
 
 	if _, err := newRetriever(t, store, embedder).Search(context.Background(),
-		Request{Query: "  goroutines  ", Limit: 5, Host: " Go.Dev ", Mode: ModeHybrid}); err != nil {
+		Request{Query: "  goroutines  ", Limit: 5, Host: " Go.Dev ", URLs: []string{"https://go.dev/doc/"}, Mode: ModeHybrid}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,8 +182,8 @@ func TestSearchPrefixesOnlyTheEmbeddedQuery(t *testing.T) {
 	}
 
 	for _, f := range store.filters {
-		if f.Host != "go.dev" {
-			t.Errorf("filter host %q, want go.dev", f.Host)
+		if f.Host != "go.dev" || len(f.URLs) != 1 || f.URLs[0] != "https://go.dev/doc/" {
+			t.Errorf("filter %+v, want host go.dev and the one URL", f)
 		}
 	}
 }
@@ -252,6 +252,8 @@ func TestSearchAttachesRanksWithoutReordering(t *testing.T) {
 
 type fakeReranker struct {
 	scores map[string]float64
+	// Scores a document containing the key, over scores.
+	byText map[string]float64
 	docs   []string
 	err    error
 }
@@ -268,6 +270,12 @@ func (f *fakeReranker) Rerank(_ context.Context, _ string, docs []string) ([]flo
 	for i, d := range docs {
 		for key, score := range f.scores {
 			if strings.HasPrefix(d, "T "+key+"\n") {
+				out[i] = score
+			}
+		}
+
+		for key, score := range f.byText {
+			if strings.Contains(d, key) {
 				out[i] = score
 			}
 		}
@@ -371,5 +379,49 @@ func TestRerankReordersTheTopCandidates(t *testing.T) {
 	on := true
 	if _, err := none.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense, Rerank: &on}); !errors.Is(err, ErrNoReranker) {
 		t.Errorf("rerank requested without a reranker: %v", err)
+	}
+}
+
+// Inside a lab's few pages a page's keyword chunk can outrank its meaning
+// chunk; the reranker must still see the better one.
+func TestRerankReadsEveryChunkAPageMatched(t *testing.T) {
+	store := &fakeStore{
+		dense: []vectorstore.Hit{hit("a", 0.9, "goroutines are lightweight threads"), hit("b", 0.8, "b dense")},
+		text:  []vectorstore.Hit{hit("a", 9, "goroutine goroutine goroutine"), hit("b", 8, "b dense")},
+	}
+	reranker := &fakeReranker{byText: map[string]float64{"lightweight": 3, "goroutine goroutine": -5, "b dense": 1}}
+
+	r, err := New(&fakeEmbedder{}, store, nil, reranker, Config{Candidates: 10, RRFK: 60, RerankByDefault: true, RerankCandidates: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeHybrid})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(reranker.docs) != 3 {
+		t.Errorf("reranked %d documents, want 3: both chunks of a, the one chunk of b once", len(reranker.docs))
+	}
+
+	if results[0].URL != "a" || results[0].Rerank.Score != 3 || results[0].Snippet != "goroutines are lightweight threads" {
+		t.Errorf("a = %+v: its best chunk's score and text", results[0])
+	}
+}
+
+func TestPagesWithTheSameExcerptCountOnce(t *testing.T) {
+	menu := "Why Go  Common problems companies solve with Go"
+	store := &fakeStore{dense: []vectorstore.Hit{
+		hit("tab1", 0.9, menu), hit("tab2", 0.8, menu+"\n"), hit("doc", 0.7, "errgroup provides synchronization"), hit("tab3", 0.6, menu),
+	}}
+
+	results, err := newRetriever(t, store, &fakeEmbedder{}).Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeDense})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := urls(results); strings.Join(got, " ") != "tab1 doc" {
+		t.Errorf("results = %v: one page per excerpt, the best-ranked kept", got)
 	}
 }

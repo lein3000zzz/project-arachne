@@ -123,6 +123,17 @@ chat:
   # word on a CPU: 4 × 600 halves it against 6 whole chunks.
   context_chunks: 4
   source_runes: 600
+  # reranked results scoring below this (bge-reranker logits: relevant pages
+  # ~1 to 3, unrelated -3 to -7) are left out while any score above it; when
+  # none does, the best found are read and the answer is marked weak. Only
+  # applies with reranking on.
+  min_relevance: 0
+
+labs:
+  max_sources: 20
+  # an answer from labs with fewer good sources in them fills the rest of
+  # chat.context_chunks from the shared base
+  min_sources: 2
 
 cache:
   page_ttl: 12h

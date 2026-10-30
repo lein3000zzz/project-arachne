@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check of a running stack: crawl a few pages through the search
-# service, wait until they are indexed and ranked, then search and ask.
+# service, wait until they are indexed and ranked, then search and ask; then
+# build a lab of the two best pages, ask with it ticked, and delete it.
 #
 # usage: scripts/smoke.sh   (SEARCH_URL, URL, QUERY, LINKS, TIMEOUT to override)
 # Needs ARACHNE_TOKEN, an API token: make token NAME=<user>.
@@ -84,6 +85,44 @@ case "$code" in
     ok "$(jq -r '"\(.model), \(.usage.output_tokens) tokens, cites \(.cited | length)/\(.sources | length)"' /tmp/arachne-smoke-answer.json)"
     ;;
   *) fail "HTTP $code: $(jq -r .error /tmp/arachne-smoke-answer.json 2>/dev/null)" ;;
+esac
+
+step "lab plan"
+top=$(jq -r '.results[0].url' <<<"$res")
+second=$(jq -r '.results[1].url' <<<"$res")
+plan=$(api -sf -H 'Content-Type: application/json' -X POST "$BASE/api/labs/plan" \
+  -d "$(jq -nc --arg r "a smoke-test lab about $QUERY: $top and $second" '{request: $r}')") || fail "planning failed"
+jq -e --arg a "$top" --arg b "$second" '[.sources[].url] | index($a) and index($b)' <<<"$plan" >/dev/null \
+  || fail "the plan lost a link: $(jq -c .sources <<<"$plan")"
+ok "$(jq -r '"\(.name) (\(if .model == "" then "read literally" else .model end))"' <<<"$plan")"
+
+step "lab"
+lab=$(api -sf -H 'Content-Type: application/json' -X POST "$BASE/api/labs" \
+  -d "$(jq -nc --arg a "$top" --arg b "$second" --arg n "smoke $(date +%s)" \
+    '{name: $n, topic: "smoke test", sources: [{url: $a, scope: "page"}, {url: $b, scope: "page"}]}')") \
+  || fail "the lab was refused"
+lab_id=$(jq -r .id <<<"$lab")
+# The lab goes even when a step fails; its pages stay in the shared base.
+trap 'api -s -o /dev/null -X DELETE "$BASE/api/labs/$lab_id"; rm -f "$header"' EXIT
+for lab_run in $(jq -r '.sources[].run.id' <<<"$lab"); do
+  wait_for "$lab_run" '.status == "finished"' >/dev/null
+done
+pages=$(api -sf "$BASE/api/labs/$lab_id" | jq .pages)
+[ "$pages" -eq 2 ] || fail "the crawls finished but the lab holds $pages pages, not 2"
+ok "lab $lab_id holds 2 pages"
+
+step "answer from lab"
+code=$(api -s -o /tmp/arachne-smoke-lab.json -w '%{http_code}' -G "$BASE/answer" \
+  --data-urlencode "q=$QUERY" --data-urlencode "labs=$lab_id")
+case "$code" in
+  503) echo "skip  no chat model configured" ;;
+  200)
+    jq -e '.scope == "labs" and all(.sources[]; .in_lab)' /tmp/arachne-smoke-lab.json >/dev/null \
+      || fail "the lab held enough, yet: $(jq -c '{scope, in_lab: [.sources[].in_lab]}' /tmp/arachne-smoke-lab.json)"
+    [ "$(jq '.cited | length' /tmp/arachne-smoke-lab.json)" -gt 0 ] || fail "the answer cites no source"
+    ok "$(jq -r '"scope \(.scope), cites \(.cited | length)/\(.sources | length)"' /tmp/arachne-smoke-lab.json)"
+    ;;
+  *) fail "HTTP $code: $(jq -r .error /tmp/arachne-smoke-lab.json 2>/dev/null)" ;;
 esac
 
 echo "passed in $(( $(date +%s) - started )) s"

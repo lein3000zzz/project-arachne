@@ -184,7 +184,11 @@ func (h *authHandler) fail(w http.ResponseWriter, err error) {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, into any, usage string) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAuthBodyBytes))
+	return decodeBodyLimit(w, r, into, usage, maxAuthBodyBytes)
+}
+
+func decodeBodyLimit(w http.ResponseWriter, r *http.Request, into any, usage string, limit int64) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(into); err != nil {

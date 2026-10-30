@@ -45,12 +45,13 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// Services are what the API serves; Answerer and Runs may be nil.
+// Services are what the API serves; Answerer, Runs and Labs may be nil.
 type Services struct {
 	Auth     Authenticator
 	Searcher Searcher
 	Answerer Answerer
 	Runs     RunService
+	Labs     LabService
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -64,7 +65,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /api/me", signIn.api(signIn.me))
 	mux.Handle("POST /api/me/password", signIn.api(signIn.changePassword))
 
-	answers := &answerHandler{logger: logger, answerer: services.Answerer, timeout: cfg.AnswerTimeout}
+	answers := &answerHandler{logger: logger, answerer: services.Answerer, labs: services.Labs, timeout: cfg.AnswerTimeout}
 	mux.Handle("GET /answer", signIn.api(answers.serveJSON))
 	mux.Handle("GET /answer/stream", signIn.api(answers.serveStream))
 
@@ -72,6 +73,17 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("POST /api/runs", signIn.api(runsAPI.submit))
 	mux.Handle("GET /api/runs", signIn.api(runsAPI.list))
 	mux.Handle("GET /api/runs/{id}", signIn.api(runsAPI.get))
+
+	labsAPI := &labsHandler{logger: logger, service: services.Labs, planTimeout: cfg.AnswerTimeout}
+	mux.Handle("GET /api/labs", signIn.api(labsAPI.list))
+	mux.Handle("POST /api/labs", signIn.api(labsAPI.create))
+	mux.Handle("POST /api/labs/plan", signIn.api(labsAPI.plan))
+	mux.Handle("GET /api/labs/{id}", signIn.api(labsAPI.get))
+	mux.Handle("DELETE /api/labs/{id}", signIn.api(labsAPI.delete))
+	mux.Handle("GET /api/labs/{id}/pages", signIn.api(labsAPI.pages))
+	mux.Handle("POST /api/labs/{id}/sources", signIn.api(labsAPI.addSources))
+	mux.Handle("POST /api/labs/{id}/sources/{source}/refresh", signIn.api(labsAPI.refresh))
+	mux.Handle("DELETE /api/labs/{id}/sources/{source}", signIn.api(labsAPI.removeSource))
 
 	mux.Handle("GET /search", signIn.api(func(w http.ResponseWriter, r *http.Request) {
 		req, err := parseRequest(r, cfg)
@@ -82,6 +94,13 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 
 		ctx, cancel := context.WithTimeout(r.Context(), cfg.RequestTimeout)
 		defer cancel()
+
+		if req.URLs, err = labURLs(ctx, services.Labs, r); err != nil {
+			status, message := labsAPI.failure(err)
+			writeJSON(w, status, errorResponse{Error: message})
+
+			return
+		}
 
 		started := time.Now()
 
@@ -112,6 +131,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	}))
 
 	mux.Handle("GET /{$}", signIn.page(serveIndex))
+	mux.Handle("GET /labs/{id}", signIn.page(serveLab))
 	mux.HandleFunc("GET /favicon.svg", serveFavicon)
 	mux.Handle("GET /static/", staticHandler())
 

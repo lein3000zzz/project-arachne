@@ -33,6 +33,11 @@ type openAIRequest struct {
 	StreamOptions       struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options"`
+	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
+}
+
+type openAIResponseFormat struct {
+	Type string `json:"type"`
 }
 
 type openAIChunk struct {
@@ -54,6 +59,10 @@ type openAIChunk struct {
 func (c *openAIClient) Stream(ctx context.Context, req Request, onDelta func(string) error) (Response, error) {
 	body := openAIRequest{Model: c.cfg.Model, Temperature: req.Temperature, Stream: true}
 	body.StreamOptions.IncludeUsage = true
+
+	if req.JSON {
+		body.ResponseFormat = &openAIResponseFormat{Type: "json_object"}
+	}
 
 	if c.completionTokens {
 		body.MaxCompletionTokens = req.MaxTokens

@@ -113,6 +113,18 @@ func TestOpenAIUsesMaxCompletionTokensAndOmitsTemperature(t *testing.T) {
 	if _, present := got["temperature"]; present {
 		t.Error("an unset temperature must not be sent: reasoning models reject it")
 	}
+
+	if _, present := got["response_format"]; present {
+		t.Error("JSON mode sent unasked")
+	}
+
+	if _, _, err := collect(t, newClient(t, ProviderOpenAICompatible, srv.URL), Request{MaxTokens: 64, JSON: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if format, _ := got["response_format"].(map[string]any); format["type"] != "json_object" {
+		t.Errorf("JSON mode: response_format = %v", got["response_format"])
+	}
 }
 
 func TestAnthropicStreams(t *testing.T) {

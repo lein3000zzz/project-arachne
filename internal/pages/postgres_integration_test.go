@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -145,6 +146,84 @@ func TestSavePageFoldsAliases(t *testing.T) {
 
 	assertStrings(t, "pages", repo.strings(t, `SELECT url FROM pages`),
 		"https://example.com/", "https://example.com/doc/", "https://example.com/docs/", "https://example.com/other")
+}
+
+func TestSavePageRecordsLabMembership(t *testing.T) {
+	repo := testRepo(t)
+
+	repo.exec(t, `INSERT INTO users (username, password_hash) VALUES ('lein', 'x')`)
+	repo.exec(t, `INSERT INTO labs (owner_id, name) SELECT id, 'go' FROM users`)
+	repo.exec(t, `INSERT INTO sources (lab_id, kind, url, max_depth, max_links) SELECT id, 'link', 'https://example.com/', 2, 10 FROM labs`)
+	repo.exec(t, `INSERT INTO runs (id, start_url, max_depth, max_links, source_id) SELECT 'lab-run', url, 2, 10, id FROM sources`)
+	repo.exec(t, `INSERT INTO runs (id, start_url, max_depth, max_links) VALUES ('plain-run', 'https://example.com/', 2, 10)`)
+
+	members := `SELECT p.url FROM source_pages sp JOIN pages p ON p.id = sp.page_id`
+
+	lab := page("https://example.com/a", []string{"https://example.com/linked"}, nil)
+	lab.LastRunID = "lab-run"
+	repo.save(t, lab)
+
+	plain := page("https://example.com/b", nil, nil)
+	plain.LastRunID = "plain-run"
+	repo.save(t, plain)
+
+	unknown := page("https://example.com/c", nil, nil)
+	unknown.LastRunID = "make-crawl-run"
+	repo.save(t, unknown)
+
+	assertStrings(t, "members: the lab run's page, not its link targets", repo.strings(t, members), "https://example.com/a")
+
+	repo.save(t, lab)
+	assertStrings(t, "members after a re-crawl", repo.strings(t, members), "https://example.com/a")
+
+	// The server now says /a is /a/: the page moves, and stays in the lab.
+	moved := page("https://example.com/a/", nil, nil, "https://example.com/a")
+	moved.LastRunID = "plain-run"
+	repo.save(t, moved)
+
+	assertStrings(t, "members after the alias fold", repo.strings(t, members), "https://example.com/a/")
+
+	repo.exec(t, `DELETE FROM labs`)
+
+	assertStrings(t, "members after the lab is deleted", repo.strings(t, members))
+	assertStrings(t, "pages outlive the lab", repo.strings(t, `SELECT url FROM pages WHERE status IS NOT NULL`),
+		"https://example.com/a/", "https://example.com/b", "https://example.com/c")
+}
+
+func TestEnsureExcludedTakesMatchingPagesOutOfLabsOnce(t *testing.T) {
+	repo := testRepo(t)
+	ctx := context.Background()
+
+	repo.exec(t, `INSERT INTO users (username, password_hash) VALUES ('lein', 'x')`)
+	repo.exec(t, `INSERT INTO labs (owner_id, name) SELECT id, 'x/sync' FROM users`)
+	repo.exec(t, `INSERT INTO sources (lab_id, kind, url, max_depth, max_links) SELECT id, 'link', 'https://pkg.go.dev/golang.org/x/sync', 2, 10 FROM labs`)
+	repo.exec(t, `INSERT INTO runs (id, start_url, max_depth, max_links, source_id) SELECT 'lab-run', url, 2, 10, id FROM sources`)
+
+	for _, url := range []string{"https://pkg.go.dev/golang.org/x/sync/errgroup", "https://pkg.go.dev/golang.org/x/sync@v0.1.0"} {
+		p := page(url, []string{"https://pkg.go.dev/golang.org/x/sync@v0.2.0"}, nil)
+		p.LastRunID = "lab-run"
+		repo.save(t, p)
+	}
+
+	versioned := func(url string) bool { return strings.Contains(url, "@v") }
+
+	dropped, err := repo.EnsureExcluded(ctx, "rules-1", versioned)
+	if err != nil || fmt.Sprint(dropped) != "[https://pkg.go.dev/golang.org/x/sync@v0.1.0]" {
+		t.Fatalf("dropped %v, %v: the fetched match only, not the never-fetched placeholder", dropped, err)
+	}
+
+	assertStrings(t, "lab members", repo.strings(t, `SELECT p.url FROM source_pages sp JOIN pages p ON p.id = sp.page_id`),
+		"https://pkg.go.dev/golang.org/x/sync/errgroup")
+	assertStrings(t, "fetched pages stay in the graph", repo.strings(t, `SELECT url FROM pages WHERE fetched_at IS NOT NULL`),
+		"https://pkg.go.dev/golang.org/x/sync/errgroup", "https://pkg.go.dev/golang.org/x/sync@v0.1.0")
+
+	if again, err := repo.EnsureExcluded(ctx, "rules-1", versioned); err != nil || len(again) != 0 {
+		t.Errorf("the same rules again: %v, %v - want nothing to do", again, err)
+	}
+
+	if all, err := repo.EnsureExcluded(ctx, "rules-2", func(string) bool { return true }); err != nil || len(all) != 2 {
+		t.Errorf("new rules: %v, %v", all, err)
+	}
 }
 
 func TestSavePageDrawsNoSelfLoops(t *testing.T) {

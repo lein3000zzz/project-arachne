@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>arachne</title>
-<meta name="description" content="Hybrid search, cited answers">
+<meta name="description" content="Short cited answers from your labs and the crawled web">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script>
 // Blocking, before first paint: applied any later, the wrong theme flashes.
@@ -23,38 +23,66 @@
 
 <header class="site">
   <a class="brand" href="/">arachne</a>
-  <nav class="nav" aria-label="Primary">
-    <a href="#search">Search</a>
-    <a href="#crawl">Crawl</a>
-    <a href="https://lein3000.dev">lein3000.dev</a>
-  </nav>
   <span class="who" id="who"></span>
   <button type="button" class="theme" id="logout">log out</button>
   <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
 </header>
 
-<main id="main">
-  <section class="hero" id="search">
-    <p class="eyebrow">@arachne</p>
-    <h1>Ask the crawled web.</h1>
-    <p class="lede">Hybrid search, cited answers.</p>
+<nav class="tabs" role="tablist" aria-label="Views">
+  <button type="button" class="tab" role="tab" id="tab-answer" data-tab="answer" aria-controls="answer" aria-selected="true">Answer</button>
+  <button type="button" class="tab" role="tab" id="tab-search" data-tab="search" aria-controls="search" aria-selected="false">Search</button>
+  <button type="button" class="tab" role="tab" id="tab-labs" data-tab="labs" aria-controls="labs" aria-selected="false">Labs</button>
+</nav>
 
-    <form id="form" class="query" role="search">
+<main id="main">
+
+<div id="answer" role="tabpanel" aria-labelledby="tab-answer">
+  <section class="hero">
+    <p class="eyebrow">@arachne</p>
+    <h1>Ask.</h1>
+
+    <form id="askForm" class="query" role="search">
       <div class="field">
-        <label for="q">Query</label>
-        <input id="q" type="search" placeholder="how do goroutines communicate?" autocomplete="off" autofocus required>
+        <label for="askQ">Question</label>
+        <input id="askQ" type="search" placeholder="how do goroutines communicate?" autocomplete="off" autofocus required>
       </div>
-      <button class="action primary" id="go">Search</button>
+      <button class="action primary" id="askGo">Ask</button>
     </form>
+    <div class="ticks" id="askTicks"></div>
+
+    <div class="badge" id="askBadge" aria-live="polite" hidden>
+      <span class="badge-dot" aria-hidden="true">&#9679;</span>
+      <span class="badge-text"></span>
+    </div>
+  </section>
+
+  <section id="answerBox" hidden>
+    <h2>Answer</h2>
+    <div id="answerText" class="answer"></div>
+    <p id="answerMeta" class="note answer-meta"></p>
+  </section>
+
+  <section id="sourcesBox" hidden>
+    <h2>Sources</h2>
+    <div id="sources"></div>
+  </section>
+</div>
+
+<div id="search" role="tabpanel" aria-labelledby="tab-search" hidden>
+  <section class="hero">
+    <p class="eyebrow">@arachne</p>
+    <h1>Search.</h1>
+
+    <form id="searchForm" class="query" role="search">
+      <div class="field">
+        <label for="searchQ">Query</label>
+        <input id="searchQ" type="search" placeholder="goroutine leak" autocomplete="off" required>
+      </div>
+      <button class="action primary" id="searchGo">Search</button>
+    </form>
+    <div class="ticks" id="searchTicks"></div>
 
     <div class="controls">
-      <div class="control">
-        <span class="control-label" id="l-answer">Answer</span>
-        <div class="segmented" data-name="answer" aria-labelledby="l-answer">
-          <button type="button" class="seg" data-value="on" aria-pressed="true">on</button>
-          <button type="button" class="seg" data-value="off" aria-pressed="false">off</button>
-        </div>
-      </div>
       <div class="control">
         <span class="control-label" id="l-mode">Mode</span>
         <div class="segmented" data-name="mode" aria-labelledby="l-mode">
@@ -86,25 +114,19 @@
       </div>
     </div>
 
-    <div class="badge" id="badge" aria-live="polite" hidden>
+    <div class="badge" id="searchBadge" aria-live="polite" hidden>
       <span class="badge-dot" aria-hidden="true">&#9679;</span>
-      <span id="badge-text"></span>
+      <span class="badge-text"></span>
     </div>
   </section>
 
-  <section id="answerBox" hidden>
-    <h2>Answer</h2>
-    <div id="answerText" class="answer"></div>
-    <p id="answerMeta" class="note answer-meta"></p>
-  </section>
-
   <section id="resultsBox" hidden>
-    <h2 id="resultsTitle">Sources</h2>
+    <h2>Results</h2>
     <div id="results"></div>
   </section>
 
   <section id="crawl" hidden>
-    <h2>Crawl</h2>
+    <h2>Shared base</h2>
     <form id="crawlForm" class="tool-row">
       <div class="field">
         <label for="crawlUrl">Start URL</label>
@@ -128,13 +150,38 @@
       </div>
       <button class="action primary" id="crawlGo">Crawl</button>
     </form>
-    <p id="crawlHint" class="note">Searchable once indexed.</p>
+    <p id="crawlHint" class="note">Searchable by everyone once indexed.</p>
 
-    <table class="table">
+    <table class="table stack">
       <thead><tr><th>URL</th><th>Status</th><th class="num">Pages</th><th class="num">Searchable</th><th class="num">When</th></tr></thead>
       <tbody id="runs"></tbody>
     </table>
   </section>
+</div>
+
+<div id="labs" role="tabpanel" aria-labelledby="tab-labs" hidden>
+  <section class="hero">
+    <p class="eyebrow">@arachne</p>
+    <h1>Labs.</h1>
+    <p class="lede">Topics the model builds from your links. Tick them in Answer.</p>
+
+    <form id="planForm" class="ask">
+      <div class="field">
+        <label for="planText">New lab</label>
+        <textarea id="planText" placeholder="Go concurrency, from go.dev/doc/effective_go and go.dev/ref/mem" required></textarea>
+      </div>
+      <button class="action primary" id="planGo">Plan</button>
+    </form>
+    <p class="note" id="planNote" aria-live="polite"></p>
+    <div id="planCard"></div>
+  </section>
+
+  <section>
+    <h2>Your labs</h2>
+    <div class="cards" id="labCards"></div>
+  </section>
+</div>
+
 </main>
 
 <footer class="footer">
@@ -148,70 +195,90 @@
 </div>
 
 <script src="/static/theme.js"></script>
+<script src="/static/common.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
 let stream = null;
-
-// ---- account ----
-function toLogin() {
-  location.assign("/login?next=" + encodeURIComponent(location.pathname + location.search + location.hash));
-}
-
-async function call(path, options) {
-  const res = await fetch(path, options);
-  if (res.status === 401) {
-    toLogin();
-    throw new Error("signed out");
-  }
-  return res;
-}
-
-call("/api/me").then((res) => res.json()).then((me) => { $("who").textContent = me.username; }).catch(() => {});
-
-$("logout").addEventListener("click", async () => {
-  try { await fetch("/api/logout", { method: "POST" }); } finally { location.assign("/login"); }
-});
-
-function el(tag, attrs, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (k === "class") node.className = v; else node.setAttribute(k, v);
-  }
-  for (const child of children) {
-    if (child != null) node.append(child);
-  }
-  return node;
-}
+let labs = [];
+let current = "answer";
+const ticked = new Set();
 
 const fmt = (x, digits) => Number(x).toPrecision(digits);
 
-// ---- segmented controls ----
-function segValue(name) {
-  const on = document.querySelector(`.segmented[data-name="${name}"] .seg[aria-pressed="true"]`);
-  return on ? on.dataset.value : "";
+function badge(id, text, state) {
+  const b = $(id);
+  b.hidden = false;
+  b.className = "badge" + (state ? " " + state : "");
+  b.querySelector(".badge-text").textContent = text;
 }
 
-function setSeg(name, value) {
-  const buttons = document.querySelectorAll(`.segmented[data-name="${name}"] .seg`);
-  if (![...buttons].some((b) => b.dataset.value === value)) return;
-  buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.value === value)));
+// ---- tabs, and the URL that names the view, so it can be shared ----
+const tabNames = ["answer", "search", "labs"];
+
+function showTab(name) {
+  current = tabNames.includes(name) ? name : "answer";
+  for (const t of tabNames) {
+    $(t).hidden = t !== current;
+    $("tab-" + t).setAttribute("aria-selected", String(t === current));
+  }
+  if (current === "search") loadRuns();
 }
 
-document.querySelectorAll(".segmented").forEach((group) => {
-  group.addEventListener("click", (e) => {
-    const button = e.target.closest(".seg");
-    if (button) setSeg(group.dataset.name, button.dataset.value);
-  });
+function syncURL(extra) {
+  const p = new URLSearchParams(extra || {});
+  if (current !== "answer") p.set("tab", current);
+  if (current !== "labs" && ticked.size) p.set("labs", [...ticked].join(","));
+  history.replaceState(null, "", p.toString() ? "?" + p : location.pathname);
+}
+
+document.querySelectorAll(".tab").forEach((button) => {
+  button.addEventListener("click", () => { showTab(button.dataset.tab); syncURL(); });
 });
 
-// ---- status badge: the one coloured element ----
-function badge(text, state) {
-  $("badge").hidden = false;
-  $("badge").className = "badge" + (state ? " " + state : "");
-  $("badge-text").textContent = text;
+// ---- labs: ticks in Answer and Search, cards in Labs ----
+function setTick(id, on) {
+  on ? ticked.add(id) : ticked.delete(id);
+  document.querySelectorAll(`.tick input[value="${id}"]`).forEach((box) => { box.checked = on; });
 }
 
-// ---- results ----
+function renderTicks() {
+  for (const box of [$("askTicks"), $("searchTicks")]) {
+    if (labs.length === 0) {
+      box.replaceChildren(el("span", { class: "note" }, "No labs yet. ",
+        el("a", { href: "?tab=labs", onclick: (e) => { e.preventDefault(); showTab("labs"); syncURL(); } }, "Make one"), "."));
+      continue;
+    }
+    box.replaceChildren(el("span", { class: "control-label" }, "Labs"),
+      ...labs.map((lab) => el("label", { class: "tick", title: lab.topic || null },
+        el("input", { type: "checkbox", value: String(lab.id), checked: ticked.has(lab.id),
+          onchange: (e) => setTick(lab.id, e.target.checked) }),
+        lab.name)));
+  }
+}
+
+function renderCards() {
+  if (labs.length === 0) {
+    $("labCards").replaceChildren(el("p", { class: "note" }, "None yet."));
+    return;
+  }
+  $("labCards").replaceChildren(...labs.map((lab) => el("a", { class: "card", href: "/labs/" + lab.id },
+    el("h3", {}, lab.name),
+    lab.topic ? el("p", { class: "note" }, lab.topic) : null,
+    el("p", { class: "note" }, `${lab.sources} sources · ${lab.pages} pages · ${ago(lab.updated_at)}`))));
+}
+
+async function loadLabs() {
+  try {
+    labs = (await api("/api/labs")).labs;
+  } catch (err) {
+    labs = [];
+    $("labCards").replaceChildren(el("p", { class: "error" }, err.message));
+  }
+  for (const id of [...ticked]) if (!labs.some((lab) => lab.id === id)) ticked.delete(id);
+  renderTicks();
+  renderCards();
+}
+
+// ---- results and sources ----
 function signals(r) {
   const chip = (...parts) => el("li", { class: "chip" }, ...parts);
   const out = [];
@@ -223,33 +290,27 @@ function signals(r) {
   return el("ul", { class: "chips" }, ...out);
 }
 
-function renderResults(results, numbered) {
-  $("resultsBox").hidden = results.length === 0;
-  $("resultsTitle").textContent = numbered ? "Sources" : "Results";
-  $("results").replaceChildren(...results.map((r, i) => {
-    const n = numbered ? r.n : i + 1;
-    return el("article", { class: "row", id: "src-" + n },
-      el("p", { class: "row-when" }, el("span", { class: "n" }, String(n).padStart(2, "0")), r.host || ""),
-      el("div", {},
-        el("h3", {}, el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url)),
-        el("p", { class: "result-url" }, r.url),
-        el("p", { class: "snippet" }, r.snippet || ""),
-        signals(r)));
-  }));
+function row(r, n, id, tag) {
+  return el("article", { class: "row", id },
+    el("p", { class: "row-when" }, el("span", { class: "n" }, String(n).padStart(2, "0")), r.host || ""),
+    el("div", {},
+      el("h3", {}, el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url),
+        tag ? el("span", { class: "tag" + (tag === "lab" ? " lab" : "") }, tag) : null),
+      el("p", { class: "result-url" }, r.url),
+      el("p", { class: "snippet" }, r.snippet || ""),
+      signals(r)));
 }
 
 // The answer is plain text: only [n] citations become links.
-function renderAnswer(text, sources) {
+function renderAnswer(text, count) {
   const box = $("answerText");
   box.replaceChildren();
   let last = 0;
   for (const m of text.matchAll(/\[(\d{1,3})\]/g)) {
     const n = Number(m[1]);
-    if (n < 1 || n > sources) continue;
+    if (n < 1 || n > count) continue;
     box.append(text.slice(last, m.index));
-    const link = el("a", { class: "cite", href: "#src-" + n, title: "Source " + n }, String(n));
-    link.addEventListener("click", () => flash(n));
-    box.append(link);
+    box.append(el("a", { class: "cite", href: "#src-" + n, title: "Source " + n, onclick: () => flash(n) }, String(n)));
     last = m.index + m[0].length;
   }
   box.append(text.slice(last));
@@ -262,63 +323,41 @@ function flash(n) {
   setTimeout(() => item.classList.remove("flash"), 1200);
 }
 
-function params() {
-  const p = new URLSearchParams({ q: $("q").value.trim(), mode: segValue("mode") });
-  if ($("host").value.trim()) p.set("host", $("host").value.trim());
-  // "on" leaves the server's default, so a stack without a reranker still works.
-  if (segValue("rerank") === "off") p.set("rerank", "false");
-  if (segValue("pagerank") !== "") p.set("pagerank", segValue("pagerank"));
-  return p;
-}
+const scopeNames = { labs: "from your labs", "labs+shared": "labs and the shared base", shared: "from the shared base" };
 
-async function search() {
-  $("go").disabled = true;
-  $("answerBox").hidden = true;
-  badge("searching…", "busy");
-  try {
-    const p = params();
-    p.set("limit", "10");
-    const res = await call("/search?" + p);
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || res.statusText);
-    renderResults(body.results, false);
-    badge(body.results.length ? `${body.results.length} results · ${body.took_ms} ms` : "nothing found");
-  } catch (err) {
-    badge("search failed: " + err.message, "failed");
-  } finally {
-    $("go").disabled = false;
-  }
-}
-
-function answer() {
+// ---- answer ----
+function answer(q) {
   if (stream) stream.close();
   const started = performance.now();
-  let text = "", sources = 0, first = null;
+  const withLabs = ticked.size > 0;
+  let text = "", count = 0, first = null;
 
-  $("go").disabled = true;
-  $("results").replaceChildren();
-  $("resultsBox").hidden = true;
+  $("askGo").disabled = true;
   $("answerBox").hidden = false;
+  $("sourcesBox").hidden = true;
   $("answerText").replaceChildren();
-  $("answerMeta").replaceChildren();
-  badge("searching…", "busy");
+  $("answerMeta").textContent = "";
+  badge("askBadge", "searching…", "busy");
 
-  stream = new EventSource("/answer/stream?" + params());
+  const p = new URLSearchParams({ q });
+  if (withLabs) p.set("labs", [...ticked].join(","));
+  stream = new EventSource("/answer/stream?" + p);
 
   stream.addEventListener("sources", (e) => {
-    const list = JSON.parse(e.data);
-    sources = list.length;
-    renderResults(list, true);
-    badge(`${sources} sources · reading…`, "busy");
+    const list = JSON.parse(e.data) || [];
+    count = list.length;
+    $("sourcesBox").hidden = count === 0;
+    $("sources").replaceChildren(...list.map((s) => row(s, s.n, "src-" + s.n, withLabs ? (s.in_lab ? "lab" : "shared") : null)));
+    if (count) badge("askBadge", `${count} sources · reading…`, "busy");
   });
 
   stream.addEventListener("delta", (e) => {
     if (first === null) {
       first = performance.now();
-      badge("writing…", "busy");
+      badge("askBadge", "writing…", "busy");
     }
     text += JSON.parse(e.data).text;
-    renderAnswer(text, sources);
+    renderAnswer(text, count);
   });
 
   stream.addEventListener("done", (e) => {
@@ -326,9 +365,11 @@ function answer() {
     stream.close();
     const total = ((performance.now() - started) / 1000).toFixed(1);
     const wait = first ? ((first - started) / 1000).toFixed(1) : "–";
-    $("answerMeta").textContent = `${done.cited.length}/${sources} cited · ${done.usage.output_tokens} tokens · first word ${wait} s`;
-    badge(`${done.model} · ${total} s`);
-    $("go").disabled = false;
+    $("answerMeta").textContent = (done.weak ? "nothing clearly relevant found · " : "") +
+      `${scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited · ` +
+      `${done.usage.output_tokens} tokens · first word ${wait} s`;
+    badge("askBadge", `${done.model} · ${total} s`);
+    $("askGo").disabled = false;
   });
 
   stream.addEventListener("error", (e) => {
@@ -337,33 +378,58 @@ function answer() {
     try { message = JSON.parse(e.data).error; } catch (_) {}
     // EventSource hides the status: a refused stream looks like a lost one.
     if (!e.data) call("/api/me").catch(() => {});
-    $("answerMeta").replaceChildren();
-    badge("no answer: " + message, "failed");
-    $("go").disabled = false;
+    $("answerBox").hidden = true;
+    badge("askBadge", "no answer: " + message, "failed");
+    $("askGo").disabled = false;
   });
 }
 
-$("form").addEventListener("submit", (e) => {
+$("askForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  if (!$("q").value.trim()) return;
-  const on = segValue("answer") === "on";
-  history.replaceState(null, "", "?" + params() + (on ? "" : "&answer=0") + location.hash);
-  on ? answer() : search();
+  const q = $("askQ").value.trim();
+  if (!q) return;
+  syncURL({ q });
+  answer(q);
 });
 
-// ---- crawls ----
-let polling = null;
-
-const glyphs = { queued: "○", running: "●", indexing: "◐", finished: "✓", dropped: "✕", stalled: "!" };
-const active = (status) => status === "queued" || status === "running" || status === "indexing";
-
-function ago(iso) {
-  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
-  if (s < 60) return Math.round(s) + " s ago";
-  if (s < 3600) return Math.round(s / 60) + " min ago";
-  if (s < 86400) return Math.round(s / 3600) + " h ago";
-  return Math.round(s / 86400) + " d ago";
+// ---- search ----
+function searchParams(q) {
+  const p = new URLSearchParams({ q, mode: segValue("mode") });
+  if ($("host").value.trim()) p.set("host", $("host").value.trim());
+  // "on" leaves the server's default, so a stack without a reranker still works.
+  if (segValue("rerank") === "off") p.set("rerank", "false");
+  if (segValue("pagerank") !== "") p.set("pagerank", segValue("pagerank"));
+  return p;
 }
+
+async function search(q) {
+  $("searchGo").disabled = true;
+  badge("searchBadge", "searching…", "busy");
+  try {
+    const p = searchParams(q);
+    if (ticked.size) p.set("labs", [...ticked].join(","));
+    p.set("limit", "10");
+    const body = await api("/search?" + p);
+    $("resultsBox").hidden = body.results.length === 0;
+    $("results").replaceChildren(...body.results.map((r, i) => row(r, i + 1, null, null)));
+    badge("searchBadge", body.results.length ? `${body.results.length} results · ${body.took_ms} ms` : "nothing found");
+  } catch (err) {
+    badge("searchBadge", "search failed: " + err.message, "failed");
+  } finally {
+    $("searchGo").disabled = false;
+  }
+}
+
+$("searchForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = $("searchQ").value.trim();
+  if (!q) return;
+  syncURL(searchParams(q));
+  search(q);
+});
+
+// ---- crawls of the shared base ----
+let polling = null;
 
 function renderRuns(list) {
   if (list.length === 0) {
@@ -372,26 +438,24 @@ function renderRuns(list) {
   }
   $("runs").replaceChildren(...list.map((run) => el("tr", {},
     el("td", { class: "url" }, run.start_url, run.note ? el("div", { class: "note" }, run.note) : null),
-    el("td", {}, el("span", { class: "state " + run.status },
-      el("span", { class: "state-glyph", "aria-hidden": "true" }, glyphs[run.status] || "·"), run.status)),
-    el("td", { class: "num" }, run.pages + " / " + run.max_links),
-    el("td", { class: "num" }, run.docs_indexed + " / " + run.docs_queued,
+    el("td", { "data-label": "status" }, stateOf(run.status)),
+    el("td", { class: "num", "data-label": "pages" }, run.pages + " / " + run.max_links),
+    el("td", { class: "num", "data-label": "searchable" }, run.docs_indexed + " / " + run.docs_queued,
       run.docs_failed ? el("div", { class: "note" }, run.docs_failed + " failed") : null),
-    el("td", { class: "num" }, ago(run.submitted_at)))));
+    el("td", { class: "num", "data-label": "submitted" }, ago(run.submitted_at)))));
 }
 
 async function loadRuns() {
+  clearTimeout(polling);
   try {
     const res = await call("/api/runs?limit=8");
     if (res.status === 503) { $("crawl").hidden = true; return; }
     const body = await res.json();
     $("crawl").hidden = false;
     renderRuns(body.runs);
-    clearTimeout(polling);
-    if (body.runs.some((r) => active(r.status))) polling = setTimeout(loadRuns, 3000);
+    if (current === "search" && body.runs.some((r) => active(r.status))) polling = setTimeout(loadRuns, 3000);
   } catch (_) {
-    clearTimeout(polling);
-    polling = setTimeout(loadRuns, 10000);
+    if (current === "search") polling = setTimeout(loadRuns, 10000);
   }
 }
 
@@ -399,20 +463,14 @@ $("crawlForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("crawlGo").disabled = true;
   try {
-    const res = await call("/api/runs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: $("crawlUrl").value.trim(),
-        scope: segValue("scope"),
-        links: Number($("crawlLinks").value),
-        depth: Number($("crawlDepth").value),
-      }),
+    const run = await send("POST", "/api/runs", {
+      url: $("crawlUrl").value.trim(),
+      scope: segValue("scope"),
+      links: Number($("crawlLinks").value),
+      depth: Number($("crawlDepth").value),
     });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || res.statusText);
     $("crawlUrl").value = "";
-    $("crawlHint").textContent = "Queued " + body.start_url;
+    $("crawlHint").textContent = "Queued " + run.start_url;
     loadRuns();
   } catch (err) {
     $("crawlHint").replaceChildren(el("span", { class: "error" }, err.message));
@@ -421,20 +479,72 @@ $("crawlForm").addEventListener("submit", async (e) => {
   }
 });
 
-loadRuns();
+// ---- new lab: the model drafts, the user confirms ----
+function renderPlan(plan) {
+  $("planCard").replaceChildren(el("div", { class: "plan" },
+    el("p", { class: "eyebrow" }, plan.model ? "drafted by " + plan.model : "read literally: the model could not draft it"),
+    el("h3", {}, plan.name),
+    plan.topic ? el("p", { class: "note" }, plan.topic) : null,
+    plan.sources.length
+      ? el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope))))
+      : el("p", { class: "note" }, "No links: the lab starts empty."),
+    el("div", { class: "buttons" },
+      el("button", { type: "button", class: "action primary", onclick: (e) => build(plan, e.target) }, "Build"),
+      el("button", { type: "button", class: "action", onclick: () => $("planCard").replaceChildren() }, "Cancel"))));
+}
 
-// A link with ?q= runs that search, so results can be shared.
+async function build(plan, button) {
+  button.disabled = true;
+  try {
+    const lab = await send("POST", "/api/labs", { name: plan.name, topic: plan.topic, sources: plan.sources });
+    location.assign("/labs/" + lab.id);
+  } catch (err) {
+    $("planNote").replaceChildren(el("span", { class: "error" }, err.message));
+    button.disabled = false;
+  }
+}
+
+$("planForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const request = $("planText").value.trim();
+  if (!request) return;
+  $("planGo").disabled = true;
+  $("planCard").replaceChildren();
+  $("planNote").textContent = "Drafting…";
+  try {
+    renderPlan(await send("POST", "/api/labs/plan", { request }));
+    $("planNote").textContent = "";
+  } catch (err) {
+    $("planNote").replaceChildren(el("span", { class: "error" }, err.message));
+  } finally {
+    $("planGo").disabled = false;
+  }
+});
+
+// ---- start: the URL may name a tab, ticked labs and a question ----
 {
   const p = new URLSearchParams(location.search);
-  if (p.get("q")) {
-    $("q").value = p.get("q");
-    if (p.get("mode")) setSeg("mode", p.get("mode"));
-    if (p.get("host")) $("host").value = p.get("host");
-    if (p.get("rerank") === "false") setSeg("rerank", "off");
-    if (p.get("pagerank")) setSeg("pagerank", p.get("pagerank"));
-    if (p.get("answer") === "0") setSeg("answer", "off");
-    segValue("answer") === "on" ? answer() : search();
-  }
+  for (const id of (p.get("labs") || "").split(",")) if (/^\d+$/.test(id)) ticked.add(Number(id));
+
+  let tab = p.get("tab") || "answer";
+  if (p.get("answer") === "0") tab = "search";
+  showTab(tab);
+
+  loadLabs().then(() => {
+    const q = p.get("q");
+    if (!q) return;
+    if (current === "search") {
+      $("searchQ").value = q;
+      if (p.get("mode")) setSeg("mode", p.get("mode"));
+      if (p.get("host")) $("host").value = p.get("host");
+      if (p.get("rerank") === "false") setSeg("rerank", "off");
+      if (p.get("pagerank")) setSeg("pagerank", p.get("pagerank"));
+      search(q);
+    } else if (current === "answer") {
+      $("askQ").value = q;
+      answer(q);
+    }
+  });
 }
 </script>
 </body>

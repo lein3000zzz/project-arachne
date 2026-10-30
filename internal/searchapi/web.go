@@ -13,6 +13,9 @@ var indexHTML []byte
 //go:embed web/login.html
 var loginHTML []byte
 
+//go:embed web/lab.html
+var labHTML []byte
+
 //go:embed web/favicon.svg
 var faviconSVG []byte
 
@@ -32,6 +35,8 @@ func servePage(w http.ResponseWriter, page []byte) {
 }
 
 func serveIndex(w http.ResponseWriter, _ *http.Request) { servePage(w, indexHTML) }
+
+func serveLab(w http.ResponseWriter, _ *http.Request) { servePage(w, labHTML) }
 
 func serveFavicon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")

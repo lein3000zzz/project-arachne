@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
+	"strings"
 	"time"
 	"web-crawler/internal/appconfig"
 	"web-crawler/internal/chunker"
@@ -98,7 +101,7 @@ func InitApp() *CrawlerApp {
 
 	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, runStore, cfg)
 
-	initGraphSchema(logger, pageRepo, documentSink)
+	initGraphSchema(logger, pageRepo, documentSink, crawler.Excluded, cfg.Crawler.Exclude)
 
 	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, runStore, tp, cfg)
 }
@@ -246,18 +249,26 @@ func initRunsQueue(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appc
 	return runsQueue
 }
 
-func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, sink documents.Sink) {
+func initGraphSchema(logger *zap.SugaredLogger, pageRepo pages.PageRepo, sink documents.Sink, excluded func(string) bool, patterns []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), graphSchemaTimeout)
 	defer cancel()
 
-	removed, err := pageRepo.EnsureCanonical(ctx)
+	merged, err := pageRepo.EnsureCanonical(ctx)
 	if err != nil {
 		logger.Fatal("Error re-canonicalizing stored URLs:", err)
 	}
 
-	for _, pageURL := range removed {
+	sum := sha256.Sum256([]byte(strings.Join(patterns, "\n")))
+
+	unwanted, err := pageRepo.EnsureExcluded(ctx, hex.EncodeToString(sum[:]), excluded)
+	if err != nil {
+		logger.Fatal("Error applying the exclude list to stored pages:", err)
+	}
+
+	// An empty document removes its URL from the index.
+	for _, pageURL := range append(merged, unwanted...) {
 		if err := sink.Submit(ctx, &documents.Document{URL: pageURL, FetchedAt: time.Now()}); err != nil {
-			logger.Warnw("Failed to drop a merged page from the index", "url", pageURL, "err", err)
+			logger.Warnw("Failed to drop a page from the index", "url", pageURL, "err", err)
 		}
 	}
 }

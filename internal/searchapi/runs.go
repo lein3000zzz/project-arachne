@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"web-crawler/internal/auth"
 	"web-crawler/internal/runs"
 
 	"go.uber.org/zap"
@@ -14,7 +15,7 @@ import (
 
 // RunService is optional: without it crawl submission reports 503.
 type RunService interface {
-	Submit(ctx context.Context, req runs.Request) (runs.Run, error)
+	Submit(ctx context.Context, req runs.Request, origin runs.Origin) (runs.Run, error)
 	List(ctx context.Context, limit int) ([]runs.Run, error)
 	Get(ctx context.Context, id string) (runs.Run, error)
 }
@@ -49,7 +50,9 @@ func (h *runsHandler) submit(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), runsTimeout)
 	defer cancel()
 
-	run, err := h.service.Submit(ctx, req)
+	user, _ := auth.UserFrom(r.Context())
+
+	run, err := h.service.Submit(ctx, req, runs.Origin{UserID: user.ID})
 	if err != nil {
 		h.fail(w, err)
 		return

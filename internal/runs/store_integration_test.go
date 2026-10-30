@@ -18,7 +18,7 @@ func TestStoreTracksARun(t *testing.T) {
 
 	run := &config.Run{ID: "r1", StartURL: "go.dev/doc", MaxDepth: 2, MaxLinks: 10}
 
-	if err := store.Submitted(ctx, run); err != nil {
+	if err := store.Submitted(ctx, run, Origin{}); err != nil {
 		t.Fatal(err)
 	}
 

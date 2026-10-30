@@ -7,6 +7,7 @@ package retrieval
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +32,9 @@ type Request struct {
 	Query string
 	Limit int
 	Host  string
-	Mode  Mode
+	// Non-nil searches only these pages; empty finds nothing.
+	URLs []string
+	Mode Mode
 	// Nil takes the configured default.
 	PageRankWeight *float64
 	SiteRankWeight *float64
@@ -49,7 +52,8 @@ type Result struct {
 	URL   string `json:"url"`
 	Host  string `json:"host"`
 	Title string `json:"title"`
-	// The best-ranked chunk that matched, from whichever list ranked the page higher.
+	// The best-ranked chunk that matched, from whichever list ranked the page
+	// higher; when reranked, whichever of its chunks the reranker scored highest.
 	Snippet string `json:"snippet"`
 	// The fusion score: RRF over the lists in play, or the single list's own score
 	// when one list ranks alone. Results are in this order unless reranked.
@@ -62,6 +66,11 @@ type Result struct {
 	// Set on the top candidates when the reranker ran: they are then ordered by
 	// it, ahead of the rest.
 	Rerank *Signal `json:"rerank,omitempty"`
+
+	// Each distinct chunk the lists matched for the page. Which one ranks higher
+	// depends on the other pages searched, a lab's few or the whole index, so
+	// the reranker reads them all rather than let that decide.
+	chunks []string
 }
 
 type RankSource interface {
@@ -120,7 +129,7 @@ func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
 		return nil, ErrNoReranker
 	}
 
-	filter := vectorstore.Filter{Host: strings.ToLower(strings.TrimSpace(req.Host))}
+	filter := vectorstore.Filter{Host: strings.ToLower(strings.TrimSpace(req.Host)), URLs: req.URLs}
 
 	var dense, bm25 []page
 
@@ -144,7 +153,7 @@ func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
 		return nil, err
 	}
 
-	results := fuse(dense, bm25, r.cfg.RRFK, req.Mode)
+	results := distinct(fuse(dense, bm25, r.cfg.RRFK, req.Mode))
 
 	if err := r.attachRanks(ctx, results); err != nil {
 		return nil, err
@@ -279,14 +288,20 @@ func fuse(dense, bm25 []page, k int, mode Mode) []Result {
 		res := get(p)
 		res.Dense = &Signal{Rank: p.rank, Score: widen(p.hit.Score)}
 		res.Snippet = snippet(p.hit)
+		res.chunks = []string{res.Snippet}
 	}
 
 	for _, p := range bm25 {
 		res := get(p)
 		res.BM25 = &Signal{Rank: p.rank, Score: widen(p.hit.Score)}
 
+		text := snippet(p.hit)
 		if res.Dense == nil || p.rank < res.Dense.Rank {
-			res.Snippet = snippet(p.hit)
+			res.Snippet = text
+		}
+
+		if !slices.Contains(res.chunks, text) {
+			res.chunks = append(res.chunks, text)
 		}
 	}
 
@@ -319,6 +334,26 @@ func fuse(dense, bm25 []page, k int, mode Mode) []Result {
 	}
 
 	return results
+}
+
+// distinct keeps the best-ranked of results whose excerpts are the same text.
+// A site's menu leaking into every page, or one document mirrored under many
+// addresses, would otherwise take every place - and every rerank slot.
+func distinct(results []Result) []Result {
+	seen := make(map[string]bool, len(results))
+	out := results[:0]
+
+	for _, res := range results {
+		key := strings.Join(strings.Fields(res.Snippet), " ")
+		if key != "" && seen[key] {
+			continue
+		}
+
+		seen[key] = true
+		out = append(out, res)
+	}
+
+	return out
 }
 
 func bestRank(res *Result) int {

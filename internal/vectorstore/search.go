@@ -3,6 +3,7 @@ package vectorstore
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
@@ -33,6 +34,10 @@ func (m *Milvus) search(ctx context.Context, vector entity.Vector, field string,
 		return nil, fmt.Errorf("%w: limit must be > 0", ErrInvalidQuery)
 	}
 
+	if filter.URLs != nil && len(filter.URLs) == 0 {
+		return []Hit{}, nil
+	}
+
 	opt := milvusclient.NewSearchOption(m.collection, limit, []entity.Vector{vector}).
 		WithANNSField(field).
 		WithOutputFields(FieldID, FieldURL, FieldHost, FieldTitle, FieldText)
@@ -41,9 +46,22 @@ func (m *Milvus) search(ctx context.Context, vector entity.Vector, field string,
 		opt = opt.WithAnnParam(annParam)
 	}
 
-	// Template parameters, never string building: the host comes from the request.
+	// Template parameters, never string building: the host comes from the request,
+	// the URLs from whatever pages were crawled.
+	var conditions []string
+
 	if filter.Host != "" {
-		opt = opt.WithFilter(FieldHost+" == {host}").WithTemplateParam("host", filter.Host)
+		conditions = append(conditions, FieldHost+" == {host}")
+		opt = opt.WithTemplateParam("host", filter.Host)
+	}
+
+	if filter.URLs != nil {
+		conditions = append(conditions, FieldURL+" in {urls}")
+		opt = opt.WithTemplateParam("urls", filter.URLs)
+	}
+
+	if len(conditions) > 0 {
+		opt = opt.WithFilter(strings.Join(conditions, " && "))
 	}
 
 	results, err := m.client.Search(ctx, opt)

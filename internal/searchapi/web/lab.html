@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab · arachne</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem("theme"); } catch (_) {}
+  if (stored === "light" || stored === "dark") document.documentElement.setAttribute("data-theme", stored);
+})();
+</script>
+<link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="shell">
+
+<header class="site">
+  <a class="brand" href="/">arachne</a>
+  <span class="who" id="who"></span>
+  <button type="button" class="theme" id="logout">log out</button>
+  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+</header>
+
+<main id="main" class="docs">
+  <nav class="docs-nav" aria-label="Lab">
+    <a href="/?tab=labs">&larr; Labs</a>
+    <p class="lab-name" id="labName"></p>
+    <a href="#overview">Overview</a>
+    <a href="#sources">Sources</a>
+    <a href="#pages">Pages</a>
+    <span class="later">Artifacts come later</span>
+  </nav>
+
+  <div class="docs-main">
+    <section id="overview">
+      <p class="eyebrow">lab</p>
+      <h1 id="title">&hellip;</h1>
+      <p class="lede" id="topic"></p>
+      <p class="note" id="coverage"></p>
+      <div class="buttons"><a class="action primary" id="askWith" href="/">Ask with this lab</a></div>
+    </section>
+
+    <section id="sources">
+      <h2>Sources</h2>
+      <table class="table stack">
+        <thead><tr><th>URL</th><th>Status</th><th class="num">Pages</th><th class="num">Searchable</th><th></th></tr></thead>
+        <tbody id="sourceRows"></tbody>
+      </table>
+
+      <form id="growForm" class="ask">
+        <div class="field">
+          <label for="growText">Grow this lab</label>
+          <textarea id="growText" placeholder="add gobyexample.com and go.dev/blog/pipelines" required></textarea>
+        </div>
+        <button class="action" id="growGo">Plan</button>
+      </form>
+      <p class="note" id="growNote" aria-live="polite"></p>
+      <div id="growCard"></div>
+    </section>
+
+    <section id="pages">
+      <h2>Pages</h2>
+      <ul class="pages" id="pageList"></ul>
+    </section>
+
+    <section>
+      <div class="buttons">
+        <button type="button" class="action danger" id="deleteLab">Delete lab</button>
+        <span class="note">Its pages stay in the shared base.</span>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer class="footer">
+  <p class="convert">arachne</p>
+  <nav class="contact" aria-label="Links">
+    <a href="https://github.com/lein3000zzz/project-arachne">GitHub</a>
+    <a href="https://lein3000.dev">lein3000.dev</a>
+  </nav>
+</footer>
+
+</div>
+
+<script src="/static/theme.js"></script>
+<script src="/static/common.js"></script>
+<script>
+const labID = Number(location.pathname.split("/").pop());
+const base = "/api/labs/" + labID;
+let polling = null;
+
+function sourceRow(src) {
+  const run = src.run;
+  const status = run ? stateOf(run.status) : el("span", { class: "note" }, "not crawled");
+  const act = (label, onclick) => el("button", { type: "button", class: "action small", onclick }, label);
+
+  return el("tr", {},
+    el("td", { class: "url" }, el("a", { href: src.url, target: "_blank", rel: "noopener noreferrer" }, src.url),
+      el("span", { class: "tag" }, src.scope)),
+    el("td", { "data-label": "status" }, status),
+    el("td", { class: "num", "data-label": "pages" }, String(src.pages)),
+    el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–"),
+    el("td", { class: "actions" },
+      el("div", { class: "buttons" },
+        act("refresh", async (e) => {
+          e.target.disabled = true;
+          try { await send("POST", `${base}/sources/${src.id}/refresh`); } catch (err) { alert(err.message); }
+          load();
+        }),
+        act("remove", async () => {
+          if (!confirm("Remove " + src.url + "? Its pages leave this lab, not the shared base.")) return;
+          try { await send("DELETE", `${base}/sources/${src.id}`); } catch (err) { alert(err.message); }
+          load();
+        }))));
+}
+
+async function loadPages() {
+  try {
+    const { pages } = await api(`${base}/pages?limit=200`);
+    $("pageList").replaceChildren(...(pages.length ? pages.map((p) => el("li", {},
+      el("span", { class: "status" }, p.status ? String(p.status) : "–"),
+      el("a", { href: p.url, target: "_blank", rel: "noopener noreferrer" }, p.title || p.url))) : [el("li", { class: "note" }, "None yet.")]));
+  } catch (err) {
+    $("pageList").replaceChildren(el("li", { class: "error" }, err.message));
+  }
+}
+
+async function load() {
+  clearTimeout(polling);
+  let lab;
+  try {
+    lab = await api(base);
+  } catch (err) {
+    $("title").textContent = err.message === "no such lab" ? "No such lab." : "The lab could not be loaded.";
+    $("coverage").textContent = err.message;
+    return;
+  }
+
+  document.title = lab.name + " · arachne";
+  $("labName").textContent = lab.name;
+  $("title").textContent = lab.name;
+  $("topic").textContent = lab.topic;
+  $("coverage").textContent = `${lab.sources.length} sources · ${lab.pages} pages · updated ${ago(lab.updated_at)}`;
+  $("askWith").href = "/?labs=" + lab.id;
+
+  $("sourceRows").replaceChildren(...(lab.sources.length ? lab.sources.map(sourceRow)
+    : [el("tr", {}, el("td", { colspan: "5", class: "note" }, "None yet."))]));
+
+  if (lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
+  loadPages();
+}
+
+// ---- growing: the model drafts the sources, the user confirms ----
+function renderPlan(plan) {
+  if (plan.sources.length === 0) {
+    $("growCard").replaceChildren(el("p", { class: "note" }, "Nothing new to add: no links the lab does not have already."));
+    return;
+  }
+  $("growCard").replaceChildren(el("div", { class: "plan" },
+    el("p", { class: "eyebrow" }, plan.model ? "drafted by " + plan.model : "read literally: the model could not draft it"),
+    el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope)))),
+    plan.reply ? el("p", {}, plan.reply) : null,
+    el("div", { class: "buttons" },
+      el("button", { type: "button", class: "action primary", onclick: async (e) => {
+        e.target.disabled = true;
+        try {
+          await send("POST", `${base}/sources`, { sources: plan.sources });
+          $("growCard").replaceChildren();
+          $("growText").value = "";
+          load();
+        } catch (err) {
+          $("growNote").replaceChildren(el("span", { class: "error" }, err.message));
+          e.target.disabled = false;
+        }
+      } }, "Add"),
+      el("button", { type: "button", class: "action", onclick: () => $("growCard").replaceChildren() }, "Cancel"))));
+}
+
+$("growForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const request = $("growText").value.trim();
+  if (!request) return;
+  $("growGo").disabled = true;
+  $("growCard").replaceChildren();
+  $("growNote").textContent = "Drafting…";
+  try {
+    renderPlan(await send("POST", "/api/labs/plan", { request, lab_id: labID }));
+    $("growNote").textContent = "";
+  } catch (err) {
+    $("growNote").replaceChildren(el("span", { class: "error" }, err.message));
+  } finally {
+    $("growGo").disabled = false;
+  }
+});
+
+$("deleteLab").addEventListener("click", async () => {
+  if (!confirm("Delete this lab? Its pages stay in the shared base.")) return;
+  try {
+    await send("DELETE", base);
+    location.assign("/?tab=labs");
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+load();
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func TestAnswerJSON(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 
-	if answerer.got != (answer.Request{Query: "goroutines", Host: "go.dev", Mode: retrieval.ModeBM25}) {
+	if !reflect.DeepEqual(answerer.got, answer.Request{Query: "goroutines", Host: "go.dev", Mode: retrieval.ModeBM25}) {
 		t.Errorf("request = %+v", answerer.got)
 	}
 

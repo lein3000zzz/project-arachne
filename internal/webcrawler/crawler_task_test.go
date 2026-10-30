@@ -314,6 +314,11 @@ func TestExcludedLinksAreNotFollowed(t *testing.T) {
 		"https://ru.wikipedia.org/wiki/Go",
 		"https://en.wikipedia.org/wiki/Star_Wars:_Episode_IV",
 		"https://en.wikipedia.org/wiki/Go_(programming_language)",
+		"https://pkg.go.dev/golang.org/x/sync@v0.24.0/errgroup",
+		"https://pkg.go.dev/golang.org/x/sync/errgroup?tab=versions",
+		"https://pkg.go.dev/golang.org/x/sync/errgroup?tab=importedby",
+		"https://pkg.go.dev/golang.org/x/sync/errgroup",
+		"https://pkg.go.dev/golang.org/x/sync/errgroup?tab=doc",
 	)
 	h.repo.exclude = compileExclude(appconfig.DefaultExclude)
 
@@ -328,9 +333,13 @@ func TestExcludedLinksAreNotFollowed(t *testing.T) {
 		"https://ru.wikipedia.org/wiki/Go",
 		"https://en.wikipedia.org/wiki/Star_Wars:_Episode_IV",
 		"https://en.wikipedia.org/wiki/Go_(programming_language)",
+		"https://pkg.go.dev/golang.org/x/sync@v0.24.0/errgroup",
+		"https://pkg.go.dev/golang.org/x/sync/errgroup",
+		"https://pkg.go.dev/golang.org/x/sync/errgroup?tab=doc",
 	}
 
 	if !slices.Equal(sent, want) {
-		t.Errorf("followed %v, want %v: namespace, special and edit pages are excluded, articles with a colon are not", sent, want)
+		t.Errorf("followed %v, want %v: namespace, special and edit pages are excluded, articles with a colon are not; "+
+			"pkg.go.dev's side tabs are excluded, its documentation - versioned links too - is not", sent, want)
 	}
 }

@@ -272,6 +272,23 @@ func TestSearchReturnsHitsWithTheirFields(t *testing.T) {
 	if err != nil || len(hostile) != 0 {
 		t.Errorf("a quote in the host must not widen the filter: %+v, %v", hostile, err)
 	}
+
+	onlyA, err := m.SearchDense(ctx, []float32{0, 1, 0, 0}, 5, Filter{URLs: []string{a, "https://never.example/"}})
+	if err != nil || len(onlyA) != 1 || onlyA[0].URL != a {
+		t.Errorf("URL filter: %+v, %v", onlyA, err)
+	}
+
+	both, err := m.SearchText(ctx, "channels", 5, Filter{URLs: []string{a, b}, Host: "other.example"})
+	if err != nil || len(both) != 1 || both[0].URL != b {
+		t.Errorf("URL and host filters together: %+v, %v", both, err)
+	}
+
+	for _, urls := range [][]string{{}, {`x" or page_url != "y`}, {`"] or page_url != ["`}} {
+		hits, err := m.SearchDense(ctx, []float32{1, 0, 0, 0}, 5, Filter{URLs: urls})
+		if err != nil || len(hits) != 0 {
+			t.Errorf("URLs %q must match nothing: %+v, %v", urls, hits, err)
+		}
+	}
 }
 
 func TestSearchRejectsBadQueries(t *testing.T) {
