@@ -12,6 +12,8 @@ import (
 	"strings"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/retrieval"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Searcher interface {
@@ -58,12 +60,22 @@ type Request struct {
 	PageRankWeight *float64
 	SiteRankWeight *float64
 	Rerank         *bool
+	// Search results to list beside the answer, whether or not it reads them.
+	Results int
 }
 
 // Source N is cited in the answer as [N].
 type Source struct {
 	N     int  `json:"n"`
 	InLab bool `json:"in_lab"`
+	retrieval.Result
+}
+
+// Found is a search result listed beside the answer.
+type Found struct {
+	InLab bool `json:"in_lab"`
+	// The number the answer cites it by; 0 when the model did not read it.
+	Source int `json:"source,omitempty"`
 	retrieval.Result
 }
 
@@ -85,14 +97,16 @@ type Result struct {
 	// search found, which may not cover the question.
 	Weak    bool      `json:"weak,omitempty"`
 	Sources []Source  `json:"sources"`
+	Results []Found   `json:"results,omitempty"`
 	Cited   []int     `json:"cited"`
 	Model   string    `json:"model"`
 	Usage   llm.Usage `json:"usage"`
 }
 
-// Events lets a caller show progress: the sources as soon as they are found,
-// then the answer as it is generated. Either may be nil.
+// Events lets a caller show progress: the results and the sources as soon as
+// search is done, then the answer as it is generated. Any may be nil.
 type Events struct {
+	Results func([]Found) error
 	Sources func([]Source) error
 	Delta   func(string) error
 }
@@ -105,9 +119,15 @@ const systemPrompt = `You answer questions using only the numbered sources provi
 - Answer in the language of the question, concisely.`
 
 func (s *Service) Answer(ctx context.Context, req Request, events Events) (Result, error) {
-	sources, weak, err := s.gather(ctx, req)
+	found, sources, weak, err := s.gather(ctx, req)
 	if err != nil {
 		return Result{}, err
+	}
+
+	if events.Results != nil {
+		if err := events.Results(found); err != nil {
+			return Result{}, err
+		}
 	}
 
 	if events.Sources != nil {
@@ -116,7 +136,7 @@ func (s *Service) Answer(ctx context.Context, req Request, events Events) (Resul
 		}
 	}
 
-	result := Result{Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Model: s.chat.Model(), Cited: []int{}}
+	result := Result{Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Results: found, Model: s.chat.Model(), Cited: []int{}}
 
 	if len(sources) == 0 {
 		result.Scope = ScopeNone
@@ -141,47 +161,70 @@ func (s *Service) Answer(ctx context.Context, req Request, events Events) (Resul
 	return result, nil
 }
 
-// gather finds the sources. Labs, when asked for, are searched first and
-// their sources come first, with the low numbers; if they hold fewer than
-// MinLabSources relevant ones, the whole index fills the places left. Only
-// relevant sources are read while there are any; when there are none, the best
-// that was found is read anyway - search found something, and the model can
-// still say it does not answer the question - and weak is set.
-func (s *Service) gather(ctx context.Context, req Request) (sources []Source, weak bool, err error) {
-	search := func(urls []string) ([]retrieval.Result, error) {
+// gather runs the search - the whole shared base, which is also the list shown
+// beside the answer - and, with labs ticked, a search of the labs alongside it.
+// The model reads relevant lab pages first; if there are fewer than
+// MinLabSources, relevant shared results fill the places left. With nothing
+// relevant anywhere, the best found is read anyway - search found something,
+// and the model can still say it does not answer - and weak is set.
+func (s *Service) gather(ctx context.Context, req Request) (found []Found, sources []Source, weak bool, err error) {
+	search := func(ctx context.Context, urls []string, limit int) ([]retrieval.Result, error) {
 		results, err := s.search.Search(ctx, retrieval.Request{
-			Query: req.Query, Host: req.Host, URLs: urls, Mode: req.Mode, Limit: s.cfg.Sources,
+			Query: req.Query, Host: req.Host, URLs: urls, Mode: req.Mode, Limit: limit,
 			PageRankWeight: req.PageRankWeight, SiteRankWeight: req.SiteRankWeight, Rerank: req.Rerank,
 		})
 
 		return quotable(results), err
 	}
 
-	var inLabs []retrieval.Result
+	var shared, inLabs []retrieval.Result
+
+	group, groupCtx := errgroup.WithContext(ctx)
+
+	group.Go(func() (err error) {
+		shared, err = search(groupCtx, nil, max(req.Results, s.cfg.Sources))
+		return err
+	})
 
 	if req.LabURLs != nil {
-		if inLabs, err = search(req.LabURLs); err != nil {
-			return nil, false, err
+		group.Go(func() (err error) {
+			inLabs, err = search(groupCtx, req.LabURLs, s.cfg.Sources)
+			return err
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, nil, false, err
+	}
+
+	var picked []retrieval.Result
+
+	if relevantLabs := s.relevant(inLabs); req.LabURLs != nil && len(relevantLabs) >= s.cfg.MinLabSources {
+		picked = s.fill(relevantLabs, nil)
+	} else if picked = s.fill(relevantLabs, s.relevant(shared)); len(picked) == 0 {
+		picked = s.fill(inLabs, shared)
+		weak = len(picked) > 0
+	}
+
+	sources = number(picked, req.LabURLs)
+
+	return list(shared[:min(len(shared), req.Results)], sources, req.LabURLs), sources, weak, nil
+}
+
+func list(results []retrieval.Result, sources []Source, labURLs []string) []Found {
+	found := make([]Found, len(results))
+
+	for i, res := range results {
+		found[i] = Found{InLab: slices.Contains(labURLs, res.URL), Result: res}
+
+		for _, src := range sources {
+			if src.URL == res.URL {
+				found[i].Source = src.N
+			}
 		}
-
-		if relevant := s.relevant(inLabs); len(relevant) >= s.cfg.MinLabSources {
-			return number(relevant, req.LabURLs), false, nil
-		}
 	}
 
-	shared, err := search(nil)
-	if err != nil {
-		return nil, false, err
-	}
-
-	picked := s.fill(s.relevant(inLabs), s.relevant(shared))
-	if len(picked) > 0 {
-		return number(picked, req.LabURLs), false, nil
-	}
-
-	picked = s.fill(inLabs, shared)
-
-	return number(picked, req.LabURLs), len(picked) > 0, nil
+	return found
 }
 
 // fill takes first's results, then second's that are not already there, up to

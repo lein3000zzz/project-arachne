@@ -86,7 +86,7 @@ func InitApp() *CrawlerApp {
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
-	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword, runStore)
+	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword, runStore, db)
 
 	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBPageCache, cfg)
 	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBRobotsCache, cfg)
@@ -122,7 +122,8 @@ func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
 	return katana
 }
 
-func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, redisURI, redisPassword string, progress indexing.Progress) documents.Sink {
+func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, redisURI, redisPassword string,
+	progress indexing.Progress, db *pgxpool.Pool) documents.Sink {
 	ctx, cancel := context.WithTimeout(context.Background(), indexingStartupTimeout)
 	defer cancel()
 
@@ -155,6 +156,11 @@ func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manage
 	hashes := indexing.NewRedisHashStore(hashClient, cfg.Cache.DocumentHashTTL.Std())
 
 	chunking := indexing.NewChunkingSink(logger, textChunker, hashes, indexing.NewVectorSink(embedder, store))
+
+	// A nil *Reviewer in the interface would not compare equal to nil.
+	if reviewer := platform.NewReviewer(logger, cfg, sm, store, db); reviewer != nil {
+		chunking.Gated(reviewer)
+	}
 
 	return indexing.NewAsyncSink(logger, chunking, progress, cfg.Indexer.Workers, cfg.Indexer.QueueSize, cfg.Indexer.EnqueueTimeout.Std())
 }

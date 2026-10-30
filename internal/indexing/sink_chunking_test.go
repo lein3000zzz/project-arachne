@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"web-crawler/internal/chunker"
 	"web-crawler/internal/documents"
 
@@ -398,5 +399,83 @@ func TestRemovedPageEmitsOneEmptyBatch(t *testing.T) {
 
 	if removal := next.batches[1]; len(removal.Chunks) != 0 {
 		t.Errorf("a removed page must produce an empty batch, got %d chunks", len(removal.Chunks))
+	}
+}
+
+type fakeGate struct {
+	admit bool
+	err   error
+	seen  []string
+}
+
+func (g *fakeGate) Admit(_ context.Context, doc *documents.Document) (bool, error) {
+	g.seen = append(g.seen, doc.URL)
+	return g.admit, g.err
+}
+
+func TestARejectedPageLeavesTheIndexAndIsNotReviewedAgain(t *testing.T) {
+	sink, hashes, next := newSink(t)
+	gate := &fakeGate{}
+	sink.Gated(gate)
+
+	err := sink.Submit(context.Background(), page(body))
+	if !errors.Is(err, ErrRejected) {
+		t.Fatalf("err = %v, want ErrRejected", err)
+	}
+
+	if next.count() != 1 || len(next.batches[0].Chunks) != 0 {
+		t.Errorf("batches %d with %d chunks: a rejected page is sent as a removal", next.count(), len(next.batches[0].Chunks))
+	}
+
+	if _, ok := hashes.stored(page(body).URL); !ok {
+		t.Error("a rejected page must be hashed, or every crawl reviews it again")
+	}
+
+	if err := sink.Submit(context.Background(), page(body)); err != nil || len(gate.seen) != 1 {
+		t.Errorf("the unchanged page again: %v, reviewed %d times", err, len(gate.seen))
+	}
+}
+
+func TestTheGateSeesOnlyPagesWithSomethingToIndex(t *testing.T) {
+	sink, hashes, next := newSink(t)
+	gate := &fakeGate{admit: true}
+	sink.Gated(gate)
+
+	if err := sink.Submit(context.Background(), page(body)); err != nil || next.count() != 1 || len(next.batches[0].Chunks) == 0 {
+		t.Fatalf("admitted: %v, %d batches", err, next.count())
+	}
+
+	if err := sink.Submit(context.Background(), page("too short")); err != nil || len(gate.seen) != 1 {
+		t.Errorf("a page too short to chunk was reviewed: %v, %v", err, gate.seen)
+	}
+
+	failing := &fakeGate{err: errors.New("ollama down")}
+	sink2, hashes2, next2 := newSink(t)
+	sink2.Gated(failing)
+
+	if err := sink2.Submit(context.Background(), page(body)); err == nil || errors.Is(err, ErrRejected) || next2.count() != 0 {
+		t.Errorf("a failed review: %v, %d batches", err, next2.count())
+	}
+
+	if _, ok := hashes2.stored(page(body).URL); ok {
+		t.Error("a failed review must leave no hash, so the next crawl tries again")
+	}
+
+	_ = hashes
+}
+
+func TestAsyncSinkCountsRejectionsApart(t *testing.T) {
+	hashes, next := newMemHashStore(), &recordingSink{}
+	chunking := NewChunkingSink(zap.NewNop().Sugar(), newChunker(t, 200), hashes, next).Gated(&fakeGate{})
+	progress := newProgress()
+	sink := NewAsyncSink(zap.NewNop().Sugar(), chunking, progress, 1, 4, time.Second)
+
+	doc := page(body)
+	doc.RunID = "r"
+	_ = sink.Submit(context.Background(), doc)
+	_ = sink.Shutdown(context.Background())
+
+	if progress.rejected["r"] != 1 || progress.indexed["r"] != 0 || progress.fails["r"] != 0 {
+		t.Errorf("rejected %v indexed %v failed %v", progress.rejected, progress.indexed, progress.fails)
 	}
 }

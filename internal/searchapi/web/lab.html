@@ -42,7 +42,7 @@
       <h1 id="title">&hellip;</h1>
       <p class="lede" id="topic"></p>
       <p class="note" id="coverage"></p>
-      <div class="buttons"><a class="action primary" id="askWith" href="/">Ask with this lab</a></div>
+      <div class="buttons"><a class="action primary" id="askWith" href="/">Search with this lab</a></div>
     </section>
 
     <section id="sources">
@@ -104,7 +104,8 @@ function sourceRow(src) {
       el("span", { class: "tag" }, src.scope)),
     el("td", { "data-label": "status" }, status),
     el("td", { class: "num", "data-label": "pages" }, String(src.pages)),
-    el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–"),
+    el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–",
+      run && run.docs_rejected ? el("div", { class: "note" }, run.docs_rejected + " set aside") : null),
     el("td", { class: "actions" },
       el("div", { class: "buttons" },
         act("refresh", async (e) => {
@@ -119,12 +120,28 @@ function sourceRow(src) {
         }))));
 }
 
+const reasonNames = {
+  navigation_only: "menus only", error_page: "error page", spam: "spam", prompt_injection: "aimed at AI models",
+  machine_junk: "machine junk", too_thin: "too thin",
+};
+
+// A page carries the reviewer's one-line summary, and its reasons when it was
+// set aside: a lab shows what it does not use, and why.
+function pageItem(p) {
+  const r = p.review;
+  const setAside = r && r.decision === "skip";
+  return el("li", { class: setAside ? "set-aside" : null },
+    el("span", { class: "status" }, p.status ? String(p.status) : "–"),
+    el("a", { href: p.url, target: "_blank", rel: "noopener noreferrer" }, p.title || p.url),
+    setAside ? el("span", { class: "tag" }, "set aside: " + (r.reasons.map((x) => reasonNames[x] || x).join(", ") || "review")) : null,
+    r && r.unreviewed ? el("span", { class: "tag" }, "unreviewed") : null,
+    r && r.summary ? el("div", { class: "page-summary" }, r.summary) : null);
+}
+
 async function loadPages() {
   try {
     const { pages } = await api(`${base}/pages?limit=200`);
-    $("pageList").replaceChildren(...(pages.length ? pages.map((p) => el("li", {},
-      el("span", { class: "status" }, p.status ? String(p.status) : "–"),
-      el("a", { href: p.url, target: "_blank", rel: "noopener noreferrer" }, p.title || p.url))) : [el("li", { class: "note" }, "None yet.")]));
+    $("pageList").replaceChildren(...(pages.length ? pages.map(pageItem) : [el("li", { class: "note" }, "None yet.")]));
   } catch (err) {
     $("pageList").replaceChildren(el("li", { class: "error" }, err.message));
   }
@@ -145,7 +162,8 @@ async function load() {
   $("labName").textContent = lab.name;
   $("title").textContent = lab.name;
   $("topic").textContent = lab.topic;
-  $("coverage").textContent = `${lab.sources.length} sources · ${lab.pages} pages · updated ${ago(lab.updated_at)}`;
+  $("coverage").textContent = `${lab.sources.length} sources · ${lab.pages} pages` +
+    (lab.set_aside ? ` · ${lab.set_aside} set aside on review` : "") + ` · updated ${ago(lab.updated_at)}`;
   $("askWith").href = "/?labs=" + lab.id;
 
   $("sourceRows").replaceChildren(...(lab.sources.length ? lab.sources.map(sourceRow)

@@ -129,6 +129,23 @@ chat:
   # applies with reranking on.
   min_relevance: 0
 
+review:
+  # the chat model looks at every new or changed page before it is indexed, and
+  # turns away menus, error pages, spam and text aimed at AI models. Costs one
+  # model conversation per page: roughly 10-30 s on 4 CPU cores.
+  enabled: true
+  # empty: chat.model. A smaller model is faster, and needs pulling first.
+  model: ""
+  # read_part / search_index calls before the verdict is required. On 8 known
+  # pages, 1 judged as well as 3 at 5.8 s a page instead of 7.9 (documentation
+  # 7-9 s instead of 15-16): the model reads on when allowed, needed or not.
+  # Text aimed at AI models is found by code in the whole page either way.
+  max_tool_calls: 1
+  # the page is shown to the model in parts of this many characters
+  part_runes: 600
+  max_tokens: 300
+  timeout: 3m
+
 labs:
   max_sources: 20
   # an answer from labs with fewer good sources in them fills the rest of

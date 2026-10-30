@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 	"web-crawler/internal/answer"
 	"web-crawler/internal/retrieval"
@@ -14,10 +15,29 @@ import (
 )
 
 type answerHandler struct {
-	logger   *zap.SugaredLogger
-	answerer Answerer
-	labs     LabService
-	timeout  time.Duration
+	logger     *zap.SugaredLogger
+	answerer   Answerer
+	labs       LabService
+	timeout    time.Duration
+	maxResults int
+}
+
+func (h *answerHandler) request(r *http.Request) (answer.Request, error) {
+	req, err := answerRequest(r)
+	if err != nil {
+		return req, err
+	}
+
+	if raw := r.URL.Query().Get("results"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 || n > h.maxResults {
+			return req, fmt.Errorf("results must be an integer in [0, %d]", h.maxResults)
+		}
+
+		req.Results = n
+	}
+
+	return req, nil
 }
 
 func answerRequest(r *http.Request) (answer.Request, error) {
@@ -49,7 +69,7 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := answerRequest(r)
+	req, err := h.request(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
@@ -76,15 +96,16 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// serveStream sends server-sent events: sources once, the answer as delta events
-// while it is generated, then done - or error at any point.
+// serveStream sends server-sent events: the listed results and the sources
+// once, the answer as delta events while it is generated, then done - or error
+// at any point.
 func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 	if h.answerer == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "answering is not configured"})
 		return
 	}
 
-	req, err := answerRequest(r)
+	req, err := h.request(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return
@@ -129,6 +150,7 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 	// A write failing means the reader is gone; returning the error stops the
 	// model generating for nobody.
 	res, err := h.answerer.Answer(ctx, req, answer.Events{
+		Results: func(found []answer.Found) error { return send("results", found) },
 		Sources: func(sources []answer.Source) error { return send("sources", sources) },
 		Delta:   func(text string) error { return send("delta", map[string]string{"text": text}) },
 	})

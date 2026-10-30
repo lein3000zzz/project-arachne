@@ -22,6 +22,7 @@ type Config struct {
 	CrawlAPI    CrawlAPI    `yaml:"crawl_api"`
 	Auth        Auth        `yaml:"auth"`
 	Labs        Labs        `yaml:"labs"`
+	Review      Review      `yaml:"review"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -127,6 +128,18 @@ type Chat struct {
 	// when none does, the best found are read and the answer is marked weak. In
 	// the reranker's own units.
 	MinRelevance float64 `yaml:"min_relevance"`
+}
+
+// Review has the chat model look at each new or changed page before it is
+// indexed. It needs the chat endpoint the search service uses.
+type Review struct {
+	Enabled bool `yaml:"enabled"`
+	// Empty reviews with chat.model.
+	Model        string   `yaml:"model"`
+	MaxToolCalls int      `yaml:"max_tool_calls"`
+	PartRunes    int      `yaml:"part_runes"`
+	MaxTokens    int      `yaml:"max_tokens"`
+	Timeout      Duration `yaml:"timeout"`
 }
 
 type Labs struct {
@@ -285,6 +298,13 @@ func Default() Config {
 			DefaultLinks: 100,
 			MaxLinks:     2000,
 		},
+		Review: Review{
+			Enabled:      true,
+			MaxToolCalls: 1,
+			PartRunes:    600,
+			MaxTokens:    300,
+			Timeout:      Duration(3 * time.Minute),
+		},
 		Labs: Labs{
 			MaxSources: 20,
 			MinSources: 2,
@@ -374,6 +394,9 @@ func (c *Config) Validate() error {
 		{"auth.ip_failures", c.Auth.IPFailures},
 		{"auth.hash_concurrency", c.Auth.HashConcurrency},
 		{"labs.max_sources", c.Labs.MaxSources},
+		{"review.max_tool_calls", c.Review.MaxToolCalls},
+		{"review.part_runes", c.Review.PartRunes},
+		{"review.max_tokens", c.Review.MaxTokens},
 	}
 
 	for _, field := range positive {
@@ -407,6 +430,7 @@ func (c *Config) Validate() error {
 		{"auth.failure_window", c.Auth.FailureWindow},
 		{"auth.lockout", c.Auth.Lockout},
 		{"auth.max_lockout", c.Auth.MaxLockout},
+		{"review.timeout", c.Review.Timeout},
 	}
 
 	for _, field := range durations {

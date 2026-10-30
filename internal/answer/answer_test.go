@@ -3,8 +3,10 @@ package answer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/retrieval"
@@ -153,11 +155,15 @@ func TestExcerpt(t *testing.T) {
 // from shared.
 type scopedSearch struct {
 	lab, shared []retrieval.Result
-	requests    []retrieval.Request
+
+	mu       sync.Mutex
+	requests []retrieval.Request
 }
 
 func (f *scopedSearch) Search(_ context.Context, req retrieval.Request) ([]retrieval.Result, error) {
+	f.mu.Lock()
 	f.requests = append(f.requests, req)
+	f.mu.Unlock()
 
 	if req.URLs != nil {
 		return f.lab, nil
@@ -229,12 +235,57 @@ func TestLabsThatHoldEnoughAreNotWidened(t *testing.T) {
 
 	res, err := labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
 		Request{Query: "q", LabURLs: []string{"l1", "l2", "l3"}}, Events{})
-	if err != nil || len(search.requests) != 1 || res.Scope != ScopeLabs || urlsOf(res.Sources) != "l1(lab) l2(lab)" {
-		t.Errorf("%d searches, scope %s, sources %q, %v", len(search.requests), res.Scope, urlsOf(res.Sources), err)
+	if err != nil || res.Scope != ScopeLabs || urlsOf(res.Sources) != "l1(lab) l2(lab)" {
+		t.Errorf("scope %s, sources %q, %v: the model reads the lab only", res.Scope, urlsOf(res.Sources), err)
 	}
 
-	if got := search.requests[0].URLs; len(got) != 3 {
-		t.Errorf("searched URLs %v", got)
+	if !searchedBoth(search.requests, 3) {
+		t.Errorf("searches %+v: the shared base, for the results, and the labs", search.requests)
+	}
+}
+
+func searchedBoth(requests []retrieval.Request, labURLs int) bool {
+	var lab, shared int
+
+	for _, req := range requests {
+		switch {
+		case req.URLs == nil:
+			shared++
+		case len(req.URLs) == labURLs:
+			lab++
+		}
+	}
+
+	return len(requests) == 2 && lab == 1 && shared == 1
+}
+
+func TestResultsAreListedWithTheSourcesTheyBecame(t *testing.T) {
+	search := &scopedSearch{
+		lab:    []retrieval.Result{reranked("l1", 2), reranked("l2", 1)},
+		shared: []retrieval.Result{reranked("s1", 4), reranked("l2", 1), reranked("s2", 0.5), reranked("s3", -2)},
+	}
+
+	var listed []Found
+
+	res, err := labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
+		Request{Query: "q", LabURLs: []string{"l1", "l2"}, Results: 3}, Events{Results: func(f []Found) error { listed = f; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, f := range listed {
+		got = append(got, fmt.Sprintf("%s:%d:%v", f.URL, f.Source, f.InLab))
+	}
+
+	if strings.Join(got, " ") != "s1:0:false l2:2:true s2:0:false" || len(res.Results) != 3 {
+		t.Errorf("listed %v: the shared ranking, cut to 3, with the source number of what the model read", got)
+	}
+
+	for _, req := range search.requests {
+		if req.URLs == nil && req.Limit != 3 {
+			t.Errorf("the shared search asked for %d results, want 3", req.Limit)
+		}
 	}
 }
 
@@ -250,7 +301,7 @@ func TestThinLabsWidenToTheSharedBase(t *testing.T) {
 		t.Errorf("scope %s, sources %q, %v: lab first, duplicates and irrelevant ones skipped, up to 3", res.Scope, urlsOf(res.Sources), err)
 	}
 
-	if len(search.requests) != 2 || search.requests[1].URLs != nil {
+	if !searchedBoth(search.requests, 2) {
 		t.Errorf("searches: %+v", search.requests)
 	}
 

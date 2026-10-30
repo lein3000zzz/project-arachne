@@ -25,6 +25,8 @@ type Lab struct {
 	Sources   int       `json:"sources"`
 	// Fetched successfully; placeholders and failed fetches are not counted.
 	Pages int `json:"pages"`
+	// Of those, turned down on review before indexing.
+	SetAside int `json:"set_aside"`
 }
 
 type Source struct {
@@ -46,4 +48,13 @@ type Page struct {
 	Title     string     `json:"title"`
 	Status    int        `json:"status"`
 	FetchedAt *time.Time `json:"fetched_at,omitempty"`
+	// The review before indexing, when there was one.
+	Review *PageReview `json:"review,omitempty"`
+}
+
+type PageReview struct {
+	Decision   string   `json:"decision"`
+	Reasons    []string `json:"reasons"`
+	Summary    string   `json:"summary"`
+	Unreviewed bool     `json:"unreviewed,omitempty"`
 }

@@ -33,7 +33,12 @@ const (
 		(SELECT count(DISTINCT sp.page_id) FROM sources s
 			JOIN source_pages sp ON sp.source_id = s.id
 			JOIN pages p ON p.id = sp.page_id
-			WHERE s.lab_id = l.id AND p.status BETWEEN 200 AND 299)`
+			WHERE s.lab_id = l.id AND p.status BETWEEN 200 AND 299),
+		(SELECT count(DISTINCT sp.page_id) FROM sources s
+			JOIN source_pages sp ON sp.source_id = s.id
+			JOIN pages p ON p.id = sp.page_id
+			JOIN page_reviews r ON r.url = p.url
+			WHERE s.lab_id = l.id AND p.status BETWEEN 200 AND 299 AND r.decision = 'skip')`
 
 	sourceColumns = `
 		s.id, s.lab_id, s.url, s.scope, s.max_depth, s.max_links, s.created_at,
@@ -44,7 +49,7 @@ const (
 
 func scanLab(row pgx.CollectableRow) (Lab, error) {
 	var l Lab
-	err := row.Scan(&l.ID, &l.Name, &l.Topic, &l.CreatedAt, &l.UpdatedAt, &l.Sources, &l.Pages)
+	err := row.Scan(&l.ID, &l.Name, &l.Topic, &l.CreatedAt, &l.UpdatedAt, &l.Sources, &l.Pages, &l.SetAside)
 
 	return l, err
 }
@@ -208,8 +213,9 @@ func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID int64, limit i
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT p.url, coalesce(p.title, ''), coalesce(p.status, 0), p.fetched_at
-		FROM pages p
+		SELECT p.url, coalesce(p.title, ''), coalesce(p.status, 0), p.fetched_at,
+		       r.decision, coalesce(r.reasons, '{}'), coalesce(r.summary, ''), coalesce(r.unreviewed, false)
+		FROM pages p LEFT JOIN page_reviews r ON r.url = p.url
 		WHERE p.id IN (SELECT sp.page_id FROM sources s JOIN source_pages sp ON sp.source_id = s.id WHERE s.lab_id = $1)
 		ORDER BY p.fetched_at DESC NULLS LAST, p.url
 		LIMIT $2`, labID, limit)
@@ -218,8 +224,17 @@ func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID int64, limit i
 	}
 
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Page, error) {
-		var p Page
-		err := row.Scan(&p.URL, &p.Title, &p.Status, &p.FetchedAt)
+		var (
+			p        Page
+			decision *string
+			review   PageReview
+		)
+
+		err := row.Scan(&p.URL, &p.Title, &p.Status, &p.FetchedAt, &decision, &review.Reasons, &review.Summary, &review.Unreviewed)
+		if decision != nil {
+			review.Decision = *decision
+			p.Review = &review
+		}
 
 		return p, err
 	})

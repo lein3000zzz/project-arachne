@@ -19,8 +19,31 @@ type openAIClient struct {
 }
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+type openAIToolCall struct {
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
+	Function openAIFunction `json:"function"`
+}
+
+// Arguments is a JSON document inside a string, as the protocol has it.
+type openAIFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type openAITool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		Parameters  json.RawMessage `json:"parameters"`
+	} `json:"function"`
 }
 
 type openAIRequest struct {
@@ -34,6 +57,7 @@ type openAIRequest struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options"`
 	ResponseFormat *openAIResponseFormat `json:"response_format,omitempty"`
+	Tools          []openAITool          `json:"tools,omitempty"`
 }
 
 type openAIResponseFormat struct {
@@ -43,7 +67,12 @@ type openAIResponseFormat struct {
 type openAIChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int            `json:"index"`
+				ID       string         `json:"id"`
+				Function openAIFunction `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -75,7 +104,21 @@ func (c *openAIClient) Stream(ctx context.Context, req Request, onDelta func(str
 	}
 
 	for _, m := range req.Messages {
-		body.Messages = append(body.Messages, openAIMessage{Role: string(m.Role), Content: m.Content})
+		msg := openAIMessage{Role: string(m.Role), Content: m.Content, ToolCallID: m.ToolCallID}
+
+		for _, call := range m.ToolCalls {
+			msg.ToolCalls = append(msg.ToolCalls, openAIToolCall{
+				ID: call.ID, Type: "function", Function: openAIFunction{Name: call.Name, Arguments: string(arguments(call.Arguments))},
+			})
+		}
+
+		body.Messages = append(body.Messages, msg)
+	}
+
+	for _, tool := range req.Tools {
+		t := openAITool{Type: "function"}
+		t.Function.Name, t.Function.Description, t.Function.Parameters = tool.Name, tool.Description, tool.Parameters
+		body.Tools = append(body.Tools, t)
 	}
 
 	payload, err := json.Marshal(body)
@@ -116,6 +159,7 @@ func (c *openAIClient) attempt(ctx context.Context, payload []byte, onDelta func
 	var (
 		resp     Response
 		text     strings.Builder
+		calls    toolCalls
 		streamed bool
 		finished bool
 	)
@@ -144,6 +188,10 @@ func (c *openAIClient) attempt(ctx context.Context, payload []byte, onDelta func
 				resp.StopReason = *choice.FinishReason
 			}
 
+			for _, delta := range choice.Delta.ToolCalls {
+				calls.add(delta.Index, delta.ID, delta.Function.Name, delta.Function.Arguments)
+			}
+
 			if choice.Delta.Content == "" {
 				continue
 			}
@@ -160,6 +208,7 @@ func (c *openAIClient) attempt(ctx context.Context, payload []byte, onDelta func
 	})
 
 	resp.Text = text.String()
+	resp.ToolCalls = calls.done()
 
 	if err == nil && !finished {
 		err = fmt.Errorf("%w: the stream ended before the reply did", ErrRequest)

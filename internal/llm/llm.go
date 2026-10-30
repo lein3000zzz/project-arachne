@@ -5,6 +5,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -28,11 +29,29 @@ type Role string
 const (
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	// The result of a tool call, answering the call named by ToolCallID.
+	RoleTool Role = "tool"
 )
 
 type Message struct {
 	Role    Role
 	Content string
+	// The calls an assistant turn made, sent back with it as they came.
+	ToolCalls  []ToolCall
+	ToolCallID string
+}
+
+// Tool is a function the model may call. Parameters is a JSON Schema object.
+type Tool struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
+}
+
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments json.RawMessage
 }
 
 type Request struct {
@@ -45,7 +64,8 @@ type Request struct {
 	// Asks for a single JSON object where the protocol can enforce it (OpenAI's
 	// JSON mode). Anthropic's cannot: the prompt must ask, and the caller parse
 	// leniently.
-	JSON bool
+	JSON  bool
+	Tools []Tool
 }
 
 type Usage struct {
@@ -55,6 +75,7 @@ type Usage struct {
 
 type Response struct {
 	Text       string
+	ToolCalls  []ToolCall
 	StopReason string
 	Usage      Usage
 }

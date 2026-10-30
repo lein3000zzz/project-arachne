@@ -145,9 +145,26 @@ func TestSourcesAndTheirPages(t *testing.T) {
 		t.Errorf("urls with another user's lab among them: %v", err)
 	}
 
+	exec(t, pool, `INSERT INTO page_reviews (url, content_hash, decision, reasons, summary, model, tool_calls, seconds)
+		VALUES ('https://go.dev/blog/', 'h', 'skip', '{navigation_only}', 'A list of posts.', 'm', 1, 2.5)`)
+
 	pages, err := store.Pages(ctx, lein, golab.ID, 10)
 	if err != nil || len(pages) != 4 {
 		t.Errorf("pages, failed fetches included: %+v, %v", pages, err)
+	}
+
+	reviewed := 0
+	for _, p := range pages {
+		if p.Review != nil {
+			reviewed++
+			if p.URL != "https://go.dev/blog/" || p.Review.Decision != "skip" || p.Review.Reasons[0] != "navigation_only" || p.Review.Summary != "A list of posts." {
+				t.Errorf("review = %+v", p.Review)
+			}
+		}
+	}
+
+	if got, _ := store.Get(ctx, lein, golab.ID); reviewed != 1 || got.SetAside != 1 {
+		t.Errorf("%d pages with a review, %d set aside", reviewed, got.SetAside)
 	}
 
 	if err := store.RemoveSource(ctx, other, golab.ID, doc.ID); !errors.Is(err, ErrNotFound) {

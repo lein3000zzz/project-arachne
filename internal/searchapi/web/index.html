@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>arachne</title>
-<meta name="description" content="Short cited answers from your labs and the crawled web">
+<meta name="description" content="Search with a cited answer, from your labs and the crawled web">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script>
 // Blocking, before first paint: applied any later, the wrong theme flashes.
@@ -29,28 +29,70 @@
 </header>
 
 <nav class="tabs" role="tablist" aria-label="Views">
-  <button type="button" class="tab" role="tab" id="tab-answer" data-tab="answer" aria-controls="answer" aria-selected="true">Answer</button>
-  <button type="button" class="tab" role="tab" id="tab-search" data-tab="search" aria-controls="search" aria-selected="false">Search</button>
+  <button type="button" class="tab" role="tab" id="tab-search" data-tab="search" aria-controls="search" aria-selected="true">Search</button>
   <button type="button" class="tab" role="tab" id="tab-labs" data-tab="labs" aria-controls="labs" aria-selected="false">Labs</button>
 </nav>
 
 <main id="main">
 
-<div id="answer" role="tabpanel" aria-labelledby="tab-answer">
+<div id="search" role="tabpanel" aria-labelledby="tab-search">
   <section class="hero">
     <p class="eyebrow">@arachne</p>
-    <h1>Ask.</h1>
+    <h1>Search.</h1>
 
-    <form id="askForm" class="query" role="search">
+    <form id="searchForm" class="query" role="search">
       <div class="field">
-        <label for="askQ">Question</label>
-        <input id="askQ" type="search" placeholder="how do goroutines communicate?" autocomplete="off" autofocus required>
+        <label for="q">Query</label>
+        <input id="q" type="search" placeholder="how do goroutines communicate?" autocomplete="off" autofocus required>
       </div>
-      <button class="action primary" id="askGo">Ask</button>
+      <button class="action primary" id="go">Search</button>
     </form>
-    <div class="ticks" id="askTicks"></div>
+    <div class="ticks" id="ticks"></div>
 
-    <div class="badge" id="askBadge" aria-live="polite" hidden>
+    <details class="options" id="options">
+      <summary>Options</summary>
+      <div class="controls">
+        <div class="control">
+          <span class="control-label" id="l-answer">Answer</span>
+          <div class="segmented" data-name="answer" aria-labelledby="l-answer">
+            <button type="button" class="seg" data-value="on" aria-pressed="true">on</button>
+            <button type="button" class="seg" data-value="off" aria-pressed="false">off</button>
+          </div>
+        </div>
+        <div class="control">
+          <span class="control-label" id="l-mode">Mode</span>
+          <div class="segmented" data-name="mode" aria-labelledby="l-mode">
+            <button type="button" class="seg" data-value="hybrid" aria-pressed="true">hybrid</button>
+            <button type="button" class="seg" data-value="dense" aria-pressed="false">dense</button>
+            <button type="button" class="seg" data-value="bm25" aria-pressed="false">bm25</button>
+          </div>
+        </div>
+        <div class="control">
+          <span class="control-label" id="l-rerank">Rerank</span>
+          <div class="segmented" data-name="rerank" aria-labelledby="l-rerank">
+            <button type="button" class="seg" data-value="on" aria-pressed="true">on</button>
+            <button type="button" class="seg" data-value="off" aria-pressed="false">off</button>
+          </div>
+        </div>
+        <div class="control">
+          <span class="control-label" id="l-pagerank">PageRank</span>
+          <div class="segmented" data-name="pagerank" aria-labelledby="l-pagerank">
+            <button type="button" class="seg" data-value="" aria-pressed="true">auto</button>
+            <button type="button" class="seg" data-value="0" aria-pressed="false">0</button>
+            <button type="button" class="seg" data-value="0.25" aria-pressed="false">.25</button>
+            <button type="button" class="seg" data-value="0.5" aria-pressed="false">.5</button>
+            <button type="button" class="seg" data-value="1" aria-pressed="false">1</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="host">Site</label>
+          <input id="host" type="text" placeholder="any" autocomplete="off">
+        </div>
+      </div>
+      <p class="note">With the answer off, ticked labs narrow the search to their pages.</p>
+    </details>
+
+    <div class="badge" id="badge" aria-live="polite" hidden>
       <span class="badge-dot" aria-hidden="true">&#9679;</span>
       <span class="badge-text"></span>
     </div>
@@ -60,69 +102,35 @@
     <h2>Answer</h2>
     <div id="answerText" class="answer"></div>
     <p id="answerMeta" class="note answer-meta"></p>
-  </section>
-
-  <section id="sourcesBox" hidden>
-    <h2>Sources</h2>
-    <div id="sources"></div>
-  </section>
-</div>
-
-<div id="search" role="tabpanel" aria-labelledby="tab-search" hidden>
-  <section class="hero">
-    <p class="eyebrow">@arachne</p>
-    <h1>Search.</h1>
-
-    <form id="searchForm" class="query" role="search">
-      <div class="field">
-        <label for="searchQ">Query</label>
-        <input id="searchQ" type="search" placeholder="goroutine leak" autocomplete="off" required>
-      </div>
-      <button class="action primary" id="searchGo">Search</button>
-    </form>
-    <div class="ticks" id="searchTicks"></div>
-
-    <div class="controls">
-      <div class="control">
-        <span class="control-label" id="l-mode">Mode</span>
-        <div class="segmented" data-name="mode" aria-labelledby="l-mode">
-          <button type="button" class="seg" data-value="hybrid" aria-pressed="true">hybrid</button>
-          <button type="button" class="seg" data-value="dense" aria-pressed="false">dense</button>
-          <button type="button" class="seg" data-value="bm25" aria-pressed="false">bm25</button>
-        </div>
-      </div>
-      <div class="control">
-        <span class="control-label" id="l-rerank">Rerank</span>
-        <div class="segmented" data-name="rerank" aria-labelledby="l-rerank">
-          <button type="button" class="seg" data-value="on" aria-pressed="true">on</button>
-          <button type="button" class="seg" data-value="off" aria-pressed="false">off</button>
-        </div>
-      </div>
-      <div class="control">
-        <span class="control-label" id="l-pagerank">PageRank</span>
-        <div class="segmented" data-name="pagerank" aria-labelledby="l-pagerank">
-          <button type="button" class="seg" data-value="" aria-pressed="true">auto</button>
-          <button type="button" class="seg" data-value="0" aria-pressed="false">0</button>
-          <button type="button" class="seg" data-value="0.25" aria-pressed="false">.25</button>
-          <button type="button" class="seg" data-value="0.5" aria-pressed="false">.5</button>
-          <button type="button" class="seg" data-value="1" aria-pressed="false">1</button>
-        </div>
-      </div>
-      <div class="field">
-        <label for="host">Site</label>
-        <input id="host" type="text" placeholder="any" autocomplete="off">
-      </div>
-    </div>
-
-    <div class="badge" id="searchBadge" aria-live="polite" hidden>
-      <span class="badge-dot" aria-hidden="true">&#9679;</span>
-      <span class="badge-text"></span>
-    </div>
+    <ol class="read" id="read"></ol>
   </section>
 
   <section id="resultsBox" hidden>
     <h2>Results</h2>
     <div id="results"></div>
+  </section>
+</div>
+
+<div id="labs" role="tabpanel" aria-labelledby="tab-labs" hidden>
+  <section class="hero">
+    <p class="eyebrow">@arachne</p>
+    <h1>Labs.</h1>
+    <p class="lede">Topics the model builds from your links. Tick them when you search.</p>
+
+    <form id="planForm" class="ask">
+      <div class="field">
+        <label for="planText">New lab</label>
+        <textarea id="planText" placeholder="Go concurrency, from go.dev/doc/effective_go and go.dev/ref/mem" required></textarea>
+      </div>
+      <button class="action primary" id="planGo">Plan</button>
+    </form>
+    <p class="note" id="planNote" aria-live="polite"></p>
+    <div id="planCard"></div>
+  </section>
+
+  <section>
+    <h2>Your labs</h2>
+    <div class="cards" id="labCards"></div>
   </section>
 
   <section id="crawl" hidden>
@@ -159,29 +167,6 @@
   </section>
 </div>
 
-<div id="labs" role="tabpanel" aria-labelledby="tab-labs" hidden>
-  <section class="hero">
-    <p class="eyebrow">@arachne</p>
-    <h1>Labs.</h1>
-    <p class="lede">Topics the model builds from your links. Tick them in Answer.</p>
-
-    <form id="planForm" class="ask">
-      <div class="field">
-        <label for="planText">New lab</label>
-        <textarea id="planText" placeholder="Go concurrency, from go.dev/doc/effective_go and go.dev/ref/mem" required></textarea>
-      </div>
-      <button class="action primary" id="planGo">Plan</button>
-    </form>
-    <p class="note" id="planNote" aria-live="polite"></p>
-    <div id="planCard"></div>
-  </section>
-
-  <section>
-    <h2>Your labs</h2>
-    <div class="cards" id="labCards"></div>
-  </section>
-</div>
-
 </main>
 
 <footer class="footer">
@@ -197,36 +182,37 @@
 <script src="/static/theme.js"></script>
 <script src="/static/common.js"></script>
 <script>
+const RESULTS = 10;
 let stream = null;
 let labs = [];
-let current = "answer";
+let current = "search";
 const ticked = new Set();
 
 const fmt = (x, digits) => Number(x).toPrecision(digits);
 
-function badge(id, text, state) {
-  const b = $(id);
+function badge(text, state) {
+  const b = $("badge");
   b.hidden = false;
   b.className = "badge" + (state ? " " + state : "");
   b.querySelector(".badge-text").textContent = text;
 }
 
 // ---- tabs, and the URL that names the view, so it can be shared ----
-const tabNames = ["answer", "search", "labs"];
+const tabNames = ["search", "labs"];
 
 function showTab(name) {
-  current = tabNames.includes(name) ? name : "answer";
+  current = tabNames.includes(name) ? name : "search";
   for (const t of tabNames) {
     $(t).hidden = t !== current;
     $("tab-" + t).setAttribute("aria-selected", String(t === current));
   }
-  if (current === "search") loadRuns();
+  if (current === "labs") loadRuns();
 }
 
 function syncURL(extra) {
   const p = new URLSearchParams(extra || {});
-  if (current !== "answer") p.set("tab", current);
-  if (current !== "labs" && ticked.size) p.set("labs", [...ticked].join(","));
+  if (current !== "search") p.set("tab", current);
+  else if (ticked.size) p.set("labs", [...ticked].join(","));
   history.replaceState(null, "", p.toString() ? "?" + p : location.pathname);
 }
 
@@ -234,25 +220,19 @@ document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => { showTab(button.dataset.tab); syncURL(); });
 });
 
-// ---- labs: ticks in Answer and Search, cards in Labs ----
-function setTick(id, on) {
-  on ? ticked.add(id) : ticked.delete(id);
-  document.querySelectorAll(`.tick input[value="${id}"]`).forEach((box) => { box.checked = on; });
-}
-
+// ---- labs: ticks under the search box, cards in Labs ----
 function renderTicks() {
-  for (const box of [$("askTicks"), $("searchTicks")]) {
-    if (labs.length === 0) {
-      box.replaceChildren(el("span", { class: "note" }, "No labs yet. ",
-        el("a", { href: "?tab=labs", onclick: (e) => { e.preventDefault(); showTab("labs"); syncURL(); } }, "Make one"), "."));
-      continue;
-    }
-    box.replaceChildren(el("span", { class: "control-label" }, "Labs"),
-      ...labs.map((lab) => el("label", { class: "tick", title: lab.topic || null },
-        el("input", { type: "checkbox", value: String(lab.id), checked: ticked.has(lab.id),
-          onchange: (e) => setTick(lab.id, e.target.checked) }),
-        lab.name)));
+  const box = $("ticks");
+  if (labs.length === 0) {
+    box.replaceChildren(el("span", { class: "note" }, "No labs yet. ",
+      el("a", { href: "?tab=labs", onclick: (e) => { e.preventDefault(); showTab("labs"); syncURL(); } }, "Make one"), "."));
+    return;
   }
+  box.replaceChildren(el("span", { class: "control-label" }, "Labs"),
+    ...labs.map((lab) => el("label", { class: "tick", title: lab.topic || null },
+      el("input", { type: "checkbox", value: String(lab.id), checked: ticked.has(lab.id),
+        onchange: (e) => { e.target.checked ? ticked.add(lab.id) : ticked.delete(lab.id); } }),
+      lab.name)));
 }
 
 function renderCards() {
@@ -263,7 +243,8 @@ function renderCards() {
   $("labCards").replaceChildren(...labs.map((lab) => el("a", { class: "card", href: "/labs/" + lab.id },
     el("h3", {}, lab.name),
     lab.topic ? el("p", { class: "note" }, lab.topic) : null,
-    el("p", { class: "note" }, `${lab.sources} sources · ${lab.pages} pages · ${ago(lab.updated_at)}`))));
+    el("p", { class: "note" }, `${lab.sources} sources · ${lab.pages} pages` +
+      (lab.set_aside ? ` · ${lab.set_aside} set aside` : "") + ` · ${ago(lab.updated_at)}`))));
 }
 
 async function loadLabs() {
@@ -278,7 +259,7 @@ async function loadLabs() {
   renderCards();
 }
 
-// ---- results and sources ----
+// ---- results ----
 function signals(r) {
   const chip = (...parts) => el("li", { class: "chip" }, ...parts);
   const out = [];
@@ -290,15 +271,26 @@ function signals(r) {
   return el("ul", { class: "chips" }, ...out);
 }
 
-function row(r, n, id, tag) {
-  return el("article", { class: "row", id },
-    el("p", { class: "row-when" }, el("span", { class: "n" }, String(n).padStart(2, "0")), r.host || ""),
+function renderResults(list) {
+  $("resultsBox").hidden = list.length === 0;
+  $("results").replaceChildren(...list.map((r, i) => el("article", { class: "row" },
+    el("p", { class: "row-when" }, el("span", { class: "n" }, String(i + 1).padStart(2, "0")), r.host || ""),
     el("div", {},
       el("h3", {}, el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url),
-        tag ? el("span", { class: "tag" + (tag === "lab" ? " lab" : "") }, tag) : null),
+        r.source ? el("span", { class: "tag source" }, "source " + r.source) : null,
+        r.in_lab ? el("span", { class: "tag lab" }, "lab") : null),
       el("p", { class: "result-url" }, r.url),
       el("p", { class: "snippet" }, r.snippet || ""),
-      signals(r)));
+      signals(r)))));
+}
+
+function renderRead(sources, withLabs) {
+  $("read").replaceChildren(...sources.map((s) => el("li", { id: "src-" + s.n },
+    el("span", { class: "n" }, "[" + s.n + "]"),
+    el("span", {},
+      el("a", { href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.title || s.url),
+      el("span", { class: "host" }, s.host || ""),
+      withLabs ? el("span", { class: "tag" + (s.in_lab ? " lab" : "") }, s.in_lab ? "lab" : "shared") : null))));
 }
 
 // The answer is plain text: only [n] citations become links.
@@ -325,36 +317,51 @@ function flash(n) {
 
 const scopeNames = { labs: "from your labs", "labs+shared": "labs and the shared base", shared: "from the shared base" };
 
-// ---- answer ----
-function answer(q) {
+function params(q) {
+  const p = new URLSearchParams({ q });
+  if (segValue("mode") !== "hybrid") p.set("mode", segValue("mode"));
+  if ($("host").value.trim()) p.set("host", $("host").value.trim());
+  // "on" leaves the server's default, so a stack without a reranker still works.
+  if (segValue("rerank") === "off") p.set("rerank", "false");
+  if (segValue("pagerank") !== "") p.set("pagerank", segValue("pagerank"));
+  return p;
+}
+
+// ---- search with an answer: one stream, results first ----
+function searchAndAnswer(q) {
   if (stream) stream.close();
   const started = performance.now();
   const withLabs = ticked.size > 0;
   let text = "", count = 0, first = null;
 
-  $("askGo").disabled = true;
-  $("answerBox").hidden = false;
-  $("sourcesBox").hidden = true;
+  $("go").disabled = true;
+  $("answerBox").hidden = true;
+  $("resultsBox").hidden = true;
   $("answerText").replaceChildren();
   $("answerMeta").textContent = "";
-  badge("askBadge", "searching…", "busy");
+  $("read").replaceChildren();
+  badge("searching…", "busy");
 
-  const p = new URLSearchParams({ q });
+  const p = params(q);
+  p.set("results", String(RESULTS));
   if (withLabs) p.set("labs", [...ticked].join(","));
   stream = new EventSource("/answer/stream?" + p);
+
+  stream.addEventListener("results", (e) => renderResults(JSON.parse(e.data) || []));
 
   stream.addEventListener("sources", (e) => {
     const list = JSON.parse(e.data) || [];
     count = list.length;
-    $("sourcesBox").hidden = count === 0;
-    $("sources").replaceChildren(...list.map((s) => row(s, s.n, "src-" + s.n, withLabs ? (s.in_lab ? "lab" : "shared") : null)));
-    if (count) badge("askBadge", `${count} sources · reading…`, "busy");
+    if (!count) return;
+    $("answerBox").hidden = false;
+    renderRead(list, withLabs);
+    badge(`${count} sources · reading…`, "busy");
   });
 
   stream.addEventListener("delta", (e) => {
     if (first === null) {
       first = performance.now();
-      badge("askBadge", "writing…", "busy");
+      badge("writing…", "busy");
     }
     text += JSON.parse(e.data).text;
     renderAnswer(text, count);
@@ -368,8 +375,8 @@ function answer(q) {
     $("answerMeta").textContent = (done.weak ? "nothing clearly relevant found · " : "") +
       `${scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited · ` +
       `${done.usage.output_tokens} tokens · first word ${wait} s`;
-    badge("askBadge", `${done.model} · ${total} s`);
-    $("askGo").disabled = false;
+    badge(`${done.model} · ${total} s`);
+    $("go").disabled = false;
   });
 
   stream.addEventListener("error", (e) => {
@@ -378,54 +385,43 @@ function answer(q) {
     try { message = JSON.parse(e.data).error; } catch (_) {}
     // EventSource hides the status: a refused stream looks like a lost one.
     if (!e.data) call("/api/me").catch(() => {});
-    $("answerBox").hidden = true;
-    badge("askBadge", "no answer: " + message, "failed");
-    $("askGo").disabled = false;
+    if (!text) $("answerBox").hidden = true;
+    badge(text ? "the answer broke off: " + message : "no answer: " + message, "failed");
+    $("go").disabled = false;
   });
 }
 
-$("askForm").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const q = $("askQ").value.trim();
-  if (!q) return;
-  syncURL({ q });
-  answer(q);
-});
-
-// ---- search ----
-function searchParams(q) {
-  const p = new URLSearchParams({ q, mode: segValue("mode") });
-  if ($("host").value.trim()) p.set("host", $("host").value.trim());
-  // "on" leaves the server's default, so a stack without a reranker still works.
-  if (segValue("rerank") === "off") p.set("rerank", "false");
-  if (segValue("pagerank") !== "") p.set("pagerank", segValue("pagerank"));
-  return p;
+// ---- search alone: ticked labs narrow it ----
+async function searchOnly(q) {
+  if (stream) stream.close();
+  $("go").disabled = true;
+  $("answerBox").hidden = true;
+  badge("searching…", "busy");
+  try {
+    const p = params(q);
+    if (ticked.size) p.set("labs", [...ticked].join(","));
+    p.set("limit", String(RESULTS));
+    const body = await api("/search?" + p);
+    renderResults(body.results);
+    badge(body.results.length ? `${body.results.length} results · ${body.took_ms} ms` : "nothing found");
+  } catch (err) {
+    badge("search failed: " + err.message, "failed");
+  } finally {
+    $("go").disabled = false;
+  }
 }
 
-async function search(q) {
-  $("searchGo").disabled = true;
-  badge("searchBadge", "searching…", "busy");
-  try {
-    const p = searchParams(q);
-    if (ticked.size) p.set("labs", [...ticked].join(","));
-    p.set("limit", "10");
-    const body = await api("/search?" + p);
-    $("resultsBox").hidden = body.results.length === 0;
-    $("results").replaceChildren(...body.results.map((r, i) => row(r, i + 1, null, null)));
-    badge("searchBadge", body.results.length ? `${body.results.length} results · ${body.took_ms} ms` : "nothing found");
-  } catch (err) {
-    badge("searchBadge", "search failed: " + err.message, "failed");
-  } finally {
-    $("searchGo").disabled = false;
-  }
+function run(q) {
+  const p = params(q);
+  if (segValue("answer") === "off") p.set("answer", "0");
+  syncURL(p);
+  segValue("answer") === "off" ? searchOnly(q) : searchAndAnswer(q);
 }
 
 $("searchForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  const q = $("searchQ").value.trim();
-  if (!q) return;
-  syncURL(searchParams(q));
-  search(q);
+  const q = $("q").value.trim();
+  if (q) run(q);
 });
 
 // ---- crawls of the shared base ----
@@ -441,6 +437,7 @@ function renderRuns(list) {
     el("td", { "data-label": "status" }, stateOf(run.status)),
     el("td", { class: "num", "data-label": "pages" }, run.pages + " / " + run.max_links),
     el("td", { class: "num", "data-label": "searchable" }, run.docs_indexed + " / " + run.docs_queued,
+      run.docs_rejected ? el("div", { class: "note" }, run.docs_rejected + " set aside") : null,
       run.docs_failed ? el("div", { class: "note" }, run.docs_failed + " failed") : null),
     el("td", { class: "num", "data-label": "submitted" }, ago(run.submitted_at)))));
 }
@@ -453,9 +450,9 @@ async function loadRuns() {
     const body = await res.json();
     $("crawl").hidden = false;
     renderRuns(body.runs);
-    if (current === "search" && body.runs.some((r) => active(r.status))) polling = setTimeout(loadRuns, 3000);
+    if (current === "labs" && body.runs.some((r) => active(r.status))) polling = setTimeout(loadRuns, 3000);
   } catch (_) {
-    if (current === "search") polling = setTimeout(loadRuns, 10000);
+    if (current === "labs") polling = setTimeout(loadRuns, 10000);
   }
 }
 
@@ -521,28 +518,25 @@ $("planForm").addEventListener("submit", async (e) => {
   }
 });
 
-// ---- start: the URL may name a tab, ticked labs and a question ----
+// ---- start: the URL may name a tab, ticked labs and a query ----
 {
   const p = new URLSearchParams(location.search);
   for (const id of (p.get("labs") || "").split(",")) if (/^\d+$/.test(id)) ticked.add(Number(id));
 
-  let tab = p.get("tab") || "answer";
-  if (p.get("answer") === "0") tab = "search";
-  showTab(tab);
+  showTab(p.get("tab") || "search");
+
+  if (p.get("mode")) setSeg("mode", p.get("mode"));
+  if (p.get("host")) $("host").value = p.get("host");
+  if (p.get("rerank") === "false") setSeg("rerank", "off");
+  if (p.get("pagerank")) setSeg("pagerank", p.get("pagerank"));
+  if (p.get("answer") === "0") setSeg("answer", "off");
+  if (p.get("mode") || p.get("host") || p.get("rerank") || p.get("pagerank") || p.get("answer")) $("options").open = true;
 
   loadLabs().then(() => {
     const q = p.get("q");
-    if (!q) return;
-    if (current === "search") {
-      $("searchQ").value = q;
-      if (p.get("mode")) setSeg("mode", p.get("mode"));
-      if (p.get("host")) $("host").value = p.get("host");
-      if (p.get("rerank") === "false") setSeg("rerank", "off");
-      if (p.get("pagerank")) setSeg("pagerank", p.get("pagerank"));
-      search(q);
-    } else if (current === "answer") {
-      $("askQ").value = q;
-      answer(q);
+    if (q && current === "search") {
+      $("q").value = q;
+      run(q);
     }
   });
 }

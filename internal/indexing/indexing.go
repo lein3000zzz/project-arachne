@@ -22,6 +22,11 @@ type ChunkSink interface {
 	Shutdown(ctx context.Context) error
 }
 
+// Gate reviews a new or changed document before it is indexed.
+type Gate interface {
+	Admit(ctx context.Context, doc *documents.Document) (bool, error)
+}
+
 type HashStore interface {
 	Get(ctx context.Context, url string) (string, error)
 	Set(ctx context.Context, url, hash string) error

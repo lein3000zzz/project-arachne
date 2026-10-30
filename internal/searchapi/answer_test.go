@@ -24,6 +24,10 @@ func (f *fakeAnswerer) Answer(_ context.Context, req answer.Request, events answ
 	f.got = req
 
 	sources := []answer.Source{{N: 1, Result: retrieval.Result{URL: "https://go.dev/", Title: "Go"}}}
+	if events.Results != nil && req.Results > 0 {
+		_ = events.Results([]answer.Found{{Source: 1, Result: sources[0].Result}})
+	}
+
 	if events.Sources != nil {
 		_ = events.Sources(sources)
 	}
@@ -88,6 +92,17 @@ func TestAnswerStream(t *testing.T) {
 
 	if strings.Join(events, ",") != "sources,delta,delta,delta,done" {
 		t.Errorf("events = %v\n%s", events, body)
+	}
+
+	rec = serveAnswer(&fakeAnswerer{}, "/answer/stream?q=goroutines&results=10")
+	if body := rec.Body.String(); !strings.HasPrefix(body, "event: results\ndata: [{") || !strings.Contains(body, `"source":1`) {
+		t.Errorf("with results asked for, they come first:\n%s", body)
+	}
+
+	for _, bad := range []string{"results=-1", "results=51", "results=ten"} {
+		if rec := serveAnswer(&fakeAnswerer{}, "/answer/stream?q=x&"+bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d", bad, rec.Code)
+		}
 	}
 
 	if !strings.Contains(body, `data: {"text":"channels\n"}`) {

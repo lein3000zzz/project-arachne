@@ -40,11 +40,13 @@ type Run struct {
 	// Pages fetched whose latest crawl was this run.
 	Pages     int        `json:"pages"`
 	LastFetch *time.Time `json:"last_fetch,omitempty"`
-	// Documents handed to the indexer, and how many it indexed or failed.
-	DocsQueued  int        `json:"docs_queued"`
-	DocsIndexed int        `json:"docs_indexed"`
-	DocsFailed  int        `json:"docs_failed"`
-	IndexedAt   *time.Time `json:"indexed_at,omitempty"`
+	// Documents handed to the indexer, and how many it indexed, failed, or
+	// turned down on review.
+	DocsQueued   int        `json:"docs_queued"`
+	DocsIndexed  int        `json:"docs_indexed"`
+	DocsFailed   int        `json:"docs_failed"`
+	DocsRejected int        `json:"docs_rejected"`
+	IndexedAt    *time.Time `json:"indexed_at,omitempty"`
 	// PageRank has been recomputed since the crawl finished.
 	Ranked bool `json:"ranked"`
 	// The lab source the run crawled for, if any.
@@ -119,6 +121,10 @@ func (s *Store) Done(ctx context.Context, runID string, failed bool) {
 	s.count(ctx, runID, `UPDATE runs SET `+column+` = `+column+` + 1, indexed_at = now() WHERE id = $1`)
 }
 
+func (s *Store) Rejected(ctx context.Context, runID string) {
+	s.count(ctx, runID, `UPDATE runs SET docs_rejected = docs_rejected + 1, indexed_at = now() WHERE id = $1`)
+}
+
 func (s *Store) count(ctx context.Context, runID, statement string) {
 	ctx, cancel := context.WithTimeout(ctx, countTimeout)
 	defer cancel()
@@ -131,7 +137,7 @@ func (s *Store) count(ctx context.Context, runID, statement string) {
 const selectRuns = `
 	SELECT r.id, r.start_url, r.scope, r.max_depth, r.max_links, r.submitted_at, r.started_at, r.finished_at, r.note,
 	       count(p.id) FILTER (WHERE p.fetched_at IS NOT NULL), max(p.fetched_at),
-	       r.docs_queued, r.docs_indexed, r.docs_failed, r.indexed_at,
+	       r.docs_queued, r.docs_indexed, r.docs_failed, r.docs_rejected, r.indexed_at,
 	       coalesce((SELECT max(computed_at) FROM rank_runs) >= r.finished_at, false),
 	       coalesce(r.source_id, 0)
 	FROM runs r LEFT JOIN pages p ON p.last_run_id = r.id`
@@ -180,7 +186,7 @@ func scanRun(row pgx.CollectableRow) (Run, error) {
 
 	err := row.Scan(&r.ID, &r.StartURL, &r.Scope, &r.MaxDepth, &r.MaxLinks, &r.SubmittedAt,
 		&r.StartedAt, &r.FinishedAt, &r.Note, &r.Pages, &r.LastFetch,
-		&r.DocsQueued, &r.DocsIndexed, &r.DocsFailed, &r.IndexedAt, &r.Ranked, &r.SourceID)
+		&r.DocsQueued, &r.DocsIndexed, &r.DocsFailed, &r.DocsRejected, &r.IndexedAt, &r.Ranked, &r.SourceID)
 
 	return r, err
 }
@@ -189,7 +195,7 @@ func (s *Store) status(r Run, now time.Time) Status {
 	switch {
 	case r.FinishedAt != nil && r.Note != "":
 		return StatusDropped
-	case r.FinishedAt != nil && r.DocsIndexed+r.DocsFailed < r.DocsQueued:
+	case r.FinishedAt != nil && r.DocsIndexed+r.DocsFailed+r.DocsRejected < r.DocsQueued:
 		// Indexing that stopped moving - documents abandoned at a shutdown - would
 		// otherwise keep the run "indexing" for good.
 		last := *r.FinishedAt

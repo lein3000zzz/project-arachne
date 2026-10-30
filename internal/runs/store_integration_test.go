@@ -97,10 +97,10 @@ func TestStoreCountsIndexing(t *testing.T) {
 		t.Errorf("run = %+v", got)
 	}
 
-	store.Done(ctx, "r1", false)
+	store.Rejected(ctx, "r1")
 
-	if got, _ = store.Get(ctx, "r1"); got.Status != StatusFinished {
-		t.Errorf("all documents through: %s", got.Status)
+	if got, _ = store.Get(ctx, "r1"); got.Status != StatusFinished || got.DocsRejected != 1 || got.DocsIndexed != 1 {
+		t.Errorf("all documents through, the last turned down: %+v", got)
 	}
 
 	if got.Ranked {

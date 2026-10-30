@@ -71,12 +71,18 @@ func newAsync(inner documents.Sink, workers, queue int, timeout time.Duration) *
 }
 
 type fakeProgress struct {
-	mu                     sync.Mutex
-	queued, indexed, fails map[string]int
+	mu                               sync.Mutex
+	queued, indexed, fails, rejected map[string]int
 }
 
 func newProgress() *fakeProgress {
-	return &fakeProgress{queued: map[string]int{}, indexed: map[string]int{}, fails: map[string]int{}}
+	return &fakeProgress{queued: map[string]int{}, indexed: map[string]int{}, fails: map[string]int{}, rejected: map[string]int{}}
+}
+
+func (f *fakeProgress) Rejected(_ context.Context, runID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rejected[runID]++
 }
 
 func (f *fakeProgress) Queued(_ context.Context, runID string) {

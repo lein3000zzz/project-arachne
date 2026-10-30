@@ -18,9 +18,11 @@ type ChunkingSink struct {
 	chunker chunker.Chunker
 	hashes  HashStore
 	next    ChunkSink
+	gate    Gate
 
 	submitted atomic.Int64
 	unchanged atomic.Int64
+	rejected  atomic.Int64
 }
 
 func NewChunkingSink(logger *zap.SugaredLogger, c chunker.Chunker, hashes HashStore, next ChunkSink) *ChunkingSink {
@@ -30,6 +32,13 @@ func NewChunkingSink(logger *zap.SugaredLogger, c chunker.Chunker, hashes HashSt
 		hashes:  hashes,
 		next:    next,
 	}
+}
+
+// Gated makes every new or changed document with something to index pass the
+// gate first.
+func (s *ChunkingSink) Gated(gate Gate) *ChunkingSink {
+	s.gate = gate
+	return s
 }
 
 func (s *ChunkingSink) Submit(ctx context.Context, doc *documents.Document) error {
@@ -53,6 +62,19 @@ func (s *ChunkingSink) Submit(ctx context.Context, doc *documents.Document) erro
 
 	batch := &Batch{Document: doc, Hash: hash, Chunks: s.chunker.Chunk(doc)}
 
+	admitted := true
+
+	if s.gate != nil && len(batch.Chunks) > 0 {
+		if admitted, err = s.gate.Admit(ctx, doc); err != nil {
+			return fmt.Errorf("reviewing %s: %w", doc.URL, err)
+		}
+
+		// An empty batch: whatever an earlier version left in the index goes.
+		if !admitted {
+			batch.Chunks = nil
+		}
+	}
+
 	if err := s.next.Submit(ctx, batch); err != nil {
 		return fmt.Errorf("submitting chunks for %s: %w", doc.URL, err)
 	}
@@ -61,8 +83,14 @@ func (s *ChunkingSink) Submit(ctx context.Context, doc *documents.Document) erro
 
 	// Recorded only once the batch was accepted: a failed submit leaves no hash
 	// behind, so the next crawl of this page tries again.
+	// A rejected page is hashed too: unchanged, it is not reviewed again.
 	if err := s.hashes.Set(ctx, doc.URL, hash); err != nil {
 		s.logger.Warnw("failed to record document hash", "url", doc.URL, "err", err)
+	}
+
+	if !admitted {
+		s.rejected.Add(1)
+		return ErrRejected
 	}
 
 	return nil
@@ -72,6 +100,7 @@ func (s *ChunkingSink) Shutdown(ctx context.Context) error {
 	s.logger.Infow("chunking sink stopped",
 		"submitted", s.submitted.Load(),
 		"unchanged", s.unchanged.Load(),
+		"rejected", s.rejected.Load(),
 	)
 
 	return errors.Join(s.next.Shutdown(ctx), s.hashes.Shutdown(ctx))

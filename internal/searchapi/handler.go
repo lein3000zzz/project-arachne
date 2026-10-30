@@ -65,7 +65,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /api/me", signIn.api(signIn.me))
 	mux.Handle("POST /api/me/password", signIn.api(signIn.changePassword))
 
-	answers := &answerHandler{logger: logger, answerer: services.Answerer, labs: services.Labs, timeout: cfg.AnswerTimeout}
+	answers := &answerHandler{logger: logger, answerer: services.Answerer, labs: services.Labs, timeout: cfg.AnswerTimeout, maxResults: cfg.MaxLimit}
 	mux.Handle("GET /answer", signIn.api(answers.serveJSON))
 	mux.Handle("GET /answer/stream", signIn.api(answers.serveStream))
 

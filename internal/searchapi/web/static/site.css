@@ -289,3 +289,27 @@ section:last-of-type { border-bottom: 0; }
   .table.stack td.actions { padding-top: 0.5rem; }
   .table.stack td.actions .buttons { justify-content: flex-start; }
 }
+
+/* Search options, folded away: most searches never need them. */
+.options { margin: 0 0 1.4rem; }
+.options summary {
+  cursor: pointer; font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+  list-style: none; display: inline-flex; gap: 0.4rem; align-items: center;
+}
+.options summary::-webkit-details-marker { display: none; }
+.options summary::before { content: "+"; font-family: var(--mono); }
+.options[open] summary::before { content: "−"; }
+.options summary:hover { color: var(--fg); }
+.options .controls { margin: 1rem 0 0; }
+
+/* The sources the answer read, as compact numbered lines under it. */
+.read { list-style: none; margin: 1.2rem 0 0; padding: 0; display: grid; gap: 0.45rem; max-width: 72ch; }
+.read li { display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 0.4rem; font-size: 0.82rem; }
+.read .n { font-family: var(--nd); color: var(--muted); }
+.read a { overflow-wrap: anywhere; }
+.read .host { color: var(--muted); font-family: var(--mono); font-size: 0.75rem; margin-left: 0.4rem; }
+.read li.flash { background: var(--accent-soft); }
+.tag.source { border-color: var(--fg); color: var(--fg); }
+
+.pages .page-summary { color: var(--muted); font-family: var(--nd); font-size: 0.76rem; margin: 0.2rem 0 0 2.6rem; }
+.pages li.set-aside a { color: var(--muted); }

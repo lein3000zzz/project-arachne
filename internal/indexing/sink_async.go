@@ -29,6 +29,7 @@ const abortGrace = 2 * time.Second
 type Progress interface {
 	Queued(ctx context.Context, runID string)
 	Done(ctx context.Context, runID string, failed bool)
+	Rejected(ctx context.Context, runID string)
 }
 
 type AsyncSink struct {
@@ -133,6 +134,12 @@ func (s *AsyncSink) process(doc *documents.Document) {
 
 	switch {
 	case err == nil:
+	case errors.Is(err, ErrRejected):
+		if s.counted(doc) {
+			s.progress.Rejected(context.WithoutCancel(s.processCtx), doc.RunID)
+		}
+
+		return
 	case s.processCtx.Err() != nil:
 		s.abandoned.Add(1)
 		return

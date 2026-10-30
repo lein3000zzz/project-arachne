@@ -20,8 +20,24 @@ type anthropicClient struct {
 }
 
 type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string           `json:"role"`
+	Content []anthropicBlock `json:"content"`
+}
+
+type anthropicBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type anthropicRequest struct {
@@ -31,19 +47,27 @@ type anthropicRequest struct {
 	MaxTokens   int                `json:"max_tokens"`
 	Temperature *float64           `json:"temperature,omitempty"`
 	Stream      bool               `json:"stream"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
 }
 
 type anthropicEvent struct {
 	Type    string `json:"type"`
+	Index   int    `json:"index"`
 	Message struct {
 		Usage struct {
 			InputTokens int `json:"input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
+	ContentBlock struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"content_block"`
 	Delta struct {
-		Type       string `json:"type"`
-		Text       string `json:"text"`
-		StopReason string `json:"stop_reason"`
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"`
+		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	Usage struct {
 		OutputTokens int `json:"output_tokens"`
@@ -67,8 +91,10 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request, onDelta func(
 		body.MaxTokens = anthropicDefaultMaxTokens
 	}
 
-	for _, m := range req.Messages {
-		body.Messages = append(body.Messages, anthropicMessage{Role: string(m.Role), Content: m.Content})
+	body.Messages = anthropicMessages(req.Messages)
+
+	for _, tool := range req.Tools {
+		body.Tools = append(body.Tools, anthropicTool{Name: tool.Name, Description: tool.Description, InputSchema: tool.Parameters})
 	}
 
 	payload, err := json.Marshal(body)
@@ -108,6 +134,7 @@ func (c *anthropicClient) attempt(ctx context.Context, payload []byte, onDelta f
 	var (
 		resp     Response
 		text     strings.Builder
+		calls    toolCalls
 		streamed bool
 		finished bool
 	)
@@ -121,7 +148,16 @@ func (c *anthropicClient) attempt(ctx context.Context, payload []byte, onDelta f
 		switch event.Type {
 		case "message_start":
 			resp.Usage.InputTokens = event.Message.Usage.InputTokens
+		case "content_block_start":
+			if event.ContentBlock.Type == "tool_use" {
+				calls.add(event.Index, event.ContentBlock.ID, event.ContentBlock.Name, "")
+			}
 		case "content_block_delta":
+			if event.Delta.Type == "input_json_delta" {
+				calls.add(event.Index, "", "", event.Delta.PartialJSON)
+				return false, nil
+			}
+
 			if event.Delta.Type != "text_delta" || event.Delta.Text == "" {
 				return false, nil
 			}
@@ -144,6 +180,7 @@ func (c *anthropicClient) attempt(ctx context.Context, payload []byte, onDelta f
 	})
 
 	resp.Text = text.String()
+	resp.ToolCalls = calls.done()
 
 	if err == nil && !finished {
 		err = fmt.Errorf("%w: the stream ended before the reply did", ErrRequest)
@@ -154,4 +191,40 @@ func (c *anthropicClient) attempt(ctx context.Context, payload []byte, onDelta f
 	}
 
 	return resp, streamed, false, nil
+}
+
+// anthropicMessages turns messages into the Messages API's blocks. Tool results
+// travel in user turns, and the API wants turns to alternate, so consecutive
+// user-side messages - several results, or results then a note - merge into one.
+func anthropicMessages(messages []Message) []anthropicMessage {
+	var out []anthropicMessage
+
+	for _, m := range messages {
+		role := string(m.Role)
+
+		var blocks []anthropicBlock
+
+		switch m.Role {
+		case RoleTool:
+			role = string(RoleUser)
+			blocks = []anthropicBlock{{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content}}
+		default:
+			if m.Content != "" || len(m.ToolCalls) == 0 {
+				blocks = append(blocks, anthropicBlock{Type: "text", Text: m.Content})
+			}
+
+			for _, call := range m.ToolCalls {
+				blocks = append(blocks, anthropicBlock{Type: "tool_use", ID: call.ID, Name: call.Name, Input: arguments(call.Arguments)})
+			}
+		}
+
+		if n := len(out); n > 0 && out[n-1].Role == role {
+			out[n-1].Content = append(out[n-1].Content, blocks...)
+			continue
+		}
+
+		out = append(out, anthropicMessage{Role: role, Content: blocks})
+	}
+
+	return out
 }

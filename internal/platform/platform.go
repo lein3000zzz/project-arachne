@@ -14,6 +14,7 @@ import (
 	"web-crawler/internal/embedding"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/rerank"
+	"web-crawler/internal/review"
 	"web-crawler/internal/vectorstore"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -232,6 +233,34 @@ func NewChatClient(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.S
 	}
 
 	return client
+}
+
+// NewReviewer returns nil when reviewing is off or no chat endpoint is
+// configured: pages are then indexed unreviewed.
+func NewReviewer(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, index review.Index, pool *pgxpool.Pool) *review.Reviewer {
+	if !cfg.Review.Enabled {
+		logger.Warn("Reviewing is off (review.enabled): every fetched page is indexed")
+		return nil
+	}
+
+	if cfg.Review.Model != "" {
+		cfg.Chat.Model = cfg.Review.Model
+	}
+
+	chat := NewChatClient(logger, cfg, sm)
+	if chat == nil {
+		logger.Warn("No chat model to review with: every fetched page is indexed")
+		return nil
+	}
+
+	logger.Infow("Pages are reviewed before indexing", "model", chat.Model(), "maxToolCalls", cfg.Review.MaxToolCalls)
+
+	return review.New(logger, chat, index, review.NewPostgresStore(pool), review.Config{
+		MaxToolCalls: cfg.Review.MaxToolCalls,
+		PartRunes:    cfg.Review.PartRunes,
+		MaxTokens:    cfg.Review.MaxTokens,
+		Timeout:      cfg.Review.Timeout.Std(),
+	})
 }
 
 // NewReranker returns nil when no reranker endpoint is configured: search then
