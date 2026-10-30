@@ -23,6 +23,8 @@ type Config struct {
 	Auth        Auth        `yaml:"auth"`
 	Labs        Labs        `yaml:"labs"`
 	Review      Review      `yaml:"review"`
+	WebSearch   WebSearch   `yaml:"websearch"`
+	Gathering   Gathering   `yaml:"gathering"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -140,6 +142,24 @@ type Review struct {
 	PartRunes    int      `yaml:"part_runes"`
 	MaxTokens    int      `yaml:"max_tokens"`
 	Timeout      Duration `yaml:"timeout"`
+}
+
+// WebSearch is the SearXNG instance labs gather from; its address is in Vault.
+type WebSearch struct {
+	// What a new lab may search unless its creator chooses; names the instance
+	// does not offer are dropped.
+	DefaultEngines []string `yaml:"default_engines"`
+	RequestTimeout Duration `yaml:"request_timeout"`
+}
+
+// Gathering is the model searching the web for a lab.
+type Gathering struct {
+	Searches int `yaml:"searches"`
+	Sources  int `yaml:"sources"`
+	// Results shown to the model per search.
+	Results   int      `yaml:"results"`
+	MaxTokens int      `yaml:"max_tokens"`
+	Timeout   Duration `yaml:"timeout"`
 }
 
 type Labs struct {
@@ -305,6 +325,17 @@ func Default() Config {
 			MaxTokens:    300,
 			Timeout:      Duration(3 * time.Minute),
 		},
+		WebSearch: WebSearch{
+			DefaultEngines: []string{"brave", "google cse", "bing", "wikipedia"},
+			RequestTimeout: Duration(15 * time.Second),
+		},
+		Gathering: Gathering{
+			Searches:  4,
+			Sources:   8,
+			Results:   6,
+			MaxTokens: 300,
+			Timeout:   Duration(10 * time.Minute),
+		},
 		Labs: Labs{
 			MaxSources: 20,
 			MinSources: 2,
@@ -397,6 +428,10 @@ func (c *Config) Validate() error {
 		{"review.max_tool_calls", c.Review.MaxToolCalls},
 		{"review.part_runes", c.Review.PartRunes},
 		{"review.max_tokens", c.Review.MaxTokens},
+		{"gathering.searches", c.Gathering.Searches},
+		{"gathering.sources", c.Gathering.Sources},
+		{"gathering.results", c.Gathering.Results},
+		{"gathering.max_tokens", c.Gathering.MaxTokens},
 	}
 
 	for _, field := range positive {
@@ -431,6 +466,8 @@ func (c *Config) Validate() error {
 		{"auth.lockout", c.Auth.Lockout},
 		{"auth.max_lockout", c.Auth.MaxLockout},
 		{"review.timeout", c.Review.Timeout},
+		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
+		{"gathering.timeout", c.Gathering.Timeout},
 	}
 
 	for _, field := range durations {

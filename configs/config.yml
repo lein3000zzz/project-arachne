@@ -146,6 +146,21 @@ review:
   max_tokens: 300
   timeout: 3m
 
+websearch:
+  # engines a new lab may search unless its creator chooses (the SearXNG
+  # instance's address is in Vault: WEBSEARCH_BASE_URL)
+  default_engines: [brave, google cse, bing, wikipedia]
+  request_timeout: 15s
+
+gathering:
+  # the model searching the web for a lab: searches and pages added per run
+  searches: 4
+  sources: 8
+  # results shown to the model per search
+  results: 6
+  max_tokens: 300
+  timeout: 10m
+
 labs:
   max_sources: 20
   # an answer from labs with fewer good sources in them fills the rest of

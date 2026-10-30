@@ -13,7 +13,8 @@ import (
 )
 
 type Store interface {
-	Create(ctx context.Context, ownerID int64, name, topic string) (Lab, error)
+	Create(ctx context.Context, ownerID int64, name, topic string, engines []string) (Lab, error)
+	SetEngines(ctx context.Context, ownerID, labID int64, engines []string) (Lab, error)
 	Get(ctx context.Context, ownerID, labID int64) (Lab, error)
 	List(ctx context.Context, ownerID int64) ([]Lab, error)
 	Delete(ctx context.Context, ownerID, labID int64) error
@@ -40,6 +41,22 @@ const (
 
 type Limits struct {
 	MaxSources int
+	// What a new lab may search when its creator did not choose.
+	DefaultEngines []string
+}
+
+const (
+	maxEngines     = 12
+	maxEngineRunes = 40
+)
+
+// Found is a page the model found by searching and chose for a lab.
+type Found struct {
+	URL         string
+	Query       string
+	Engines     []string
+	Reason      string
+	GatheringID int64
 }
 
 type SourceRequest struct {
@@ -79,10 +96,19 @@ func (s *Service) List(ctx context.Context, ownerID int64) ([]Lab, error) {
 }
 
 // Create makes the lab and starts crawling its sources. The sources are all
-// checked first, so a bad one leaves no half-made lab behind.
-func (s *Service) Create(ctx context.Context, ownerID int64, name, topic string, sources []SourceRequest) (Detail, error) {
+// checked first, so a bad one leaves no half-made lab behind. Nil engines take
+// the defaults; an empty list means the lab never searches the web.
+func (s *Service) Create(ctx context.Context, ownerID int64, name, topic string, sources []SourceRequest, engines []string) (Detail, error) {
 	name, err := cleanName(name)
 	if err != nil {
+		return Detail{}, err
+	}
+
+	if engines == nil {
+		engines = s.limits.DefaultEngines
+	}
+
+	if engines, err = cleanEngines(engines); err != nil {
 		return Detail{}, err
 	}
 
@@ -96,7 +122,7 @@ func (s *Service) Create(ctx context.Context, ownerID int64, name, topic string,
 		return Detail{}, err
 	}
 
-	lab, err := s.store.Create(ctx, ownerID, name, topic)
+	lab, err := s.store.Create(ctx, ownerID, name, topic, engines)
 	if err != nil {
 		return Detail{}, err
 	}
@@ -106,6 +132,41 @@ func (s *Service) Create(ctx context.Context, ownerID int64, name, topic string,
 	}
 
 	return s.Get(ctx, ownerID, lab.ID)
+}
+
+func (s *Service) SetEngines(ctx context.Context, ownerID, labID int64, engines []string) (Lab, error) {
+	engines, err := cleanEngines(engines)
+	if err != nil {
+		return Lab{}, err
+	}
+
+	return s.store.SetEngines(ctx, ownerID, labID, engines)
+}
+
+// AddFound adds a page found by searching as a source of its own - that page
+// alone, its links not followed - and starts crawling it.
+func (s *Service) AddFound(ctx context.Context, ownerID, labID int64, f Found) (Source, error) {
+	existing, err := s.store.Sources(ctx, ownerID, labID)
+	if err != nil {
+		return Source{}, err
+	}
+
+	prepared, err := s.prepare([]SourceRequest{{URL: f.URL, Scope: ScopePage}}, existing)
+	if err != nil {
+		return Source{}, err
+	}
+
+	src := prepared[0]
+	src.Kind, src.Query, src.Engines, src.Reason, src.GatheringID = KindSearch, f.Query, f.Engines, f.Reason, f.GatheringID
+
+	added, err := s.store.AddSource(ctx, ownerID, labID, src)
+	if err != nil {
+		return Source{}, err
+	}
+
+	_, err = s.submit(ctx, ownerID, added)
+
+	return added, err
 }
 
 func (s *Service) AddSources(ctx context.Context, ownerID, labID int64, sources []SourceRequest) (Detail, error) {
@@ -287,6 +348,27 @@ func cleanName(name string) (string, error) {
 	}
 
 	return name, nil
+}
+
+func cleanEngines(engines []string) ([]string, error) {
+	out := []string{}
+
+	for _, e := range engines {
+		e = strings.TrimSpace(e)
+		if e == "" || utf8.RuneCountInString(e) > maxEngineRunes || strings.ContainsFunc(e, unicode.IsControl) || strings.Contains(e, ",") {
+			return nil, fmt.Errorf("%w: engine %q is not an engine name", ErrInvalid, e)
+		}
+
+		if !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+
+	if len(out) > maxEngines {
+		return nil, fmt.Errorf("%w: at most %d engines", ErrInvalid, maxEngines)
+	}
+
+	return out, nil
 }
 
 func cleanTopic(topic string) (string, error) {

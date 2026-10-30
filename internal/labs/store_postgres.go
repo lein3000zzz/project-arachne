@@ -38,10 +38,12 @@ const (
 			JOIN source_pages sp ON sp.source_id = s.id
 			JOIN pages p ON p.id = sp.page_id
 			JOIN page_reviews r ON r.url = p.url
-			WHERE s.lab_id = l.id AND p.status BETWEEN 200 AND 299 AND r.decision = 'skip')`
+			WHERE s.lab_id = l.id AND p.status BETWEEN 200 AND 299 AND r.decision = 'skip'),
+		l.engines`
 
 	sourceColumns = `
-		s.id, s.lab_id, s.url, s.scope, s.max_depth, s.max_links, s.created_at,
+		s.id, s.lab_id, s.kind, s.url, s.scope, s.max_depth, s.max_links, s.created_at, s.query, s.engines, s.reason,
+		coalesce(s.gathering_id, 0),
 		(SELECT count(*) FROM source_pages sp JOIN pages p ON p.id = sp.page_id
 			WHERE sp.source_id = s.id AND p.status BETWEEN 200 AND 299),
 		coalesce((SELECT r.id FROM runs r WHERE r.source_id = s.id ORDER BY r.submitted_at DESC LIMIT 1), '')`
@@ -49,14 +51,15 @@ const (
 
 func scanLab(row pgx.CollectableRow) (Lab, error) {
 	var l Lab
-	err := row.Scan(&l.ID, &l.Name, &l.Topic, &l.CreatedAt, &l.UpdatedAt, &l.Sources, &l.Pages, &l.SetAside)
+	err := row.Scan(&l.ID, &l.Name, &l.Topic, &l.CreatedAt, &l.UpdatedAt, &l.Sources, &l.Pages, &l.SetAside, &l.Engines)
 
 	return l, err
 }
 
 func scanSource(row pgx.CollectableRow) (Source, error) {
 	var s Source
-	err := row.Scan(&s.ID, &s.LabID, &s.URL, &s.Scope, &s.MaxDepth, &s.MaxLinks, &s.CreatedAt, &s.Pages, &s.LastRunID)
+	err := row.Scan(&s.ID, &s.LabID, &s.Kind, &s.URL, &s.Scope, &s.MaxDepth, &s.MaxLinks, &s.CreatedAt, &s.Query, &s.Engines, &s.Reason,
+		&s.GatheringID, &s.Pages, &s.LastRunID)
 
 	return s, err
 }
@@ -75,11 +78,11 @@ func one[T any](rows pgx.Rows, err error, scan pgx.RowToFunc[T], missing error) 
 	return v, err
 }
 
-func (s *PostgresStore) Create(ctx context.Context, ownerID int64, name, topic string) (Lab, error) {
+func (s *PostgresStore) Create(ctx context.Context, ownerID int64, name, topic string, engines []string) (Lab, error) {
 	var id int64
 
-	err := s.pool.QueryRow(ctx, `INSERT INTO labs (owner_id, name, topic) VALUES ($1, $2, $3) RETURNING id`,
-		ownerID, name, topic).Scan(&id)
+	err := s.pool.QueryRow(ctx, `INSERT INTO labs (owner_id, name, topic, engines) VALUES ($1, $2, $3, $4) RETURNING id`,
+		ownerID, name, topic, engineList(engines)).Scan(&id)
 	if isUniqueViolation(err) {
 		return Lab{}, ErrNameTaken
 	}
@@ -115,16 +118,31 @@ func (s *PostgresStore) Delete(ctx context.Context, ownerID, labID int64) error 
 	return err
 }
 
-// AddSource takes src's URL, scope and limits; the URL must be canonical.
+func (s *PostgresStore) SetEngines(ctx context.Context, ownerID, labID int64, engines []string) (Lab, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE labs SET engines = $3 WHERE id = $1 AND owner_id = $2`, labID, ownerID, engineList(engines))
+	if err == nil && tag.RowsAffected() == 0 {
+		return Lab{}, ErrNotFound
+	}
+
+	if err != nil {
+		return Lab{}, err
+	}
+
+	return s.Get(ctx, ownerID, labID)
+}
+
+// AddSource takes src's URL, scope and limits, and for a search source its
+// provenance; the URL must be canonical.
 func (s *PostgresStore) AddSource(ctx context.Context, ownerID, labID int64, src Source) (Source, error) {
 	var id int64
 
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-			INSERT INTO sources (lab_id, kind, url, scope, max_depth, max_links)
-			SELECT id, 'link', $3, $4, $5, $6 FROM labs WHERE id = $1 AND owner_id = $2
+			INSERT INTO sources (lab_id, kind, url, scope, max_depth, max_links, query, engines, reason, gathering_id)
+			SELECT id, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, 0) FROM labs WHERE id = $1 AND owner_id = $2
 			RETURNING id`,
-			labID, ownerID, src.URL, src.Scope, src.MaxDepth, src.MaxLinks).Scan(&id)
+			labID, ownerID, kindOf(src), src.URL, src.Scope, src.MaxDepth, src.MaxLinks, src.Query, engineList(src.Engines), src.Reason,
+			src.GatheringID).Scan(&id)
 
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
@@ -238,4 +256,21 @@ func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID int64, limit i
 
 		return p, err
 	})
+}
+
+func kindOf(src Source) string {
+	if src.Kind == "" {
+		return KindLink
+	}
+
+	return src.Kind
+}
+
+// engineList keeps NULL out of a NOT NULL array column.
+func engineList(engines []string) []string {
+	if engines == nil {
+		return []string{}
+	}
+
+	return engines
 }

@@ -107,6 +107,16 @@ func RunTools(ctx context.Context, c Client, req Request, maxCalls int, handle T
 			return run, err
 		}
 
+		// Calls a small model wrote out as text, in its native JSON shape but
+		// without the markers the server parses: run, and sent back as real
+		// calls, which also shows the model the form that works.
+		if len(resp.ToolCalls) == 0 && len(req.Tools) > 0 {
+			if written := textToolCalls(resp.Text, req.Tools); len(written) > 0 {
+				resp.Text, resp.ToolCalls = "", written
+				run.Last = resp
+			}
+		}
+
 		run.Messages = append(run.Messages, Message{Role: RoleAssistant, Content: resp.Text, ToolCalls: resp.ToolCalls})
 
 		if len(resp.ToolCalls) == 0 {
@@ -135,4 +145,46 @@ func RunTools(ctx context.Context, c Client, req Request, maxCalls int, handle T
 			return run, nil
 		}
 	}
+}
+
+// textToolCalls finds {"name": ..., "arguments": {...}} objects naming one of
+// the tools anywhere in text - "parameters" is accepted for "arguments".
+func textToolCalls(text string, tools []Tool) []ToolCall {
+	known := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		known[t.Name] = true
+	}
+
+	var calls []ToolCall
+
+	for i := 0; i < len(text); i++ {
+		if text[i] != '{' {
+			continue
+		}
+
+		dec := json.NewDecoder(strings.NewReader(text[i:]))
+
+		var obj struct {
+			Name       string          `json:"name"`
+			Arguments  json.RawMessage `json:"arguments"`
+			Parameters json.RawMessage `json:"parameters"`
+		}
+
+		if err := dec.Decode(&obj); err != nil || !known[obj.Name] {
+			continue
+		}
+
+		args := obj.Arguments
+		if len(args) == 0 {
+			args = obj.Parameters
+		}
+
+		if strings.HasPrefix(strings.TrimSpace(string(args)), "{") || len(args) == 0 {
+			calls = append(calls, ToolCall{ID: fmt.Sprintf("text_%d", len(calls)), Name: obj.Name, Arguments: arguments(args)})
+		}
+
+		i += int(dec.InputOffset()) - 1
+	}
+
+	return calls
 }

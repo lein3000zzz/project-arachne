@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"mime"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -198,7 +199,11 @@ func classifyBody(mediaType string, body []byte) bodyKind {
 		return kindHTML
 	}
 
-	return kindText
+	if strings.HasPrefix(http.DetectContentType(body), "text/") {
+		return kindText
+	}
+
+	return kindBinary
 }
 
 func isHTML(mediaType string) bool {

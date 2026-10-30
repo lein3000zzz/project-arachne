@@ -27,8 +27,8 @@ func (f *fakeLabs) List(_ context.Context, owner int64) ([]labs.Lab, error) {
 	return []labs.Lab{{ID: 1, Name: "go"}}, f.err
 }
 
-func (f *fakeLabs) Create(_ context.Context, owner int64, name, topic string, sources []labs.SourceRequest) (labs.Detail, error) {
-	f.owner, f.created = owner, createLabRequest{Name: name, Topic: topic, Sources: sources}
+func (f *fakeLabs) Create(_ context.Context, owner int64, name, topic string, sources []labs.SourceRequest, engines []string) (labs.Detail, error) {
+	f.owner, f.created = owner, createLabRequest{Name: name, Topic: topic, Sources: sources, Engines: engines}
 	return labs.Detail{Lab: labs.Lab{ID: 7, Name: name}}, f.err
 }
 

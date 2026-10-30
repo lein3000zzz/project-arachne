@@ -45,13 +45,14 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// Services are what the API serves; Answerer, Runs and Labs may be nil.
+// Services are what the API serves; all but Auth and Searcher may be nil.
 type Services struct {
 	Auth     Authenticator
 	Searcher Searcher
 	Answerer Answerer
 	Runs     RunService
 	Labs     LabService
+	Gatherer Gatherer
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -80,6 +81,12 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("POST /api/labs/plan", signIn.api(labsAPI.plan))
 	mux.Handle("GET /api/labs/{id}", signIn.api(labsAPI.get))
 	mux.Handle("DELETE /api/labs/{id}", signIn.api(labsAPI.delete))
+	mux.Handle("PUT /api/labs/{id}/engines", signIn.api(labsAPI.setEngines))
+
+	gatherAPI := &gatherHandler{logger: logger, service: services.Gatherer, labs: labsAPI}
+	mux.Handle("GET /api/engines", signIn.api(gatherAPI.engines))
+	mux.Handle("POST /api/labs/{id}/gather", signIn.api(gatherAPI.start))
+	mux.Handle("GET /api/labs/{id}/gathering", signIn.api(gatherAPI.latest))
 	mux.Handle("GET /api/labs/{id}/pages", signIn.api(labsAPI.pages))
 	mux.Handle("POST /api/labs/{id}/sources", signIn.api(labsAPI.addSources))
 	mux.Handle("POST /api/labs/{id}/sources/{source}/refresh", signIn.api(labsAPI.refresh))

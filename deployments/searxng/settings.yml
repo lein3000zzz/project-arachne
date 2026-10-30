@@ -1,0 +1,34 @@
+# A private instance that only the search service queries, over its JSON API.
+use_default_settings: true
+
+general:
+  instance_name: arachne
+
+server:
+  # The secret comes from SEARXNG_SECRET, new at every start: nothing it signs
+  # here (preferences cookies) needs to outlive one.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  formats: [html, json]
+  safe_search: 0
+
+outgoing:
+  request_timeout: 4.0
+  max_request_timeout: 8.0
+
+# Web engines off in SearXNG's defaults that answer without a CAPTCHA, on here
+# so labs can tick them. Startpage and Mojeek stay off: both now demand a
+# proof-of-work CAPTCHA, which is why SearXNG marks them inactive.
+engines:
+  - name: bing
+    disabled: false
+  - name: yandex
+    disabled: false
+  # Tor engines: they fail to load without a Tor proxy and only add log noise.
+  - name: ahmia
+    inactive: true
+  - name: torch
+    inactive: true

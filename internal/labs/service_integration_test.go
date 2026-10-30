@@ -46,8 +46,7 @@ func TestASourcesCrawlFillsTheLab(t *testing.T) {
 		runs.Limits{DefaultDepth: 2, MaxDepth: 5, DefaultLinks: 10, MaxLinks: 100})
 	service := NewService(store, runService, nil, Limits{MaxSources: 3})
 
-	detail, err := service.Create(ctx, lein, "  Go concurrency ", "goroutines",
-		[]SourceRequest{{URL: "go.dev/doc/", Scope: "section", Links: 5}})
+	detail, err := service.Create(ctx, lein, "  Go concurrency ", "goroutines", []SourceRequest{{URL: "go.dev/doc/", Scope: "section", Links: 5}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +123,7 @@ func TestABadSourceLeavesNoLab(t *testing.T) {
 		{{URL: "https://go.dev/", Depth: 50}},
 		{{URL: "https://go.dev/"}, {URL: "go.dev"}},
 	} {
-		if _, err := service.Create(ctx, lein, "go", "", sources); err == nil {
+		if _, err := service.Create(ctx, lein, "go", "", sources, nil); err == nil {
 			t.Errorf("%+v accepted", sources)
 		}
 	}
@@ -134,18 +133,68 @@ func TestABadSourceLeavesNoLab(t *testing.T) {
 	}
 
 	for _, name := range []string{"", "   ", "two\nlines", strings.Repeat("a", maxNameRunes+1)} {
-		if _, err := service.Create(ctx, lein, name, "", nil); !errors.Is(err, ErrInvalid) {
+		if _, err := service.Create(ctx, lein, name, "", nil, nil); !errors.Is(err, ErrInvalid) {
 			t.Errorf("name %q: %v", name, err)
 		}
 	}
 
 	off := NewService(store, nil, nil, Limits{MaxSources: 5})
 
-	if _, err := off.Create(ctx, lein, "go", "", []SourceRequest{{URL: "https://go.dev/"}}); !errors.Is(err, ErrCrawlingDisabled) {
+	if _, err := off.Create(ctx, lein, "go", "", []SourceRequest{{URL: "https://go.dev/"}}, nil); !errors.Is(err, ErrCrawlingDisabled) {
 		t.Errorf("sources without crawling: %v", err)
 	}
 
-	if _, err := off.Create(ctx, lein, "go", "", nil); err != nil {
+	if _, err := off.Create(ctx, lein, "go", "", nil, nil); err != nil {
 		t.Errorf("a lab without sources needs no crawler: %v", err)
+	}
+}
+
+func TestEnginesAndSourcesFoundBySearch(t *testing.T) {
+	store, _, lein, other := newStore(t)
+	ctx := context.Background()
+
+	producer := &fakeProducer{}
+	service := NewService(store, runs.NewService(runs.NewStore(nil, store.pool, time.Minute), producer,
+		runs.Limits{DefaultDepth: 2, MaxDepth: 5, DefaultLinks: 10, MaxLinks: 100}), nil,
+		Limits{MaxSources: 3, DefaultEngines: []string{"brave", "bing"}})
+
+	lab, err := service.Create(ctx, lein, "go", "", nil, nil)
+	if err != nil || strings.Join(lab.Engines, ",") != "brave,bing" {
+		t.Fatalf("defaults: %v, %v", lab.Engines, err)
+	}
+
+	if none, err := service.Create(ctx, lein, "offline", "", nil, []string{}); err != nil || len(none.Engines) != 0 {
+		t.Errorf("no engines asked for: %v, %v", none.Engines, err)
+	}
+
+	if got, err := service.SetEngines(ctx, lein, lab.ID, []string{" wikipedia ", "wikipedia", "google cse"}); err != nil ||
+		strings.Join(got.Engines, "|") != "wikipedia|google cse" {
+		t.Errorf("set: %v, %v", got.Engines, err)
+	}
+
+	if _, err := service.SetEngines(ctx, other, lab.ID, nil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another user's lab: %v", err)
+	}
+
+	if _, err := service.SetEngines(ctx, lein, lab.ID, []string{"a,b"}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a comma would split into two engines at SearXNG: %v", err)
+	}
+
+	src, err := service.AddFound(ctx, lein, lab.ID, Found{URL: "go.dev/blog/pipelines", Query: "go pipelines", Engines: []string{"brave"}, Reason: "the official post"})
+	if err != nil || src.Kind != KindSearch || src.Scope != ScopePage || src.Query != "go pipelines" || src.Reason != "the official post" ||
+		src.Engines[0] != "brave" || src.URL != "https://go.dev/blog/pipelines" {
+		t.Fatalf("found source: %+v, %v", src, err)
+	}
+
+	if last := producer.runs[len(producer.runs)-1]; last.MaxLinks != 1 || last.MaxDepth != 1 || last.UseCacheFlag {
+		t.Errorf("a found page is crawled alone: %+v", last)
+	}
+
+	if _, err := service.AddFound(ctx, lein, lab.ID, Found{URL: "https://go.dev/blog/pipelines"}); !errors.Is(err, ErrSourceExists) {
+		t.Errorf("found twice: %v", err)
+	}
+
+	if _, err := service.AddFound(ctx, other, lab.ID, Found{URL: "https://evil.example/"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("into another user's lab: %v", err)
 	}
 }

@@ -24,6 +24,7 @@ CHAT_BASE_URL="${CHAT_BASE_URL:-}"
 CHAT_API_KEY="${CHAT_API_KEY:-}"
 RERANK_BASE_URL="${RERANK_BASE_URL:-}"
 RERANK_API_KEY="${RERANK_API_KEY:-}"
+WEBSEARCH_BASE_URL="${WEBSEARCH_BASE_URL:-}"
 EMBEDDING_BASE_URL_OVERRIDE="${EMBEDDING_BASE_URL:-}"
 EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
 MILVUS_TOKEN="${MILVUS_TOKEN:-}"
@@ -40,6 +41,7 @@ case "$PROFILE" in
     OLLAMA_URL=http://ollama:11434/v1
     VLLM_URL=http://vllm:8000/v1
     RERANKER_URL=http://reranker:8080/v1
+    SEARXNG_URL=http://searxng:8080
     ;;
   host)
     APP_ENV=dev
@@ -52,6 +54,7 @@ case "$PROFILE" in
     OLLAMA_URL=http://localhost:11434/v1
     VLLM_URL=http://localhost:8001/v1
     RERANKER_URL=http://localhost:8002/v1
+    SEARXNG_URL=http://localhost:8888
     ;;
   *)
     echo "unknown profile '$PROFILE' (want: docker | host)" >&2
@@ -209,6 +212,8 @@ vault_auth kv put kv/main/rerank RERANK_BASE_URL="${RERANK_BASE_URL:-$RERANKER_U
 if [ -n "$RERANK_API_KEY" ]; then
   vault_auth kv put kv/main/rerank_key RERANK_API_KEY="$RERANK_API_KEY" >/dev/null
 fi
+# The bundled SearXNG unless WEBSEARCH_BASE_URL points at another instance.
+vault_auth kv put kv/main/websearch WEBSEARCH_BASE_URL="${WEBSEARCH_BASE_URL:-$SEARXNG_URL}" >/dev/null
 if [ -n "$MILVUS_TOKEN" ]; then
   vault_auth kv put kv/main/milvus_token MILVUS_TOKEN="$MILVUS_TOKEN" >/dev/null
 fi

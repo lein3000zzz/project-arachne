@@ -38,6 +38,9 @@ const (
 	kindJSON
 	kindJS
 	kindText
+	// PDFs, images, archives: nothing here reads them, and their bytes are no
+	// one's text.
+	kindBinary
 )
 
 const htmlSniffLimit = 1024

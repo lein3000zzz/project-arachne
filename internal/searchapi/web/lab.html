@@ -32,6 +32,7 @@
     <p class="lab-name" id="labName"></p>
     <a href="#overview">Overview</a>
     <a href="#sources">Sources</a>
+    <a href="#web">Web</a>
     <a href="#pages">Pages</a>
     <span class="later">Artifacts come later</span>
   </nav>
@@ -61,6 +62,20 @@
       </form>
       <p class="note" id="growNote" aria-live="polite"></p>
       <div id="growCard"></div>
+    </section>
+
+    <section id="web" hidden>
+      <h2>Web</h2>
+      <div class="ticks" id="engineTicks"></div>
+      <form id="gatherForm" class="ask">
+        <div class="field">
+          <label for="gatherText">Gather from the web</label>
+          <textarea id="gatherText" placeholder="optional: what to look for - benchmarks, the memory model, Russian sources…"></textarea>
+        </div>
+        <button class="action primary" id="gatherGo">Gather</button>
+      </form>
+      <p class="note" id="gatherNote" aria-live="polite"></p>
+      <div id="gathering"></div>
     </section>
 
     <section id="pages">
@@ -101,7 +116,8 @@ function sourceRow(src) {
 
   return el("tr", {},
     el("td", { class: "url" }, el("a", { href: src.url, target: "_blank", rel: "noopener noreferrer" }, src.url),
-      el("span", { class: "tag" }, src.scope)),
+      el("span", { class: "tag" }, src.kind === "search" ? "found" : src.scope),
+      src.kind === "search" ? el("div", { class: "note" }, `“${src.query}”` + (src.reason ? " — " + src.reason : "")) : null),
     el("td", { "data-label": "status" }, status),
     el("td", { class: "num", "data-label": "pages" }, String(src.pages)),
     el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–",
@@ -169,9 +185,97 @@ async function load() {
   $("sourceRows").replaceChildren(...(lab.sources.length ? lab.sources.map(sourceRow)
     : [el("tr", {}, el("td", { colspan: "5", class: "note" }, "None yet."))]));
 
-  if (lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
+  renderEngines(lab.engines);
+
+  const gathering = await loadGathering();
+  if (gathering || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
   loadPages();
 }
+
+// ---- the web: which engines, and gathering ----
+let engines = { available: [], default: [] };
+
+function renderEngines(ticked) {
+  $("web").hidden = engines.available.length === 0;
+  $("engineTicks").replaceChildren(el("span", { class: "control-label" }, "Engines"),
+    ...engines.available.map((e) => el("label", { class: "tick" },
+      el("input", { type: "checkbox", value: e, checked: ticked.includes(e), onchange: saveEngines }), e)));
+}
+
+async function saveEngines() {
+  const chosen = [...document.querySelectorAll("#engineTicks input:checked")].map((box) => box.value);
+  try {
+    await send("PUT", `${base}/engines`, { engines: chosen });
+    $("gatherNote").textContent = chosen.length ? "" : "No engines: the lab will not search the web.";
+  } catch (err) {
+    $("gatherNote").replaceChildren(el("span", { class: "error" }, err.message));
+  }
+}
+
+function host(u) {
+  try { return new URL(u).hostname; } catch (_) { return u; }
+}
+
+// The gathering as it happened: each search with what it showed the model,
+// which of those it took and why, and what it was refused.
+function renderGathering(g) {
+  const added = new Map(g.steps.filter((s) => s.kind === "add").map((s) => [s.url, s.reason]));
+  const searches = g.steps.filter((s) => s.kind === "search").length;
+  const status = g.status === "running" ? `gathering… started ${ago(g.started_at)}`
+    : g.status === "done" ? `gathered ${ago(g.finished_at)} · ${searches} searches · ${added.size} pages added`
+    : `stopped: ${g.error}`;
+
+  const steps = g.steps.filter((s) => s.kind !== "add").map((s) => {
+    if (s.kind === "search") {
+      const failed = Object.entries(s.failed || {}).map(([engine, why]) => `${engine}: ${why}`).join(", ");
+      return el("li", { class: "step" },
+        el("p", {}, "searched ", el("b", {}, "“" + s.query + "”"), failed ? el("span", { class: "note" }, " — no answer from " + failed) : null),
+        el("ul", { class: "found" }, (s.results || []).map((r) => el("li", { class: added.has(r.url) ? "taken" : r.in_lab ? "had" : null },
+          el("span", { class: "mark", "aria-hidden": "true" }, added.has(r.url) ? "+" : r.in_lab ? "=" : "·"),
+          el("span", {}, el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url),
+            el("span", { class: "host" }, host(r.url)),
+            added.has(r.url) && added.get(r.url) ? el("div", { class: "note" }, added.get(r.url)) : null,
+            r.in_lab && !added.has(r.url) ? el("div", { class: "note" }, "already in the lab") : null)))));
+    }
+    if (s.kind === "refused") return el("li", { class: "step note" }, `refused ${s.url}: ${s.reason}`);
+    return null;
+  });
+
+  $("gathering").replaceChildren(el("div", { class: "gathering" },
+    el("p", { class: "eyebrow" }, `${g.model} · ${g.engines.join(", ")}`),
+    el("p", {}, el("span", { class: "state " + (g.status === "running" ? "running" : g.status === "failed" ? "dropped" : "finished") },
+      el("span", { class: "state-glyph", "aria-hidden": "true" }, g.status === "running" ? "●" : g.status === "failed" ? "✕" : "✓"), status)),
+    g.request ? el("p", { class: "note" }, "asked: " + g.request) : null,
+    el("ol", { class: "steps" }, steps),
+    g.summary ? el("p", { class: "summary" }, g.summary) : null));
+
+  $("gatherGo").disabled = g.status === "running";
+}
+
+async function loadGathering() {
+  try {
+    const g = await api(`${base}/gathering`);
+    renderGathering(g);
+    return g.status === "running";
+  } catch (err) {
+    if (err.message !== "the lab has not gathered yet") $("gatherNote").textContent = err.message;
+    return false;
+  }
+}
+
+$("gatherForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("gatherGo").disabled = true;
+  $("gatherNote").textContent = "";
+  try {
+    await send("POST", `${base}/gather`, { request: $("gatherText").value.trim() });
+    $("gatherText").value = "";
+    load();
+  } catch (err) {
+    $("gatherNote").replaceChildren(el("span", { class: "error" }, err.message));
+    $("gatherGo").disabled = false;
+  }
+});
 
 // ---- growing: the model drafts the sources, the user confirms ----
 function renderPlan(plan) {
@@ -226,7 +330,7 @@ $("deleteLab").addEventListener("click", async () => {
   }
 });
 
-load();
+api("/api/engines").then((e) => { engines = e; }).catch(() => {}).finally(load);
 </script>
 </body>
 </html>

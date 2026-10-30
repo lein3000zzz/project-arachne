@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 	"web-crawler/internal/answer"
+	"web-crawler/internal/gathering"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
@@ -119,7 +120,29 @@ func main() {
 		logger.Infow("Crawl submission enabled", "maxDepth", cfg.CrawlAPI.MaxDepth, "maxLinks", cfg.CrawlAPI.MaxLinks)
 	}
 
-	services.Labs = labs.NewService(labs.NewPostgresStore(db), labRuns, chat, labs.Limits{MaxSources: cfg.Labs.MaxSources})
+	labService := labs.NewService(labs.NewPostgresStore(db), labRuns, chat, labs.Limits{
+		MaxSources:     cfg.Labs.MaxSources,
+		DefaultEngines: cfg.WebSearch.DefaultEngines,
+	})
+	services.Labs = labService
+
+	// Pages a gathering finds are crawled, so it needs crawling as well as the
+	// engines and the model; a nil search makes it report itself unavailable.
+	var search gathering.Search
+	if web := platform.NewWebSearch(logger, cfg, sm); web != nil && labRuns != nil {
+		search = web
+	}
+
+	gatherer := gathering.NewService(logger, gathering.NewPostgresStore(db), labService, search, chat, gathering.Config{
+		Searches:       cfg.Gathering.Searches,
+		Sources:        cfg.Gathering.Sources,
+		Results:        cfg.Gathering.Results,
+		MaxTokens:      cfg.Gathering.MaxTokens,
+		Timeout:        cfg.Gathering.Timeout.Std(),
+		DefaultEngines: cfg.WebSearch.DefaultEngines,
+	})
+	gatherer.Recover(context.Background())
+	services.Gatherer = gatherer
 
 	handler := searchapi.NewHandler(logger, services, searchapi.Config{
 		DefaultLimit:   cfg.Retrieval.DefaultLimit,
@@ -152,6 +175,10 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Warnw("Search server did not drain in time", "error", err)
+	}
+
+	if err := gatherer.Shutdown(shutdownCtx); err != nil {
+		logger.Warnw("Gatherings did not stop in time", "error", err)
 	}
 
 	db.Close()

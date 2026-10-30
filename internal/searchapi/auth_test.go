@@ -126,6 +126,7 @@ func TestEverythingButSigningInNeedsAUser(t *testing.T) {
 		"GET /api/runs", "POST /api/runs", "GET /api/runs/r1", "GET /api/me", "POST /api/me/password",
 		"GET /api/labs", "POST /api/labs", "POST /api/labs/plan", "GET /api/labs/1", "DELETE /api/labs/1",
 		"GET /api/labs/1/pages", "POST /api/labs/1/sources", "POST /api/labs/1/sources/2/refresh", "DELETE /api/labs/1/sources/2",
+		"PUT /api/labs/1/engines", "GET /api/engines", "POST /api/labs/1/gather", "GET /api/labs/1/gathering",
 	} {
 		method, path, _ := strings.Cut(target, " ")
 

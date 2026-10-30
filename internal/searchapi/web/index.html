@@ -185,6 +185,7 @@
 const RESULTS = 10;
 let stream = null;
 let labs = [];
+let engines = { available: [], default: [] };
 let current = "search";
 const ticked = new Set();
 
@@ -484,7 +485,14 @@ function renderPlan(plan) {
     plan.topic ? el("p", { class: "note" }, plan.topic) : null,
     plan.sources.length
       ? el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope))))
-      : el("p", { class: "note" }, "No links: the lab starts empty."),
+      : el("p", { class: "note" }, engines.available.length ? "No links: the model will search the web for sources." : "No links: the lab starts empty."),
+    // Without links, searching is how the lab gets anything, so it starts ticked.
+    engines.available.length ? el("div", { class: "web-choice" },
+      el("label", { class: "check" }, el("input", { type: "checkbox", id: "planWeb", checked: plan.sources.length === 0 }),
+        "Search the web for this lab"),
+      el("div", { class: "ticks" }, el("span", { class: "control-label" }, "Engines"),
+        ...engines.available.map((e) => el("label", { class: "tick" },
+          el("input", { type: "checkbox", class: "planEngine", value: e, checked: engines.default.includes(e) }), e)))) : null,
     el("div", { class: "buttons" },
       el("button", { type: "button", class: "action primary", onclick: (e) => build(plan, e.target) }, "Build"),
       el("button", { type: "button", class: "action", onclick: () => $("planCard").replaceChildren() }, "Cancel"))));
@@ -493,8 +501,12 @@ function renderPlan(plan) {
 async function build(plan, button) {
   button.disabled = true;
   try {
-    const lab = await send("POST", "/api/labs", { name: plan.name, topic: plan.topic, sources: plan.sources });
-    location.assign("/labs/" + lab.id);
+    const body = { name: plan.name, topic: plan.topic, sources: plan.sources };
+    if (engines.available.length) body.engines = [...document.querySelectorAll(".planEngine:checked")].map((box) => box.value);
+    const lab = await send("POST", "/api/labs", body);
+    // The lab exists either way; a gathering that cannot start says why on its page.
+    if ($("planWeb") && $("planWeb").checked) await send("POST", `/api/labs/${lab.id}/gather`, {}).catch(() => {});
+    location.assign("/labs/" + lab.id + "#web");
   } catch (err) {
     $("planNote").replaceChildren(el("span", { class: "error" }, err.message));
     button.disabled = false;
@@ -531,6 +543,8 @@ $("planForm").addEventListener("submit", async (e) => {
   if (p.get("pagerank")) setSeg("pagerank", p.get("pagerank"));
   if (p.get("answer") === "0") setSeg("answer", "off");
   if (p.get("mode") || p.get("host") || p.get("rerank") || p.get("pagerank") || p.get("answer")) $("options").open = true;
+
+  api("/api/engines").then((e) => { engines = e; }).catch(() => {});
 
   loadLabs().then(() => {
     const q = p.get("q");

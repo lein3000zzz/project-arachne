@@ -205,3 +205,43 @@ func TestRunToolsStopsAtTheBudgetOrWhenDone(t *testing.T) {
 		t.Errorf("done: %+v", run)
 	}
 }
+
+func TestCallsWrittenAsTextAreRun(t *testing.T) {
+	text := `addError {"name": "add_source", "arguments": {"url": "https://a.example/", "reason": "x {y}"}} then ` +
+		`{"name":"lookup","parameters":{"word":"go"}} and {"name": "unknown", "arguments": {}} and {"not": "a call"} ` +
+		`and a broken {"name": "lookup", "arguments": {`
+
+	calls := textToolCalls(text, []Tool{lookup, {Name: "add_source"}})
+	if len(calls) != 2 || calls[0].Name != "add_source" || string(calls[0].Arguments) != `{"url": "https://a.example/", "reason": "x {y}"}` ||
+		calls[1].Name != "lookup" || string(calls[1].Arguments) != `{"word":"go"}` || calls[0].ID == calls[1].ID {
+		t.Errorf("calls = %+v", calls)
+	}
+
+	c := &scripted{replies: []Response{
+		{Text: `{"name": "lookup", "arguments": {"word": "go"}}`},
+		{Text: "done"},
+	}}
+
+	var ran []string
+
+	run, err := RunTools(context.Background(), c, Request{Tools: []Tool{lookup}}, 5, func(_ context.Context, call ToolCall) (string, bool) {
+		ran = append(ran, string(call.Arguments))
+		return "a language", false
+	})
+	if err != nil || len(ran) != 1 || run.Calls != 1 {
+		t.Fatalf("ran %v, %+v, %v", ran, run, err)
+	}
+
+	sent := c.requests[1].Messages
+	if sent[0].Content != "" || len(sent[0].ToolCalls) != 1 || sent[1].Role != RoleTool {
+		t.Errorf("sent back %+v: the written call goes back as a real one", sent)
+	}
+
+	if calls := textToolCalls(`{"name": "lookup"}`, []Tool{lookup}); len(calls) != 1 || string(calls[0].Arguments) != "{}" {
+		t.Errorf("no arguments: %+v", calls)
+	}
+
+	if calls := textToolCalls("plain prose about lookup", []Tool{lookup}); len(calls) != 0 {
+		t.Errorf("prose: %+v", calls)
+	}
+}

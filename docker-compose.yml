@@ -218,6 +218,27 @@ services:
       timeout: 10s
       retries: 10
 
+  # External web search for gathering: SearXNG, unmodified, queried over its JSON
+  # API. On localhost only - an open SearXNG is a free proxy for the network.
+  searxng:
+    image: searxng/searxng@sha256:c4e8448495ef3b0175eb6c97a19c1ac7cc0a5c907d581ab3877f3cb430e81b86
+    entrypoint: ["sh", "-c", "export SEARXNG_SECRET=$$(head -c 32 /dev/urandom | base64 | tr -dc a-zA-Z0-9); exec /usr/local/searxng/entrypoint.sh"]
+    environment:
+      # The settings are mounted read-only; chowning them would only fail.
+      FORCE_OWNERSHIP: "false"
+    volumes:
+      - ./deployments/searxng:/etc/searxng:ro
+    ports:
+      - "127.0.0.1:8888:8080"
+    mem_limit: 512m
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   reranker:
     # llama.cpp's server: /v1/rerank in the shape vLLM, Jina and Cohere share.
     # Off when RERANK_BASE_URL points elsewhere.

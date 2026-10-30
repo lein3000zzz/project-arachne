@@ -16,6 +16,7 @@ import (
 	"web-crawler/internal/rerank"
 	"web-crawler/internal/review"
 	"web-crawler/internal/vectorstore"
+	"web-crawler/internal/websearch"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -233,6 +234,18 @@ func NewChatClient(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.S
 	}
 
 	return client
+}
+
+// NewWebSearch returns nil when no SearXNG address is in Vault: labs then
+// cannot gather from the web.
+func NewWebSearch(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) *websearch.Client {
+	base := optionalSecret(sm, "WEBSEARCH_BASE_URL")
+	if base == "" {
+		logger.Warn("WEBSEARCH_BASE_URL is not in Vault; labs cannot search the web")
+		return nil
+	}
+
+	return websearch.New(base, cfg.WebSearch.RequestTimeout.Std())
 }
 
 // NewReviewer returns nil when reviewing is off or no chat endpoint is

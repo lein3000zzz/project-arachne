@@ -55,16 +55,16 @@ func TestLabsBelongToTheirOwner(t *testing.T) {
 	store, _, lein, other := newStore(t)
 	ctx := context.Background()
 
-	lab, err := store.Create(ctx, lein, "Go concurrency", "goroutines and channels")
+	lab, err := store.Create(ctx, lein, "Go concurrency", "goroutines and channels", nil)
 	if err != nil || lab.Name != "Go concurrency" || lab.Sources != 0 {
 		t.Fatalf("create: %+v, %v", lab, err)
 	}
 
-	if _, err := store.Create(ctx, lein, "go CONCURRENCY", ""); !errors.Is(err, ErrNameTaken) {
+	if _, err := store.Create(ctx, lein, "go CONCURRENCY", "", nil); !errors.Is(err, ErrNameTaken) {
 		t.Errorf("same name in another case: %v", err)
 	}
 
-	if _, err := store.Create(ctx, other, "Go concurrency", ""); err != nil {
+	if _, err := store.Create(ctx, other, "Go concurrency", "", nil); err != nil {
 		t.Errorf("another user may use the name: %v", err)
 	}
 
@@ -102,9 +102,9 @@ func TestSourcesAndTheirPages(t *testing.T) {
 	store, pool, lein, other := newStore(t)
 	ctx := context.Background()
 
-	golab, _ := store.Create(ctx, lein, "go", "")
-	rustlab, _ := store.Create(ctx, lein, "rust", "")
-	foreign, _ := store.Create(ctx, other, "theirs", "")
+	golab, _ := store.Create(ctx, lein, "go", "", nil)
+	rustlab, _ := store.Create(ctx, lein, "rust", "", nil)
+	foreign, _ := store.Create(ctx, other, "theirs", "", nil)
 
 	doc, err := store.AddSource(ctx, lein, golab.ID, Source{URL: "https://go.dev/doc/", Scope: "section", MaxDepth: 2, MaxLinks: 50})
 	if err != nil || doc.URL != "https://go.dev/doc/" || doc.Scope != "section" || doc.LastRunID != "" {

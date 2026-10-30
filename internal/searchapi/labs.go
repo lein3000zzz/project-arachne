@@ -17,7 +17,8 @@ import (
 // LabService is optional: without it the lab endpoints report 503.
 type LabService interface {
 	List(ctx context.Context, ownerID int64) ([]labs.Lab, error)
-	Create(ctx context.Context, ownerID int64, name, topic string, sources []labs.SourceRequest) (labs.Detail, error)
+	Create(ctx context.Context, ownerID int64, name, topic string, sources []labs.SourceRequest, engines []string) (labs.Detail, error)
+	SetEngines(ctx context.Context, ownerID, labID int64, engines []string) (labs.Lab, error)
 	Get(ctx context.Context, ownerID, labID int64) (labs.Detail, error)
 	Delete(ctx context.Context, ownerID, labID int64) error
 	AddSources(ctx context.Context, ownerID, labID int64, sources []labs.SourceRequest) (labs.Detail, error)
@@ -47,6 +48,12 @@ type createLabRequest struct {
 	Name    string               `json:"name"`
 	Topic   string               `json:"topic"`
 	Sources []labs.SourceRequest `json:"sources"`
+	// Absent takes the defaults; [] means never searching the web.
+	Engines []string `json:"engines"`
+}
+
+type enginesRequest struct {
+	Engines []string `json:"engines"`
 }
 
 type addSourcesRequest struct {
@@ -67,13 +74,25 @@ func (h *labsHandler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *labsHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req createLabRequest
-	if !decodeLabBody(w, r, &req, "body must be JSON: {name, topic, sources: [{url, scope?, depth?, links?}]}") {
+	if !decodeLabBody(w, r, &req, "body must be JSON: {name, topic, sources: [{url, scope?, depth?, links?}], engines?}") {
 		return
 	}
 
 	h.run(w, r, labsTimeout, func(ctx context.Context, owner int64) (int, any, error) {
-		detail, err := h.service.Create(ctx, owner, req.Name, req.Topic, req.Sources)
+		detail, err := h.service.Create(ctx, owner, req.Name, req.Topic, req.Sources, req.Engines)
 		return http.StatusCreated, detail, err
+	})
+}
+
+func (h *labsHandler) setEngines(w http.ResponseWriter, r *http.Request) {
+	var req enginesRequest
+	if !decodeLabBody(w, r, &req, "body must be JSON: {engines: [...]}") {
+		return
+	}
+
+	h.withLab(w, r, func(ctx context.Context, owner, lab int64) (int, any, error) {
+		updated, err := h.service.SetEngines(ctx, owner, lab, req.Engines)
+		return http.StatusOK, updated, err
 	})
 }
 
@@ -199,6 +218,10 @@ func (h *labsHandler) failure(err error) (int, string) {
 }
 
 func labFailure(logger *zap.SugaredLogger, err error) (int, string) {
+	if se := (statusError{}); errors.As(err, &se) {
+		return se.status, se.err.Error()
+	}
+
 	switch {
 	case errors.Is(err, labs.ErrNotFound):
 		return http.StatusNotFound, err.Error()

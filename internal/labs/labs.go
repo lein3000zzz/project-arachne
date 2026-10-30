@@ -27,11 +27,20 @@ type Lab struct {
 	Pages int `json:"pages"`
 	// Of those, turned down on review before indexing.
 	SetAside int `json:"set_aside"`
+	// The external search engines gathering may use for this lab.
+	Engines []string `json:"engines"`
 }
+
+const (
+	KindLink = "link"
+	// Found by the model searching the web while gathering.
+	KindSearch = "search"
+)
 
 type Source struct {
 	ID    int64  `json:"id"`
 	LabID int64  `json:"lab_id"`
+	Kind  string `json:"kind"`
 	URL   string `json:"url"`
 	// A preset (site, section, anywhere) or a URL prefix, as runs.Request takes it.
 	Scope     string    `json:"scope"`
@@ -41,6 +50,12 @@ type Source struct {
 	Pages     int       `json:"pages"`
 	// The source's latest crawl, when it has had one.
 	LastRunID string `json:"last_run_id,omitempty"`
+	// For a search source: the query that found it, the engines that returned
+	// it, and the model's reason for taking it.
+	Query       string   `json:"query,omitempty"`
+	Engines     []string `json:"engines,omitempty"`
+	Reason      string   `json:"reason,omitempty"`
+	GatheringID int64    `json:"gathering_id,omitempty"`
 }
 
 type Page struct {

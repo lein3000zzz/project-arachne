@@ -230,6 +230,10 @@ func TestClassifyBodySniffsWhenTypeIsWrong(t *testing.T) {
 		{"undeclared html sniffed", "", "<!doctype html><html><body>x</body></html>", kindHTML},
 		{"undeclared json sniffed", "", `{"a":1}`, kindJSON},
 		{"undeclared plain text", "", "just some words", kindText},
+		{"declared pdf", "application/pdf", "%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<</Type/Catalog>>\nstream\x00\x01\x02", kindBinary},
+		{"octet stream with text", "application/octet-stream", "plain words after all", kindText},
+		{"png", "image/png", "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", kindBinary},
+		{"declared xml", "application/xml", "<?xml version=\"1.0\"?><a>x</a>", kindText},
 	}
 
 	for _, tc := range cases {

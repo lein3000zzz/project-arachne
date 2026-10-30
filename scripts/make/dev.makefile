@@ -52,7 +52,7 @@ RERANKER_SERVICE := $(if $(RERANK_BASE_URL),,reranker)
 
 export COMPOSE_PROFILES := $(subst $(space),$(comma),$(strip $(EMBEDDER_SERVICE) $(RERANKER_SERVICE)))
 
-INFRA := vault postgres redis broker jaeger milvus $(EMBEDDER_SERVICE) $(RERANKER_SERVICE)
+INFRA := vault postgres redis broker jaeger milvus searxng $(EMBEDDER_SERVICE) $(RERANKER_SERVICE)
 
 CONFIG_OVERLAY_vllm := ,configs/vllm.yml
 CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
