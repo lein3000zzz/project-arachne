@@ -93,12 +93,35 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, res)
+	out := verifiedAnswer{Result: res}
+
+	if h.verifies(r) {
+		v, err := h.answerer.Verify(ctx, res, answer.VerifyEvents{})
+		if err != nil {
+			h.logger.Warnw("Verifying an answer failed", "error", err)
+		} else {
+			out.Verification = &v
+		}
+	}
+
+	writeJSON(w, http.StatusOK, out)
+}
+
+type verifiedAnswer struct {
+	answer.Result
+	Verification *answer.Verification `json:"verification,omitempty"`
+}
+
+// verifies: the answer is checked unless the request says verify=0 - the
+// check costs a model call per claim.
+func (h *answerHandler) verifies(r *http.Request) bool {
+	return h.answerer.Verifying() && r.URL.Query().Get("verify") != "0"
 }
 
 // serveStream sends server-sent events: the listed results and the sources
 // once, the answer as delta events while it is generated, then done - or error
-// at any point.
+// at any point. A checked answer goes on: claims, how it splits into claims,
+// a claim event for each verdict, then verified.
 func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 	if h.answerer == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "answering is not configured"})
@@ -161,7 +184,27 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = send("done", map[string]any{"cited": res.Cited, "scope": res.Scope, "weak": res.Weak, "model": res.Model, "usage": res.Usage})
+	verify := h.verifies(r)
+
+	if err := send("done", map[string]any{"cited": res.Cited, "scope": res.Scope, "weak": res.Weak, "model": res.Model, "usage": res.Usage,
+		"verifying": verify}); err != nil || !verify {
+		return
+	}
+
+	v, err := h.answerer.Verify(ctx, res, answer.VerifyEvents{
+		Claims: func(parts []answer.Part, claims []answer.Claim) error {
+			return send("claims", map[string]any{"parts": parts, "claims": claims})
+		},
+		Claim: func(i int, c answer.Claim) error { return send("claim", map[string]any{"i": i, "claim": c}) },
+	})
+	if err != nil {
+		h.logger.Warnw("Verifying an answer failed", "error", err)
+		_ = send("error", errorResponse{Error: "the answer could not be checked"})
+
+		return
+	}
+
+	_ = send("verified", map[string]any{"model": v.Model, "seconds": v.Seconds})
 }
 
 func (h *answerHandler) failure(req answer.Request, err error) (int, string) {

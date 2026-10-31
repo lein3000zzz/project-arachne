@@ -23,6 +23,7 @@ type Config struct {
 	Auth        Auth        `yaml:"auth"`
 	Labs        Labs        `yaml:"labs"`
 	Review      Review      `yaml:"review"`
+	Verify      Verify      `yaml:"verify"`
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
 	Gathering   Gathering   `yaml:"gathering"`
@@ -143,6 +144,18 @@ type Review struct {
 	PartRunes    int      `yaml:"part_runes"`
 	MaxTokens    int      `yaml:"max_tokens"`
 	Timeout      Duration `yaml:"timeout"`
+}
+
+// Verify is checking each answer, after it is written: every sentence that
+// cites sources against the excerpts it cites, one short model call each.
+type Verify struct {
+	Enabled bool `yaml:"enabled"`
+	// Empty checks with chat.model.
+	Model string `yaml:"model"`
+	// Claims past this many are left unchecked.
+	MaxClaims int      `yaml:"max_claims"`
+	MaxTokens int      `yaml:"max_tokens"`
+	Timeout   Duration `yaml:"timeout"`
 }
 
 // Documents is reading the documents a lab adds - PDFs, Office files, EPUB,
@@ -338,6 +351,12 @@ func Default() Config {
 			MaxTokens:    300,
 			Timeout:      Duration(3 * time.Minute),
 		},
+		Verify: Verify{
+			Enabled:   true,
+			MaxClaims: 8,
+			MaxTokens: 100,
+			Timeout:   Duration(3 * time.Minute),
+		},
 		Documents: Documents{
 			MaxRunes: 150000,
 			Timeout:  Duration(5 * time.Minute),
@@ -445,6 +464,8 @@ func (c *Config) Validate() error {
 		{"review.max_tool_calls", c.Review.MaxToolCalls},
 		{"review.part_runes", c.Review.PartRunes},
 		{"review.max_tokens", c.Review.MaxTokens},
+		{"verify.max_claims", c.Verify.MaxClaims},
+		{"verify.max_tokens", c.Verify.MaxTokens},
 		{"gathering.searches", c.Gathering.Searches},
 		{"gathering.sources", c.Gathering.Sources},
 		{"gathering.results", c.Gathering.Results},
@@ -484,6 +505,7 @@ func (c *Config) Validate() error {
 		{"auth.lockout", c.Auth.Lockout},
 		{"auth.max_lockout", c.Auth.MaxLockout},
 		{"review.timeout", c.Review.Timeout},
+		{"verify.timeout", c.Verify.Timeout},
 		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
 		{"gathering.timeout", c.Gathering.Timeout},
 		{"documents.timeout", c.Documents.Timeout},

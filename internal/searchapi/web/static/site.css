@@ -160,6 +160,22 @@ section:last-of-type { border-bottom: 0; }
 }
 .cite:hover { background: var(--fg); color: var(--bg); }
 .answer-meta { font-family: var(--mono); }
+
+/* A checked answer: a claim the cited excerpts do not bear out is underlined,
+   never removed; the mark after each sentence opens the verdict. */
+.claim.unsupported { text-decoration: underline wavy var(--bad); text-underline-offset: 0.25em; }
+.claim.partly { text-decoration: underline dotted var(--muted); text-underline-offset: 0.25em; }
+.mark {
+  font: inherit; font-size: 0.72em; vertical-align: 0.35em; line-height: 1; margin-left: 0.15em; padding: 0 0.2em;
+  border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: none;
+}
+.mark:hover, .mark:focus-visible { color: var(--fg); outline: 1px solid var(--line); }
+.claim.supported .mark { color: var(--ok); }
+.claim.unsupported .mark { color: var(--bad); }
+.claim-info { font-family: var(--mono); font-size: 0.82rem; max-width: 72ch; margin: 0 0 0.8rem; display: grid; gap: 0.3rem; }
+.claim-info q { color: var(--fg); }
+.claim-info .verdict.supported { color: var(--ok); }
+.claim-info .verdict.unsupported { color: var(--bad); }
 .error { color: var(--bad); }
 
 .row { display: grid; gap: 0.4rem; padding: 1.4rem 0; border-bottom: 1px solid var(--line); }

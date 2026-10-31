@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end check of a running stack: crawl a few pages through the search
-# service, wait until they are indexed and ranked, then search and ask; then
-# build a lab of the two best pages, ask with it ticked, upload a file to it
-# that only the lab may find, and delete it.
+# service, wait until they are indexed and ranked, then search and ask, the
+# answer checked claim by claim; then build a lab of the two best pages, ask
+# with it ticked, upload a file to it that only the lab may find, and delete
+# it.
 #
 # usage: scripts/smoke.sh   (SEARCH_URL, URL, QUERY, LINKS, TIMEOUT to override)
 # Needs ARACHNE_TOKEN, an API token: make token NAME=<user>.
@@ -83,7 +84,11 @@ case "$code" in
   200)
     [ -n "$(jq -r .answer /tmp/arachne-smoke-answer.json)" ] || fail "empty answer"
     [ "$(jq '.cited | length' /tmp/arachne-smoke-answer.json)" -gt 0 ] || fail "the answer cites no source"
-    ok "$(jq -r '"\(.model), \(.usage.output_tokens) tokens, cites \(.cited | length)/\(.sources | length)"' /tmp/arachne-smoke-answer.json)"
+    jq -e '.verification == null or all(.verification.claims[]; (.verdict // "") != "")' /tmp/arachne-smoke-answer.json >/dev/null \
+      || fail "the check left claims without a verdict"
+    ok "$(jq -r '"\(.model), \(.usage.output_tokens) tokens, cites \(.cited | length)/\(.sources | length)" +
+      if .verification then "; checked: " + ([.verification.claims[].verdict] | group_by(.) | map("\(length) \(.[0])") | join(", ")
+        | if . == "" then "no claims" else . end) + " in \(.verification.seconds | floor) s" else "" end' /tmp/arachne-smoke-answer.json)"
     ;;
   *) fail "HTTP $code: $(jq -r .error /tmp/arachne-smoke-answer.json 2>/dev/null)" ;;
 esac
@@ -114,7 +119,7 @@ ok "lab $lab_id holds 2 pages"
 
 step "answer from lab"
 code=$(api -s -o /tmp/arachne-smoke-lab.json -w '%{http_code}' -G "$BASE/answer" \
-  --data-urlencode "q=$QUERY" --data-urlencode "labs=$lab_id")
+  --data-urlencode "q=$QUERY" --data-urlencode "labs=$lab_id" --data-urlencode verify=0)
 case "$code" in
   503) echo "skip  no chat model configured" ;;
   200)

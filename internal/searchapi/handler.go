@@ -24,6 +24,8 @@ type Searcher interface {
 // Answerer is optional: without a chat model the answer endpoints report 503.
 type Answerer interface {
 	Answer(ctx context.Context, req answer.Request, events answer.Events) (answer.Result, error)
+	Verify(ctx context.Context, res answer.Result, events answer.VerifyEvents) (answer.Verification, error)
+	Verifying() bool
 }
 
 type Config struct {

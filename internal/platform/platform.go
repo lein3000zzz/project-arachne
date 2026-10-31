@@ -296,6 +296,23 @@ func NewReviewer(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.Sec
 	})
 }
 
+// NewVerifyClient returns the chat client answers are checked with - chat
+// itself unless verify.model names another - or nil when checking is off.
+func NewVerifyClient(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, chat llm.Client) llm.Client {
+	if !cfg.Verify.Enabled {
+		logger.Warn("Answers are not checked (verify.enabled)")
+		return nil
+	}
+
+	if cfg.Verify.Model == "" {
+		return chat
+	}
+
+	cfg.Chat.Model = cfg.Verify.Model
+
+	return NewChatClient(logger, cfg, sm)
+}
+
 // NewReranker returns nil when no reranker endpoint is configured: search then
 // runs without reranking.
 func NewReranker(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) *rerank.Client {

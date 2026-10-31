@@ -101,7 +101,9 @@
   <section id="answerBox" hidden>
     <h2>Answer</h2>
     <div id="answerText" class="answer"></div>
+    <p id="claimInfo" class="claim-info" aria-live="polite" hidden></p>
     <p id="answerMeta" class="note answer-meta"></p>
+    <p id="verifyMeta" class="note answer-meta"></p>
     <ol class="read" id="read"></ol>
   </section>
 
@@ -295,18 +297,81 @@ function renderRead(sources, withLabs) {
 }
 
 // The answer is plain text: only [n] citations become links.
-function renderAnswer(text, count) {
-  const box = $("answerText");
-  box.replaceChildren();
+function cited(text, count) {
+  const out = [];
   let last = 0;
   for (const m of text.matchAll(/\[(\d{1,3})\]/g)) {
     const n = Number(m[1]);
     if (n < 1 || n > count) continue;
-    box.append(text.slice(last, m.index));
-    box.append(el("a", { class: "cite", href: "#src-" + n, title: "Source " + n, onclick: () => flash(n) }, String(n)));
+    out.push(text.slice(last, m.index));
+    out.push(el("a", { class: "cite", href: "#src-" + n, title: "Source " + n, onclick: () => flash(n) }, String(n)));
     last = m.index + m[0].length;
   }
-  box.append(text.slice(last));
+  out.push(text.slice(last));
+  return out;
+}
+
+function renderAnswer(text, count) {
+  $("answerText").replaceChildren(...cited(text, count));
+}
+
+// ---- the check: each sentence that cites sources, against what it cites ----
+const verdictMarks = { supported: "✓", partly: "~", unsupported: "✗", unchecked: "?" };
+const verdictNames = {
+  supported: "supported by the cited excerpts", partly: "partly supported: some of it is not in the cited excerpts",
+  unsupported: "not supported by the cited excerpts", unchecked: "not checked",
+};
+let checked = [];
+
+// The answer again, as the check splits it: each claim a span ending in a
+// mark, pending until its verdict comes.
+function renderClaims(parts, claims, count) {
+  checked = claims;
+  $("answerText").replaceChildren(...parts.map((part) => {
+    if (part.claim < 0) return cited(part.text, count);
+    const body = part.text.trimEnd();
+    return [
+      el("span", { class: "claim pending", id: "claim-" + part.claim },
+        ...cited(body, count),
+        el("button", { type: "button", class: "mark", "aria-label": "not checked yet", onclick: () => showClaim(part.claim) }, "·")),
+      part.text.slice(body.length),
+    ];
+  }).flat());
+  claims.forEach((c, i) => { if (c.verdict) markClaim(i, c); });
+}
+
+function markClaim(i, claim) {
+  checked[i] = claim;
+  const span = $("claim-" + i);
+  if (!span) return;
+  span.className = "claim " + claim.verdict;
+  const mark = span.querySelector(".mark");
+  mark.textContent = verdictMarks[claim.verdict] || "?";
+  mark.setAttribute("aria-label", verdictNames[claim.verdict] || claim.verdict);
+  mark.title = verdictNames[claim.verdict] || claim.verdict;
+}
+
+function showClaim(i) {
+  const c = checked[i];
+  const info = $("claimInfo");
+  info.hidden = false;
+  if (!c || !c.verdict) {
+    info.replaceChildren("Being checked against " + (c ? c.cites.map((n) => "[" + n + "]").join("") : "its sources") + "…");
+    return;
+  }
+  info.replaceChildren(
+    el("span", { class: "verdict " + c.verdict }, (verdictMarks[c.verdict] || "") + " " + (verdictNames[c.verdict] || c.verdict)),
+    c.quote ? el("q", {}, c.quote) : null,
+    c.quote && c.cites.length ? " " + c.cites.map((n) => "[" + n + "]").join("") : null,
+    c.note ? el("span", { class: "note" }, c.note) : null);
+}
+
+function summarize(seconds) {
+  const counts = {};
+  for (const c of checked) counts[c.verdict || "unchecked"] = (counts[c.verdict || "unchecked"] || 0) + 1;
+  const said = [["supported", "supported"], ["partly", "partly"], ["unsupported", "not supported"], ["unchecked", "unchecked"]]
+    .filter(([v]) => counts[v]).map(([v, name]) => `${counts[v]} ${name}`);
+  return checked.length ? `checked ${checked.length} claims: ${said.join(", ")} · ${seconds.toFixed(1)} s` : "no claims to check";
 }
 
 function flash(n) {
@@ -333,13 +398,16 @@ function searchAndAnswer(q) {
   if (stream) stream.close();
   const started = performance.now();
   const withLabs = ticked.size > 0;
-  let text = "", count = 0, first = null;
+  let text = "", count = 0, first = null, checking = false;
 
   $("go").disabled = true;
   $("answerBox").hidden = true;
   $("resultsBox").hidden = true;
   $("answerText").replaceChildren();
   $("answerMeta").textContent = "";
+  $("verifyMeta").textContent = "";
+  $("claimInfo").hidden = true;
+  checked = [];
   $("read").replaceChildren();
   badge("looking up…", "busy");
 
@@ -370,14 +438,42 @@ function searchAndAnswer(q) {
 
   stream.addEventListener("done", (e) => {
     const done = JSON.parse(e.data);
-    stream.close();
     const total = ((performance.now() - started) / 1000).toFixed(1);
     const wait = first ? ((first - started) / 1000).toFixed(1) : "–";
     $("answerMeta").textContent = (done.weak ? "nothing clearly relevant found · " : "") +
       `${scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited · ` +
-      `${done.usage.output_tokens} tokens · first word ${wait} s`;
-    badge(`${done.model} · ${total} s`);
+      `${done.usage.output_tokens} tokens · first word ${wait} s · ${total} s`;
     $("go").disabled = false;
+    checking = done.verifying;
+    if (!checking) {
+      stream.close();
+      badge(`${done.model} · ${total} s`);
+      return;
+    }
+    badge("checking claims…", "busy");
+  });
+
+  stream.addEventListener("claims", (e) => {
+    const { parts, claims } = JSON.parse(e.data);
+    renderClaims(parts, claims, count);
+    $("verifyMeta").textContent = claims.length ? `checking ${claims.length} claims…` : "";
+  });
+
+  stream.addEventListener("claim", (e) => {
+    const { i, claim } = JSON.parse(e.data);
+    markClaim(i, claim);
+    const left = checked.filter((c) => !c.verdict).length;
+    $("verifyMeta").textContent = left ? `checking claims… ${checked.length - left}/${checked.length}` : "";
+  });
+
+  // The server ends the stream here; EventSource would otherwise reconnect
+  // and ask the question again.
+  stream.addEventListener("verified", (e) => {
+    const v = JSON.parse(e.data);
+    stream.close();
+    checking = false;
+    $("verifyMeta").textContent = summarize(v.seconds) + ` · ${v.model}`;
+    badge(`checked · ${((performance.now() - started) / 1000).toFixed(1)} s`);
   });
 
   stream.addEventListener("error", (e) => {
@@ -387,7 +483,13 @@ function searchAndAnswer(q) {
     // EventSource hides the status: a refused stream looks like a lost one.
     if (!e.data) call("/api/me").catch(() => {});
     if (!text) $("answerBox").hidden = true;
-    badge(text ? "the answer broke off: " + message : "no answer: " + message, "failed");
+    if (checking) {
+      checking = false;
+      $("verifyMeta").textContent = "";
+      badge("the check broke off: " + message, "failed");
+    } else {
+      badge(text ? "the answer broke off: " + message : "no answer: " + message, "failed");
+    }
     $("go").disabled = false;
   });
 }

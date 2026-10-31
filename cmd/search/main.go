@@ -95,6 +95,16 @@ func main() {
 			logger.Fatal("Error initializing answering:", err)
 		}
 
+		if verifier := platform.NewVerifyClient(logger, cfg, sm, chat); verifier != nil {
+			service.Verifies(verifier, answer.VerifyConfig{
+				MaxClaims: cfg.Verify.MaxClaims,
+				MaxTokens: cfg.Verify.MaxTokens,
+				Timeout:   cfg.Verify.Timeout.Std(),
+			})
+
+			logger.Infow("Answers are checked claim by claim", "model", verifier.Model(), "maxClaims", cfg.Verify.MaxClaims)
+		}
+
 		answerer = service
 
 		logger.Infow("Answering enabled", "provider", cfg.Chat.Provider, "model", chat.Model())

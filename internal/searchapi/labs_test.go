@@ -82,6 +82,12 @@ type recordingAnswerer struct {
 	got answer.Request
 }
 
+func (a *recordingAnswerer) Verifying() bool { return false }
+
+func (a *recordingAnswerer) Verify(context.Context, answer.Result, answer.VerifyEvents) (answer.Verification, error) {
+	return answer.Verification{}, nil
+}
+
 func (a *recordingAnswerer) Answer(_ context.Context, req answer.Request, events answer.Events) (answer.Result, error) {
 	a.got = req
 	if events.Sources != nil {

@@ -16,8 +16,27 @@ import (
 )
 
 type fakeAnswerer struct {
-	err error
-	got answer.Request
+	err       error
+	got       answer.Request
+	verifying bool
+}
+
+func (f *fakeAnswerer) Verifying() bool { return f.verifying }
+
+func (f *fakeAnswerer) Verify(_ context.Context, res answer.Result, events answer.VerifyEvents) (answer.Verification, error) {
+	parts := []answer.Part{{Text: res.Answer, Claim: 0}}
+	claims := []answer.Claim{{Text: "Use channels.", Cites: []int{1}}}
+
+	if events.Claims != nil {
+		_ = events.Claims(parts, claims)
+	}
+
+	claims[0].Verdict = answer.Supported
+	if events.Claim != nil {
+		_ = events.Claim(0, claims[0])
+	}
+
+	return answer.Verification{Parts: parts, Claims: claims, Model: "checker"}, nil
 }
 
 func (f *fakeAnswerer) Answer(_ context.Context, req answer.Request, events answer.Events) (answer.Result, error) {
@@ -107,6 +126,47 @@ func TestAnswerStream(t *testing.T) {
 
 	if !strings.Contains(body, `data: {"text":"channels\n"}`) {
 		t.Errorf("a newline inside a delta must be JSON-escaped, not break the event:\n%s", body)
+	}
+}
+
+func eventNames(body string) string {
+	var events []string
+	for _, block := range strings.Split(strings.TrimSpace(body), "\n\n") {
+		events = append(events, strings.TrimPrefix(strings.SplitN(block, "\n", 2)[0], "event: "))
+	}
+
+	return strings.Join(events, ",")
+}
+
+func TestACheckedAnswerGoesOnAfterDone(t *testing.T) {
+	rec := serveAnswer(&fakeAnswerer{verifying: true}, "/answer/stream?q=goroutines")
+	if got := eventNames(rec.Body.String()); got != "sources,delta,delta,delta,done,claims,claim,verified" {
+		t.Errorf("events = %s\n%s", got, rec.Body)
+	}
+
+	if !strings.Contains(rec.Body.String(), `"verifying":true`) || !strings.Contains(rec.Body.String(), `"verdict":"supported"`) {
+		t.Errorf("done says a check follows, claim carries the verdict:\n%s", rec.Body)
+	}
+
+	if got := eventNames(serveAnswer(&fakeAnswerer{verifying: true}, "/answer/stream?q=goroutines&verify=0").Body.String()); got != "sources,delta,delta,delta,done" {
+		t.Errorf("verify=0: %s", got)
+	}
+
+	var res struct {
+		Answer       string               `json:"answer"`
+		Verification *answer.Verification `json:"verification"`
+	}
+
+	rec = serveAnswer(&fakeAnswerer{verifying: true}, "/answer?q=goroutines")
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || res.Answer == "" || res.Verification == nil ||
+		res.Verification.Claims[0].Verdict != answer.Supported {
+		t.Errorf("JSON: %s, %v", rec.Body, err)
+	}
+
+	res.Verification = nil
+	rec = serveAnswer(&fakeAnswerer{verifying: true}, "/answer?q=goroutines&verify=0")
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || res.Verification != nil {
+		t.Errorf("JSON with verify=0: %s, %v", rec.Body, err)
 	}
 }
 

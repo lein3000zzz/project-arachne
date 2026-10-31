@@ -146,6 +146,19 @@ review:
   max_tokens: 300
   timeout: 3m
 
+verify:
+  # after an answer is written, each sentence that cites sources is checked
+  # against the excerpts it cites - supported, partly, unsupported - one short
+  # model call each, while the answer is already on screen. Marked, never
+  # removed.
+  enabled: true
+  # empty: chat.model
+  model: ""
+  # claims past this many are left unchecked
+  max_claims: 8
+  max_tokens: 100
+  timeout: 3m
+
 documents:
   # read the documents labs add - PDFs, Office files, EPUB, scans (OCR, Russian
   # and English) - with Apache Tika. Only a lab's own source is read: a link

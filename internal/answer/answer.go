@@ -40,6 +40,9 @@ type Service struct {
 	search Searcher
 	chat   llm.Client
 	cfg    Config
+
+	verifier  llm.Client
+	verifyCfg VerifyConfig
 }
 
 func New(search Searcher, chat llm.Client, cfg Config) (*Service, error) {
@@ -103,6 +106,9 @@ type Result struct {
 	Cited   []int     `json:"cited"`
 	Model   string    `json:"model"`
 	Usage   llm.Usage `json:"usage"`
+
+	// What the model read of each source; claims are checked against it.
+	shown []string
 }
 
 // Events lets a caller show progress: the results and the sources as soon as
@@ -145,9 +151,12 @@ func (s *Service) Answer(ctx context.Context, req Request, events Events) (Resul
 		return result, ErrNoSources
 	}
 
+	query := strings.TrimSpace(req.Query)
+	result.shown = shown(query, sources, s.cfg.SourceRunes)
+
 	resp, err := s.chat.Stream(ctx, llm.Request{
 		System:      systemPrompt,
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(strings.TrimSpace(req.Query), sources, s.cfg.SourceRunes, weak)}},
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(query, sources, result.shown, weak)}},
 		MaxTokens:   s.cfg.MaxTokens,
 		Temperature: s.cfg.Temperature,
 	}, events.Delta)
@@ -313,21 +322,31 @@ func number(results []retrieval.Result, labURLs []string) []Source {
 // otherwise stretch an unrelated excerpt into an answer.
 const weakNote = "Note: none of these sources looked clearly relevant to the question. Use what they do say; if they do not answer it, say so.\n\n"
 
-func prompt(query string, sources []Source, runes int, weak bool) string {
+// shown is what the model reads of each source: the excerpt focused on the
+// question, then any further passages.
+func shown(query string, sources []Source, runes int) []string {
+	asked := terms(query)
+	out := make([]string, len(sources))
+
+	for i, src := range sources {
+		parts := []string{focus(src.Snippet, runes, asked)}
+		for _, more := range src.Excerpts {
+			parts = append(parts, focus(more, runes, asked))
+		}
+
+		out[i] = strings.Join(parts, "\n…\n")
+	}
+
+	return out
+}
+
+func prompt(query string, sources []Source, shown []string, weak bool) string {
 	var b strings.Builder
 
 	b.WriteString("Sources:\n\n")
 
-	asked := terms(query)
-
-	for _, src := range sources {
-		fmt.Fprintf(&b, "[%d] %s\n%s\n%s\n", src.N, src.Title, src.URL, focus(src.Snippet, runes, asked))
-
-		for _, more := range src.Excerpts {
-			fmt.Fprintf(&b, "…\n%s\n", focus(more, runes, asked))
-		}
-
-		b.WriteString("\n")
+	for i, src := range sources {
+		fmt.Fprintf(&b, "[%d] %s\n%s\n%s\n\n", src.N, src.Title, src.URL, shown[i])
 	}
 
 	if weak {
