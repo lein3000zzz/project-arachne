@@ -153,12 +153,12 @@ section:last-of-type { border-bottom: 0; }
 }
 
 .answer { font-family: var(--mono); font-size: 0.98rem; line-height: 1.7; white-space: pre-wrap; max-width: 72ch; margin: 0 0 1rem; }
-.cite {
+.cite, .report-body a[href^="#ref-"] {
   display: inline-block; font-family: var(--nd); font-size: 0.68rem; line-height: 1.5; vertical-align: 0.12em;
   border: 1px solid var(--fg); border-radius: 999px; padding: 0 0.42rem; margin: 0 0.08rem;
   color: var(--fg); text-decoration: none;
 }
-.cite:hover { background: var(--fg); color: var(--bg); }
+.cite:hover, .report-body a[href^="#ref-"]:hover { background: var(--fg); color: var(--bg); }
 .answer-meta { font-family: var(--mono); }
 
 /* A checked answer: a claim the cited excerpts do not bear out is underlined,
@@ -166,7 +166,7 @@ section:last-of-type { border-bottom: 0; }
 .claim.unsupported { text-decoration: underline wavy var(--bad); text-underline-offset: 0.25em; }
 .claim.partly { text-decoration: underline dotted var(--muted); text-underline-offset: 0.25em; }
 .mark {
-  font: inherit; font-size: 0.72em; vertical-align: 0.35em; line-height: 1; margin-left: 0.15em; padding: 0 0.2em;
+  font: inherit; font-size: 0.82em; vertical-align: 0.3em; line-height: 1; margin-left: 0.15em; padding: 0 0.2em;
   border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: none;
 }
 .mark:hover, .mark:focus-visible { color: var(--fg); outline: 1px solid var(--line); }
@@ -364,3 +364,52 @@ section:last-of-type { border-bottom: 0; }
 .refs .host { display: block; margin-left: 1.45rem; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); overflow-wrap: anywhere; }
 .refs .host a { color: var(--muted); }
 .refs li.had { color: var(--muted); }
+
+/* An artifact: a documentation page, the lab's artifacts in the sidebar and
+   its sections as the table of contents on wide screens. */
+.toc { display: none; }
+@media (min-width: 76rem) {
+  .docs.with-toc { grid-template-columns: 13rem minmax(0, 1fr) 13rem; }
+  .toc { display: block; position: sticky; top: 1.5rem; align-self: start; font-size: 0.78rem; }
+}
+.toc ol { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.45rem; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--fg); }
+.artifact-nav { display: grid; gap: 0.45rem; margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--line); }
+.report .buttons { margin: 1rem 0 0.6rem; }
+.report .control-label select { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); margin-left: 0.3rem; }
+.report-body { max-width: 72ch; line-height: 1.7; margin-top: 2rem; }
+.docs-main .report-body section.part { padding: 0; margin: 0 0 2.4rem; }
+.report-body h2 { font-size: 1.3rem; margin: 0 0 0.8rem; text-transform: none; letter-spacing: normal; color: var(--fg); }
+.report-body p, .report-body ul, .report-body ol, .report-body blockquote, .report-body table { margin: 0 0 1rem; }
+.report-body ul, .report-body ol { padding-left: 1.3rem; }
+.report-body blockquote { border-left: 2px solid var(--line); padding-left: 0.9rem; color: var(--muted); }
+.report-body table { border-collapse: collapse; font-size: 0.88rem; }
+.report-body th, .report-body td { border-bottom: 1px solid var(--line); padding: 0.35rem 0.8rem 0.35rem 0; text-align: left; }
+.report-body code { font-family: var(--mono); font-size: 0.88em; }
+.report-body pre { font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; background: var(--raised); border: 1px solid var(--line);
+  padding: 0.9rem 1rem; overflow-x: auto; margin: 0 0 1rem; }
+.report-body .missing { border: 1px dashed var(--line); padding: 0.8rem 1rem; color: var(--muted); }
+.report-body .missing p { margin: 0 0 0.6rem; }
+.report-body .refs { list-style: decimal; padding-left: 1.6rem; font-size: 0.85rem; overflow-wrap: anywhere; }
+.report-body .refs .host { color: var(--muted); font-family: var(--mono); font-size: 0.75rem; margin-left: 0.3rem; }
+.report-body .refs li:target { background: var(--accent-soft); }
+
+/* Code, coloured by token class from the site's own palette: light and dark
+   follow the theme. */
+.chroma .k, .chroma .kc, .chroma .kd, .chroma .kn, .chroma .kp, .chroma .kr, .chroma .kt { font-weight: 650; }
+.chroma .s, .chroma .s1, .chroma .s2, .chroma .sb, .chroma .sc, .chroma .se, .chroma .sh, .chroma .si, .chroma .sr, .chroma .sx { color: var(--ok); }
+.chroma .m, .chroma .mb, .chroma .mf, .chroma .mh, .chroma .mi, .chroma .mo, .chroma .nb, .chroma .bp { color: var(--pod); }
+.chroma .c, .chroma .c1, .chroma .cm, .chroma .cp, .chroma .cs, .chroma .ch { color: var(--muted); font-style: italic; }
+.chroma .err { color: var(--bad); }
+
+/* The lab's artifacts, and a report's outline waiting for Build. */
+.artifact-list { list-style: none; margin: 0 0 0.6rem; padding: 0; }
+.artifact-list li { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: baseline; padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
+.artifact-list .tag { margin-left: 0; }
+.section-states { font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.2em; color: var(--muted); }
+.outline { margin: 0.9rem 0 1.2rem; padding-left: 1.3rem; display: grid; gap: 0.7rem; }
+.outline li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.4rem 1rem; }
+.outline li > div:first-child { flex: 1 1 20rem; }
+.save-answer { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: center; margin: 0 0 1rem; font-size: 0.82rem; }
+.save-answer select { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); padding: 0.1rem 0.3rem; }

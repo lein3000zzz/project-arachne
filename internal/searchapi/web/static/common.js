@@ -105,3 +105,10 @@ async function uploadFiles(labID, files) {
   for (const file of files) form.append("files", file, file.name);
   return api(`/api/labs/${labID}/uploads`, { method: "POST", body: form });
 }
+
+// A checked claim's mark and what it means: answers and artifacts alike.
+const verdictMarks = { supported: "✓", partly: "~", unsupported: "✗", unchecked: "?" };
+const verdictNames = {
+  supported: "supported by the cited excerpts", partly: "partly supported: some of it is not in the cited excerpts",
+  unsupported: "not supported by the cited excerpts", unchecked: "not checked",
+};

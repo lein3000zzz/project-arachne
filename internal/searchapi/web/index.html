@@ -104,6 +104,7 @@
     <p id="claimInfo" class="claim-info" aria-live="polite" hidden></p>
     <p id="answerMeta" class="note answer-meta"></p>
     <p id="verifyMeta" class="note answer-meta"></p>
+    <div class="save-answer" id="saveAnswer" hidden></div>
     <ol class="read" id="read"></ol>
   </section>
 
@@ -316,11 +317,6 @@ function renderAnswer(text, count) {
 }
 
 // ---- the check: each sentence that cites sources, against what it cites ----
-const verdictMarks = { supported: "✓", partly: "~", unsupported: "✗", unchecked: "?" };
-const verdictNames = {
-  supported: "supported by the cited excerpts", partly: "partly supported: some of it is not in the cited excerpts",
-  unsupported: "not supported by the cited excerpts", unchecked: "not checked",
-};
 let checked = [];
 
 // The answer again, as the check splits it: each claim a span ending in a
@@ -359,11 +355,40 @@ function showClaim(i) {
     info.replaceChildren("Being checked against " + (c ? c.cites.map((n) => "[" + n + "]").join("") : "its sources") + "…");
     return;
   }
-  info.replaceChildren(
+  // replaceChildren would print a null as "null".
+  info.replaceChildren(...[
     el("span", { class: "verdict " + c.verdict }, (verdictMarks[c.verdict] || "") + " " + (verdictNames[c.verdict] || c.verdict)),
     c.quote ? el("q", {}, c.quote) : null,
     c.quote && c.cites.length ? " " + c.cites.map((n) => "[" + n + "]").join("") : null,
-    c.note ? el("span", { class: "note" }, c.note) : null);
+    c.note ? el("span", { class: "note" }, c.note) : null,
+  ].filter(Boolean));
+}
+
+// Keeps the answer, checked, as an artifact of a lab: named by its id, so the
+// server saves what it said, not what the page holds.
+function offerSave(id) {
+  const box = $("saveAnswer");
+  box.hidden = !id;
+  if (!id) return;
+  if (!labs.length) {
+    box.replaceChildren(el("span", { class: "note" }, "Make a lab to keep answers in."));
+    return;
+  }
+  const pick = el("select", { "aria-label": "Lab" },
+    [...labs].sort((a, b) => ticked.has(b.id) - ticked.has(a.id)).map((l) => el("option", { value: String(l.id) }, l.name)));
+  const note = el("span", { class: "note", "aria-live": "polite" });
+  const button = el("button", { type: "button", class: "action small" }, "Add to lab");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const a = await send("POST", `/api/labs/${pick.value}/artifacts/answers`, { answer: id });
+      note.replaceChildren("Kept: ", el("a", { href: `/labs/${pick.value}/artifacts/${a.id}` }, a.title));
+    } catch (err) {
+      note.replaceChildren(el("span", { class: "error" }, err.message));
+      button.disabled = false;
+    }
+  });
+  box.replaceChildren(pick, button, note);
 }
 
 function summarize(seconds) {
@@ -398,7 +423,7 @@ function searchAndAnswer(q) {
   if (stream) stream.close();
   const started = performance.now();
   const withLabs = ticked.size > 0;
-  let text = "", count = 0, first = null, checking = false;
+  let text = "", count = 0, first = null, checking = false, answerID = null;
 
   $("go").disabled = true;
   $("answerBox").hidden = true;
@@ -407,6 +432,7 @@ function searchAndAnswer(q) {
   $("answerMeta").textContent = "";
   $("verifyMeta").textContent = "";
   $("claimInfo").hidden = true;
+  offerSave(null);
   checked = [];
   $("read").replaceChildren();
   badge("looking up…", "busy");
@@ -445,9 +471,11 @@ function searchAndAnswer(q) {
       `${done.usage.output_tokens} tokens · first word ${wait} s · ${total} s`;
     $("go").disabled = false;
     checking = done.verifying;
+    answerID = done.id;
     if (!checking) {
       stream.close();
       badge(`${done.model} · ${total} s`);
+      offerSave(answerID);
       return;
     }
     badge("checking claims…", "busy");
@@ -474,6 +502,7 @@ function searchAndAnswer(q) {
     checking = false;
     $("verifyMeta").textContent = summarize(v.seconds) + ` · ${v.model}`;
     badge(`checked · ${((performance.now() - started) / 1000).toFixed(1)} s`);
+    offerSave(answerID);
   });
 
   stream.addEventListener("error", (e) => {

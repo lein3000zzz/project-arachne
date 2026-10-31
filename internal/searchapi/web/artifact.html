@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artifact · arachne</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem("theme"); } catch (_) {}
+  if (stored === "light" || stored === "dark") document.documentElement.setAttribute("data-theme", stored);
+})();
+</script>
+<link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="shell">
+
+<header class="site">
+  <a class="brand" href="/">arachne</a>
+  <span class="who" id="who"></span>
+  <button type="button" class="theme" id="logout">log out</button>
+  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+</header>
+
+<main id="main" class="docs with-toc">
+  <nav class="docs-nav" aria-label="Lab">
+    <a id="backToLab" href="/">&larr; Lab</a>
+    <p class="lab-name" id="labName"></p>
+    <div class="artifact-nav" id="artifactNav"></div>
+  </nav>
+
+  <div class="docs-main">
+    <article class="report">
+      <p class="eyebrow" id="kind">artifact</p>
+      <h1 id="title">&hellip;</h1>
+      <p class="note" id="meta"></p>
+      <div class="buttons" id="actions">
+        <button type="button" class="action small" id="rebuild" hidden>Rebuild</button>
+        <a class="action small" id="download" href="#">Download .md</a>
+        <label class="control-label" id="versionPick" hidden>Version <select id="version"></select></label>
+        <button type="button" class="action small danger" id="deleteArtifact">Delete</button>
+      </div>
+      <p class="note" id="actionNote" aria-live="polite"></p>
+      <p class="note answer-meta" id="checks"></p>
+      <p id="claimInfo" class="claim-info" aria-live="polite" hidden></p>
+      <div class="report-body" id="body"></div>
+    </article>
+  </div>
+
+  <aside class="toc" aria-label="On this page">
+    <p class="control-label">On this page</p>
+    <ol id="toc"></ol>
+  </aside>
+</main>
+
+<footer class="footer">
+  <p class="convert">arachne</p>
+  <nav class="contact" aria-label="Links">
+    <a href="https://github.com/lein3000zzz/project-arachne">GitHub</a>
+    <a href="https://lein3000.dev">lein3000.dev</a>
+  </nav>
+</footer>
+
+</div>
+
+<script src="/static/theme.js"></script>
+<script src="/static/common.js"></script>
+<script>
+const [, , labID, , artifactID] = location.pathname.split("/").map((p) => (/^\d+$/.test(p) ? Number(p) : p));
+let polling = null;
+let shownVersion = 0;
+let claims = {};
+
+$("backToLab").href = `/labs/${labID}#artifacts`;
+
+// The body is the server's rendering: Markdown sanitised there, marks and
+// links added after - the only HTML this page takes from the server.
+function render(data) {
+  const { artifact: a, version: v, versions } = data;
+  document.title = a.title + " · arachne";
+  $("kind").textContent = a.kind === "answer" ? "saved answer" : "report";
+  $("title").textContent = a.title;
+
+  const done = v.sections.filter((s) => s.state === "done").length;
+  $("meta").textContent = [
+    `version ${v.number}`,
+    v.status === "running" ? `writing · ${done}/${v.sections.length} sections` : v.status === "failed" ? "failed: " + v.error : `${done}/${v.sections.length} sections written`,
+    v.model,
+    v.finished_at ? "built " + ago(v.finished_at) : "started " + ago(v.started_at),
+    v.seconds ? Math.round(v.seconds) + " s" : null,
+  ].filter(Boolean).join(" · ");
+
+  $("body").innerHTML = data.html;
+  $("toc").replaceChildren(...(data.toc || []).map((h) => el("li", {}, el("a", { href: "#" + h.id }, h.text))));
+
+  claims = {};
+  v.sections.forEach((s, i) => (s.claims || []).forEach((c, j) => { claims[`${i}-${j}`] = c; }));
+  summarize(Object.values(claims));
+
+  $("rebuild").hidden = a.kind !== "report";
+  $("rebuild").disabled = v.status === "running";
+  $("download").href = `/api/artifacts/${artifactID}/markdown?version=${v.number}`;
+  $("versionPick").hidden = versions.length < 2;
+  $("version").replaceChildren(...versions.slice().reverse().map((n) => el("option", { value: String(n), selected: n === v.number }, "v" + n)));
+  shownVersion = v.number;
+
+  return v.status === "running";
+}
+
+function summarize(list) {
+  if (!list.length) {
+    $("checks").textContent = "";
+    return;
+  }
+  const counts = {};
+  for (const c of list) counts[c.verdict || "unchecked"] = (counts[c.verdict || "unchecked"] || 0) + 1;
+  const said = [["supported", "supported"], ["partly", "partly"], ["unsupported", "not supported"], ["unchecked", "unchecked"]]
+    .filter(([k]) => counts[k]).map(([k, name]) => `${counts[k]} ${name}`);
+  $("checks").textContent = `checked ${list.length} claims: ${said.join(", ")}`;
+}
+
+function showClaim(id) {
+  const c = claims[id];
+  if (!c) return;
+  const info = $("claimInfo");
+  info.hidden = false;
+  // replaceChildren would print a null as "null".
+  info.replaceChildren(...[
+    el("span", { class: "verdict " + c.verdict }, (verdictMarks[c.verdict] || "") + " " + (verdictNames[c.verdict] || c.verdict)),
+    el("span", {}, c.text),
+    c.quote ? el("q", {}, c.quote) : null,
+    c.note ? el("span", { class: "note" }, c.note) : null,
+  ].filter(Boolean));
+}
+
+$("body").addEventListener("click", async (e) => {
+  const mark = e.target.closest(".mark");
+  if (mark) {
+    showClaim(mark.dataset.claim);
+    return;
+  }
+
+  const gather = e.target.closest(".gather");
+  if (gather) {
+    gather.disabled = true;
+    try {
+      await send("POST", `/api/labs/${labID}/gather`, { request: gather.dataset.focus });
+      gather.replaceWith(el("span", { class: "note" }, "Gathering for this section. Rebuild the report when it is done: ",
+        el("a", { href: `/labs/${labID}#web` }, "follow it on the lab page"), "."));
+    } catch (err) {
+      gather.disabled = false;
+      gather.after(el("span", { class: "error" }, " " + err.message));
+    }
+  }
+});
+
+async function loadNav() {
+  try {
+    const [lab, list] = await Promise.all([api(`/api/labs/${labID}`), api(`/api/labs/${labID}/artifacts`)]);
+    $("labName").textContent = lab.name;
+    $("artifactNav").replaceChildren(...list.artifacts.map((a) => el("a", {
+      href: `/labs/${labID}/artifacts/${a.id}`, "aria-current": a.id === artifactID ? "true" : null,
+    }, a.title)));
+  } catch (_) {}
+}
+
+async function load(version) {
+  clearTimeout(polling);
+  let data;
+  try {
+    data = await api(`/api/artifacts/${artifactID}` + (version ? `?version=${version}` : ""));
+  } catch (err) {
+    $("title").textContent = err.message === "no such artifact" ? "No such artifact." : "The artifact could not be loaded.";
+    $("meta").textContent = err.message;
+    return;
+  }
+  if (render(data)) polling = setTimeout(() => load(version), 4000);
+}
+
+$("version").addEventListener("change", (e) => load(Number(e.target.value)));
+
+$("rebuild").addEventListener("click", async () => {
+  $("rebuild").disabled = true;
+  try {
+    await send("POST", `/api/artifacts/${artifactID}/rebuild`);
+    $("actionNote").textContent = "Rebuilding as a new version, from what the lab holds now.";
+    load(0);
+    loadNav();
+  } catch (err) {
+    $("actionNote").replaceChildren(el("span", { class: "error" }, err.message));
+    $("rebuild").disabled = false;
+  }
+});
+
+$("deleteArtifact").addEventListener("click", async () => {
+  if (!confirm(`Delete "${$("title").textContent}", every version of it?`)) return;
+  try {
+    await send("DELETE", `/api/artifacts/${artifactID}`);
+    location.assign(`/labs/${labID}#artifacts`);
+  } catch (err) {
+    $("actionNote").replaceChildren(el("span", { class: "error" }, err.message));
+  }
+});
+
+loadNav();
+load(0);
+</script>
+</body>
+</html>

@@ -347,3 +347,39 @@ func TestFewSourcesAreReadDeeper(t *testing.T) {
 		}
 	}
 }
+
+// countingSearch records every search: a lab-only read must make one.
+type countingSearch struct {
+	results []retrieval.Result
+	got     []retrieval.Request
+}
+
+func (c *countingSearch) Search(_ context.Context, req retrieval.Request) ([]retrieval.Result, error) {
+	c.got = append(c.got, req)
+	return c.results, nil
+}
+
+func TestASectionReadsItsLabAloneAndWritesWhatItIsAsked(t *testing.T) {
+	low := &retrieval.Signal{Score: -5}
+	search := &countingSearch{results: []retrieval.Result{{URL: "https://lab/a", Title: "A", Snippet: "residual blocks", Rerank: low}}}
+	chat := &fakeChat{reply: "Residual blocks ease training [1]."}
+
+	s, err := New(search, chat, Config{Sources: 3, MaxTokens: 256})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := Request{Query: "residual blocks", LabURLs: []string{"https://lab/a"}, LabOnly: true, Mode: retrieval.ModeHybrid,
+		Writing: &Writing{System: "Write a section.", Task: "Section: Residual blocks", MaxTokens: 600}}
+
+	read, err := s.Read(context.Background(), req)
+	if err != nil || len(search.got) != 1 || search.got[0].URLs == nil || !read.Weak || len(read.Sources) != 1 || len(read.Results) != 0 {
+		t.Fatalf("read: %+v, %d searches, %v; want the lab alone, weak", read, len(search.got), err)
+	}
+
+	written, err := s.Write(context.Background(), req, read, nil)
+	if err != nil || written.Answer == "" || chat.got.System != "Write a section." || chat.got.MaxTokens != 600 ||
+		!strings.HasSuffix(chat.got.Messages[0].Content, "Section: Residual blocks") {
+		t.Errorf("write: %+v, %v; asked %+v", written, err, chat.got)
+	}
+}

@@ -34,8 +34,8 @@
     <a href="#sources">Sources</a>
     <a href="#web">Web</a>
     <a href="#references" id="refNav" hidden>References</a>
+    <a href="#artifacts">Artifacts</a>
     <a href="#pages">Pages</a>
-    <span class="later">Artifacts come later</span>
   </nav>
 
   <div class="docs-main">
@@ -83,6 +83,20 @@
       </form>
       <p class="note" id="gatherNote" aria-live="polite"></p>
       <div id="gathering"></div>
+    </section>
+
+    <section id="artifacts">
+      <h2>Artifacts</h2>
+      <ul class="artifact-list" id="artifactRows"></ul>
+      <form id="reportForm" class="ask">
+        <div class="field">
+          <label for="reportText">New report</label>
+          <textarea id="reportText" placeholder="how residual connections fix the degradation problem, and what came after" required></textarea>
+        </div>
+        <button class="action" id="reportGo">Outline</button>
+      </form>
+      <p class="note" id="reportNote" aria-live="polite"></p>
+      <div id="outlineCard"></div>
     </section>
 
     <section id="references" hidden>
@@ -212,8 +226,8 @@ async function load() {
 
   renderEngines(lab.engines);
 
-  const gathering = await loadGathering();
-  if (gathering || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
+  const [gathering, building] = await Promise.all([loadGathering(), loadArtifacts()]);
+  if (gathering || building || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
   loadPages();
   loadReferences();
 }
@@ -303,6 +317,102 @@ async function loadReferences() {
 }
 
 $("refFilter").addEventListener("input", filterReferences);
+
+// ---- artifacts: reports built from the lab, saved answers ----
+const sectionStates = { pending: "·", writing: "…", checking: "…", done: "✓", thin: "–", failed: "✕" };
+
+function artifactRow(a) {
+  const v = a.latest;
+  const done = v.sections.filter((s) => s.state === "done").length;
+  const status = v.status === "running" ? stateOf("running")
+    : v.status === "failed" ? el("span", { class: "error" }, "failed: " + v.error)
+    : el("span", { class: "note" }, a.kind === "answer" ? "saved " + ago(a.updated_at) : `${done}/${v.sections.length} sections · v${v.number} · ${ago(a.updated_at)}`);
+  return el("li", {},
+    el("a", { href: `/labs/${labID}/artifacts/${a.id}` }, a.title),
+    el("span", { class: "tag" }, a.kind === "answer" ? "answer" : "report"),
+    status,
+    v.status === "running" ? el("span", { class: "section-states", "aria-label": `${done} of ${v.sections.length} sections written` },
+      v.sections.map((s) => el("span", { title: `${s.heading}: ${s.state}` }, sectionStates[s.state] || "·"))) : null);
+}
+
+// Returns whether a report is being built, so the page keeps polling.
+async function loadArtifacts() {
+  try {
+    const { artifacts } = await api(`${base}/artifacts`);
+    $("artifactRows").replaceChildren(...(artifacts.length ? artifacts.map(artifactRow)
+      : [el("li", { class: "note" }, "None yet. A report is written from this lab's documents alone; an answer can be saved here from Look up.")]));
+    return artifacts.some((a) => a.latest.status === "running");
+  } catch (err) {
+    $("artifactRows").replaceChildren(el("li", { class: "error" }, err.message));
+    return false;
+  }
+}
+
+// The model drafts the outline; the user drops and reorders sections - steering,
+// not writing - then builds.
+let outline = null, outlineRequest = "";
+
+function renderOutline() {
+  if (!outline) {
+    $("outlineCard").replaceChildren();
+    return;
+  }
+  const move = (i, by) => {
+    const [s] = outline.sections.splice(i, 1);
+    outline.sections.splice(i + by, 0, s);
+    renderOutline();
+  };
+  const small = (label, onclick, disabled) => el("button", { type: "button", class: "action small", onclick, disabled }, label);
+  $("outlineCard").replaceChildren(el("div", { class: "plan" },
+    el("p", { class: "eyebrow" }, outline.model ? "outlined by " + outline.model : "read literally: the model could not outline it"),
+    el("h3", {}, outline.title),
+    el("ol", { class: "outline" }, outline.sections.map((s, i) => el("li", {},
+      el("div", {}, el("b", {}, s.heading), el("div", { class: "note" }, s.focus)),
+      el("div", { class: "buttons" },
+        small("↑", () => move(i, -1), i === 0),
+        small("↓", () => move(i, 1), i === outline.sections.length - 1),
+        small("drop", () => { outline.sections.splice(i, 1); renderOutline(); }, outline.sections.length === 1))))),
+    el("div", { class: "buttons" },
+      el("button", { type: "button", class: "action primary", onclick: (e) => buildReport(e.target) }, "Build"),
+      el("button", { type: "button", class: "action", onclick: () => draftOutline() }, "Outline again"),
+      el("button", { type: "button", class: "action", onclick: () => { outline = null; renderOutline(); } }, "Cancel"))));
+}
+
+async function draftOutline() {
+  $("reportGo").disabled = true;
+  $("reportNote").textContent = "Outlining…";
+  try {
+    outline = await send("POST", `${base}/artifacts/outline`, { request: outlineRequest });
+    $("reportNote").textContent = "";
+  } catch (err) {
+    $("reportNote").replaceChildren(el("span", { class: "error" }, err.message));
+  } finally {
+    $("reportGo").disabled = false;
+  }
+  renderOutline();
+}
+
+async function buildReport(button) {
+  button.disabled = true;
+  try {
+    const a = await send("POST", `${base}/artifacts`, { request: outlineRequest, outline });
+    outline = null;
+    renderOutline();
+    $("reportText").value = "";
+    $("reportNote").replaceChildren("Writing it section by section, from this lab's documents: ",
+      el("a", { href: `/labs/${labID}/artifacts/${a.id}` }, "follow it"), ".");
+    load();
+  } catch (err) {
+    $("reportNote").replaceChildren(el("span", { class: "error" }, err.message));
+    button.disabled = false;
+  }
+}
+
+$("reportForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  outlineRequest = $("reportText").value.trim();
+  if (outlineRequest) draftOutline();
+});
 
 // ---- uploads: files of the user's own, sources like links ----
 $("uploadInput").addEventListener("change", async (e) => {

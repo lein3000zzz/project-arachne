@@ -24,6 +24,7 @@ type Config struct {
 	Labs        Labs        `yaml:"labs"`
 	Review      Review      `yaml:"review"`
 	Verify      Verify      `yaml:"verify"`
+	Artifacts   Artifacts   `yaml:"artifacts"`
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
 	Gathering   Gathering   `yaml:"gathering"`
@@ -156,6 +157,18 @@ type Verify struct {
 	MaxClaims int      `yaml:"max_claims"`
 	MaxTokens int      `yaml:"max_tokens"`
 	Timeout   Duration `yaml:"timeout"`
+}
+
+// Artifacts are the longer works the model builds inside a lab: research
+// reports, written section by section from the lab's documents alone.
+type Artifacts struct {
+	MaxSections   int      `yaml:"max_sections"`
+	SectionTokens int      `yaml:"section_tokens"`
+	OutlineTokens int      `yaml:"outline_tokens"`
+	Timeout       Duration `yaml:"timeout"`
+	// Check each section's claims (with verify's model and limits) when
+	// verify.enabled is on.
+	Verify bool `yaml:"verify"`
 }
 
 // Documents is reading the documents a lab adds - PDFs, Office files, EPUB,
@@ -357,6 +370,13 @@ func Default() Config {
 			MaxTokens: 100,
 			Timeout:   Duration(3 * time.Minute),
 		},
+		Artifacts: Artifacts{
+			MaxSections:   7,
+			SectionTokens: 600,
+			OutlineTokens: 400,
+			Timeout:       Duration(30 * time.Minute),
+			Verify:        true,
+		},
 		Documents: Documents{
 			MaxRunes: 150000,
 			Timeout:  Duration(5 * time.Minute),
@@ -466,6 +486,9 @@ func (c *Config) Validate() error {
 		{"review.max_tokens", c.Review.MaxTokens},
 		{"verify.max_claims", c.Verify.MaxClaims},
 		{"verify.max_tokens", c.Verify.MaxTokens},
+		{"artifacts.max_sections", c.Artifacts.MaxSections},
+		{"artifacts.section_tokens", c.Artifacts.SectionTokens},
+		{"artifacts.outline_tokens", c.Artifacts.OutlineTokens},
 		{"gathering.searches", c.Gathering.Searches},
 		{"gathering.sources", c.Gathering.Sources},
 		{"gathering.results", c.Gathering.Results},
@@ -506,6 +529,7 @@ func (c *Config) Validate() error {
 		{"auth.max_lockout", c.Auth.MaxLockout},
 		{"review.timeout", c.Review.Timeout},
 		{"verify.timeout", c.Verify.Timeout},
+		{"artifacts.timeout", c.Artifacts.Timeout},
 		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
 		{"gathering.timeout", c.Gathering.Timeout},
 		{"documents.timeout", c.Documents.Timeout},

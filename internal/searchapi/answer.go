@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 	"web-crawler/internal/answer"
+	"web-crawler/internal/auth"
 	"web-crawler/internal/retrieval"
 
 	"go.uber.org/zap"
@@ -20,6 +21,7 @@ type answerHandler struct {
 	labs       LabService
 	timeout    time.Duration
 	maxResults int
+	recent     *recentAnswers
 }
 
 func (h *answerHandler) request(r *http.Request) (answer.Request, error) {
@@ -93,15 +95,18 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := verifiedAnswer{Result: res}
+	verify := h.verifies(r)
+	out := verifiedAnswer{Result: res, ID: h.keep(r, req, res, !verify)}
 
-	if h.verifies(r) {
+	if verify {
 		v, err := h.answerer.Verify(ctx, res, answer.VerifyEvents{})
 		if err != nil {
 			h.logger.Warnw("Verifying an answer failed", "error", err)
 		} else {
 			out.Verification = &v
 		}
+
+		h.recent.check(out.ID, v.Claims)
 	}
 
 	writeJSON(w, http.StatusOK, out)
@@ -109,7 +114,14 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 
 type verifiedAnswer struct {
 	answer.Result
+	// What "add to lab" names it by, while it is kept.
+	ID           string               `json:"id,omitempty"`
 	Verification *answer.Verification `json:"verification,omitempty"`
+}
+
+func (h *answerHandler) keep(r *http.Request, req answer.Request, res answer.Result, checked bool) string {
+	user, _ := auth.UserFrom(r.Context())
+	return h.recent.add(user.ID, req.Query, res, checked)
 }
 
 // verifies: the answer is checked unless the request says verify=0 - the
@@ -185,9 +197,10 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	verify := h.verifies(r)
+	id := h.keep(r, req, res, !verify)
 
 	if err := send("done", map[string]any{"cited": res.Cited, "scope": res.Scope, "weak": res.Weak, "model": res.Model, "usage": res.Usage,
-		"verifying": verify}); err != nil || !verify {
+		"verifying": verify, "id": id}); err != nil || !verify {
 		return
 	}
 
@@ -204,6 +217,7 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.recent.check(id, v.Claims)
 	_ = send("verified", map[string]any{"model": v.Model, "seconds": v.Seconds})
 }
 

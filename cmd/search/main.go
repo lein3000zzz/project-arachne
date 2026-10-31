@@ -8,8 +8,10 @@ import (
 	"syscall"
 	"time"
 	"web-crawler/internal/answer"
+	"web-crawler/internal/artifacts"
 	"web-crawler/internal/gathering"
 	"web-crawler/internal/labs"
+	"web-crawler/internal/llm"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
 	"web-crawler/internal/retrieval"
@@ -78,7 +80,12 @@ func main() {
 		logger.Fatal("Error initializing retriever:", err)
 	}
 
-	var answerer searchapi.Answerer
+	var (
+		answerer searchapi.Answerer
+		// Interfaces, left nil without a model, for reports to write with.
+		reportAnswers artifacts.Answers
+		reportChat    llm.Client
+	)
 
 	chat := platform.NewChatClient(logger, cfg, sm)
 
@@ -105,7 +112,7 @@ func main() {
 			logger.Infow("Answers are checked claim by claim", "model", verifier.Model(), "maxClaims", cfg.Verify.MaxClaims)
 		}
 
-		answerer = service
+		answerer, reportAnswers, reportChat = service, service, chat
 
 		logger.Infow("Answering enabled", "provider", cfg.Chat.Provider, "model", chat.Model())
 	}
@@ -158,6 +165,16 @@ func main() {
 	gatherer.Recover(context.Background())
 	services.Gatherer = gatherer
 
+	artifactService := artifacts.NewService(logger, artifacts.NewPostgresStore(db), labService, reportAnswers, reportChat, artifacts.Config{
+		MaxSections:   cfg.Artifacts.MaxSections,
+		SectionTokens: cfg.Artifacts.SectionTokens,
+		OutlineTokens: cfg.Artifacts.OutlineTokens,
+		Timeout:       cfg.Artifacts.Timeout.Std(),
+		Verify:        cfg.Artifacts.Verify,
+	})
+	artifactService.Recover(context.Background())
+	services.Artifacts = artifactService
+
 	handler := searchapi.NewHandler(logger, services, searchapi.Config{
 		DefaultLimit:   cfg.Retrieval.DefaultLimit,
 		MaxLimit:       cfg.Retrieval.MaxLimit,
@@ -193,6 +210,10 @@ func main() {
 
 	if err := gatherer.Shutdown(shutdownCtx); err != nil {
 		logger.Warnw("Gatherings did not stop in time", "error", err)
+	}
+
+	if err := artifactService.Shutdown(shutdownCtx); err != nil {
+		logger.Warnw("Artifact builds did not stop in time", "error", err)
 	}
 
 	db.Close()

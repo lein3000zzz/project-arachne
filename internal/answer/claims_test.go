@@ -14,7 +14,7 @@ func TestAnAnswerSplitsIntoClaims(t *testing.T) {
 		"The sources say nothing about speed.\n" +
 		"See [1]. A made-up source backs this claim [9]."
 
-	parts, list := claims(answer, 3)
+	parts, list := Split(answer, 3)
 
 	var joined strings.Builder
 	for _, p := range parts {
@@ -67,9 +67,24 @@ func TestAnAnswerSplitsIntoClaims(t *testing.T) {
 }
 
 func TestRussianSentencesSplitToo(t *testing.T) {
-	_, list := claims("Остаточные связи решают проблему деградации [1]. Это показано на ImageNet и CIFAR, т.е. на двух наборах [2].", 2)
+	_, list := Split("Остаточные связи решают проблему деградации [1]. Это показано на ImageNet и CIFAR, т.е. на двух наборах [2].", 2)
 
 	if len(list) != 2 || list[1].Text != "Это показано на ImageNet и CIFAR, т.е. на двух наборах." {
 		t.Errorf("claims = %+v", list)
+	}
+}
+
+func TestCodeIsNeverAClaim(t *testing.T) {
+	answer := "Index a slice with brackets [1].\n```go\nx := a[1] // the second element [2]\n```\nOr use `s[2]` to take another one [2]."
+
+	parts, list := Split(answer, 2)
+	if len(list) != 2 || list[1].Text != "Or use `s[2]` to take another one." || !slices.Equal(list[1].Cites, []int{2}) {
+		t.Fatalf("claims = %+v", list)
+	}
+
+	for _, p := range parts {
+		if strings.Contains(p.Text, "x := a[1]") && p.Claim >= 0 {
+			t.Errorf("a code block became claim %d", p.Claim)
+		}
 	}
 }

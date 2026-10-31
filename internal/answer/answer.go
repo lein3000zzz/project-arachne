@@ -65,6 +65,19 @@ type Request struct {
 	Rerank         *bool
 	// Search results to list beside the answer, whether or not it reads them.
 	Results int
+	// Read the labs alone, never the shared base: too little there is too
+	// little, not a reason to look elsewhere.
+	LabOnly bool
+	// Set: the model writes this instead of answering a question.
+	Writing *Writing
+}
+
+// Writing asks for a longer passage than an answer - a report's section - from
+// the same kind of sources, with its own instructions, task and budget.
+type Writing struct {
+	System    string
+	Task      string
+	MaxTokens int
 }
 
 // Source N is cited in the answer as [N].
@@ -127,49 +140,69 @@ const systemPrompt = `You answer questions using only the numbered sources provi
 - Answer in the language of the question, concisely.`
 
 func (s *Service) Answer(ctx context.Context, req Request, events Events) (Result, error) {
-	found, sources, weak, err := s.gather(ctx, req)
+	result, err := s.Read(ctx, req)
 	if err != nil {
 		return Result{}, err
 	}
 
 	if events.Results != nil {
-		if err := events.Results(found); err != nil {
+		if err := events.Results(result.Results); err != nil {
 			return Result{}, err
 		}
 	}
 
 	if events.Sources != nil {
-		if err := events.Sources(sources); err != nil {
+		if err := events.Sources(result.Sources); err != nil {
 			return Result{}, err
 		}
 	}
 
-	result := Result{Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Results: found, Model: s.chat.Model(), Cited: []int{}}
-
-	if len(sources) == 0 {
+	if len(result.Sources) == 0 {
 		result.Scope = ScopeNone
 		return result, ErrNoSources
 	}
 
-	query := strings.TrimSpace(req.Query)
-	result.shown = shown(query, sources, s.cfg.SourceRunes)
+	return s.Write(ctx, req, result, events.Delta)
+}
 
-	resp, err := s.chat.Stream(ctx, llm.Request{
-		System:      systemPrompt,
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(query, sources, result.shown, weak)}},
-		MaxTokens:   s.cfg.MaxTokens,
-		Temperature: s.cfg.Temperature,
-	}, events.Delta)
-
-	result.Answer = resp.Text
-	result.Usage = resp.Usage
-	result.Cited = cited(resp.Text, len(sources))
-
+// Read searches and picks what the model will read, without asking it
+// anything: a caller may decide there is too little to write from.
+func (s *Service) Read(ctx context.Context, req Request) (Result, error) {
+	found, sources, weak, err := s.gather(ctx, req)
 	if err != nil {
-		return result, fmt.Errorf("generating the answer: %w", err)
+		return Result{}, err
 	}
 
-	return result, nil
+	return Result{
+		Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Results: found, Model: s.chat.Model(), Cited: []int{},
+		shown: shown(strings.TrimSpace(req.Query), sources, s.cfg.SourceRunes),
+	}, nil
+}
+
+// Write has the model answer from what Read picked - or write what
+// req.Writing asks for.
+func (s *Service) Write(ctx context.Context, req Request, res Result, onDelta func(string) error) (Result, error) {
+	system, task, maxTokens := systemPrompt, "Question: "+strings.TrimSpace(req.Query), s.cfg.MaxTokens
+	if w := req.Writing; w != nil {
+		system, task, maxTokens = w.System, w.Task, w.MaxTokens
+	}
+
+	resp, err := s.chat.Stream(ctx, llm.Request{
+		System:      system,
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(res.Sources, res.shown, res.Weak, task)}},
+		MaxTokens:   maxTokens,
+		Temperature: s.cfg.Temperature,
+	}, onDelta)
+
+	res.Answer = resp.Text
+	res.Usage = resp.Usage
+	res.Cited = cited(resp.Text, len(res.Sources))
+
+	if err != nil {
+		return res, fmt.Errorf("generating the answer: %w", err)
+	}
+
+	return res, nil
 }
 
 // gather runs the search - the whole shared base, which is also the list shown
@@ -192,10 +225,12 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 
 	group, groupCtx := errgroup.WithContext(ctx)
 
-	group.Go(func() (err error) {
-		shared, err = search(groupCtx, nil, max(req.Results, s.cfg.Sources))
-		return err
-	})
+	if !req.LabOnly {
+		group.Go(func() (err error) {
+			shared, err = search(groupCtx, nil, max(req.Results, s.cfg.Sources))
+			return err
+		})
+	}
 
 	if req.LabURLs != nil {
 		group.Go(func() (err error) {
@@ -210,9 +245,18 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 
 	var picked []retrieval.Result
 
-	if relevantLabs := s.relevant(inLabs); req.LabURLs != nil && len(relevantLabs) >= s.cfg.MinLabSources {
+	relevantLabs := s.relevant(inLabs)
+
+	switch {
+	case req.LabOnly:
 		picked = s.fill(relevantLabs, nil)
-	} else if picked = s.fill(relevantLabs, s.relevant(shared)); len(picked) == 0 {
+	case req.LabURLs != nil && len(relevantLabs) >= s.cfg.MinLabSources:
+		picked = s.fill(relevantLabs, nil)
+	default:
+		picked = s.fill(relevantLabs, s.relevant(shared))
+	}
+
+	if len(picked) == 0 {
 		picked = s.fill(inLabs, shared)
 		weak = len(picked) > 0
 	}
@@ -340,7 +384,7 @@ func shown(query string, sources []Source, runes int) []string {
 	return out
 }
 
-func prompt(query string, sources []Source, shown []string, weak bool) string {
+func prompt(sources []Source, shown []string, weak bool, task string) string {
 	var b strings.Builder
 
 	b.WriteString("Sources:\n\n")
@@ -353,8 +397,7 @@ func prompt(query string, sources []Source, shown []string, weak bool) string {
 		b.WriteString(weakNote)
 	}
 
-	b.WriteString("Question: ")
-	b.WriteString(query)
+	b.WriteString(task)
 
 	return b.String()
 }

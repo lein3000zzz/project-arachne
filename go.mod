@@ -5,18 +5,21 @@ go 1.26
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.2
 	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/dop251/goja v0.0.0-20260106131823-651366fbe6e3
 	github.com/go-rod/rod v0.116.2
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jimsmart/grobotstxt v1.0.3
 	github.com/joho/godotenv v1.5.1
 	github.com/lein3000zzz/vault-config-manager v0.0.1
+	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/milvus-io/milvus/client/v2 v2.6.5
 	github.com/projectdiscovery/katana v1.7.0
 	github.com/redis/go-redis/extra/redisotel/v9 v9.17.3
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/twmb/franz-go v1.20.6
 	github.com/twmb/franz-go/plugin/kotel v1.6.0
+	github.com/yuin/goldmark v1.8.7
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0
 	go.opentelemetry.io/otel v1.40.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.40.0
@@ -54,6 +57,7 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/ditashi/jsbeautifier-go v0.0.0-20141206144643-2520a8026a9c // indirect
 	github.com/djherbis/times v1.6.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -109,7 +113,6 @@ require (
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/lukasbob/srcset v0.0.0-20190730101422-86b742e617f3 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.17 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.7-0.20251201120310-af64f2acba38 // indirect

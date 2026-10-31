@@ -2,11 +2,10 @@ package answer
 
 import (
 	"regexp"
-	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+	"web-crawler/internal/cite"
 )
 
 // Claim is a sentence of the answer that cites sources.
@@ -29,12 +28,8 @@ type Part struct {
 	Claim int `json:"claim"`
 }
 
-var (
-	// "[1]", "[2][3]", "[1, 3]".
-	citeGroup = regexp.MustCompile(`\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]`)
-	// What a citation taken out leaves: "battles ." for "battles [1].".
-	spaceBefore = regexp.MustCompile(`\s+([.,;:!?…])`)
-)
+// What a citation taken out leaves: "battles ." for "battles [1].".
+var spaceBefore = regexp.MustCompile(`\s+([.,;:!?…])`)
 
 // Words a full stop follows without ending the sentence.
 var abbreviations = map[string]bool{
@@ -44,58 +39,51 @@ var abbreviations = map[string]bool{
 
 const minClaimWords = 3
 
-// claims splits the answer into parts, and the sentences among them that cite
+// Split cuts the answer into parts, and the sentences among them that cite
 // any of the sources into claims. A citation after the full stop - "battles.
-// [1]" - belongs to the sentence before it.
-func claims(answer string, sources int) ([]Part, []Claim) {
+// [1]" - belongs to the sentence before it; code is never a claim.
+func Split(answer string, sources int) ([]Part, []Claim) {
 	var (
 		parts []Part
 		out   []Claim
 	)
 
-	for _, sentence := range splitSentences(answer) {
-		part := Part{Text: sentence, Claim: -1}
-
-		if cites := citesIn(sentence); len(cites) > 0 {
-			text := spaceBefore.ReplaceAllString(strings.Join(strings.Fields(citeGroup.ReplaceAllString(sentence, "")), " "), "$1")
-			text = strings.TrimSpace(strings.TrimLeft(text, "-*• "))
-
-			if len(strings.FieldsFunc(text, notWord)) >= minClaimWords {
-				claim := Claim{Text: text}
-
-				for _, n := range cites {
-					if n >= 1 && n <= sources {
-						claim.Cites = append(claim.Cites, n)
-					}
-				}
-
-				if len(claim.Cites) == 0 {
-					claim.Verdict, claim.Note = Unsupported, "cites a source it was not given"
-				}
-
-				part.Claim = len(out)
-				out = append(out, claim)
-			}
+	for _, seg := range cite.Segments(answer) {
+		if seg.Code {
+			parts = append(parts, Part{Text: seg.Text, Claim: -1})
+			continue
 		}
 
-		parts = append(parts, part)
+		for _, sentence := range splitSentences(seg.Text) {
+			part := Part{Text: sentence, Claim: -1}
+
+			if cites := cite.In(sentence); len(cites) > 0 {
+				text := spaceBefore.ReplaceAllString(strings.Join(strings.Fields(cite.Strip(sentence)), " "), "$1")
+				text = strings.TrimSpace(strings.TrimLeft(text, "-*• "))
+
+				if len(strings.FieldsFunc(text, notWord)) >= minClaimWords {
+					claim := Claim{Text: text}
+
+					for _, n := range cites {
+						if n >= 1 && n <= sources {
+							claim.Cites = append(claim.Cites, n)
+						}
+					}
+
+					if len(claim.Cites) == 0 {
+						claim.Verdict, claim.Note = Unsupported, "cites a source it was not given"
+					}
+
+					part.Claim = len(out)
+					out = append(out, claim)
+				}
+			}
+
+			parts = append(parts, part)
+		}
 	}
 
 	return parts, out
-}
-
-func citesIn(sentence string) []int {
-	var out []int
-
-	for _, m := range citeGroup.FindAllStringSubmatch(sentence, -1) {
-		for _, raw := range strings.Split(m[1], ",") {
-			if n, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && !slices.Contains(out, n) {
-				out = append(out, n)
-			}
-		}
-	}
-
-	return out
 }
 
 func notWord(r rune) bool {
@@ -178,11 +166,11 @@ func skipCitations(text string, i int) int {
 			j++
 		}
 
-		loc := citeGroup.FindStringIndex(text[j:])
-		if loc == nil || loc[0] != 0 {
+		n := cite.Leading(text[j:])
+		if n == 0 {
 			return i
 		}
 
-		i = j + loc[1]
+		i = j + n
 	}
 }

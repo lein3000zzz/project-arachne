@@ -159,6 +159,18 @@ verify:
   max_tokens: 100
   timeout: 3m
 
+artifacts:
+  # research reports: the model drafts an outline, the user confirms it, then
+  # each section is written from the lab's documents alone - a section the
+  # lab cannot cover is marked, never filled from memory. One model call per
+  # section, plus the check: minutes on a CPU, so it runs in the background.
+  max_sections: 7
+  section_tokens: 600
+  outline_tokens: 400
+  timeout: 30m
+  # check each section's claims as answers are checked (verify.*)
+  verify: true
+
 documents:
   # read the documents labs add - PDFs, Office files, EPUB, scans (OCR, Russian
   # and English) - with Apache Tika. Only a lab's own source is read: a link

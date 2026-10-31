@@ -49,13 +49,14 @@ type errorResponse struct {
 
 // Services are what the API serves; all but Auth and Searcher may be nil.
 type Services struct {
-	Auth     Authenticator
-	Searcher Searcher
-	Answerer Answerer
-	Runs     RunService
-	Labs     LabService
-	Gatherer Gatherer
-	Uploads  UploadStore
+	Auth      Authenticator
+	Searcher  Searcher
+	Answerer  Answerer
+	Runs      RunService
+	Labs      LabService
+	Gatherer  Gatherer
+	Uploads   UploadStore
+	Artifacts ArtifactService
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -69,7 +70,11 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /api/me", signIn.api(signIn.me))
 	mux.Handle("POST /api/me/password", signIn.api(signIn.changePassword))
 
-	answers := &answerHandler{logger: logger, answerer: services.Answerer, labs: services.Labs, timeout: cfg.AnswerTimeout, maxResults: cfg.MaxLimit}
+	// Answers are kept a while, by id, for "add to lab".
+	recent := newRecentAnswers(recentAnswersKept, recentAnswersFor)
+
+	answers := &answerHandler{logger: logger, answerer: services.Answerer, labs: services.Labs, timeout: cfg.AnswerTimeout, maxResults: cfg.MaxLimit,
+		recent: recent}
 	mux.Handle("GET /answer", signIn.api(answers.serveJSON))
 	mux.Handle("GET /answer/stream", signIn.api(answers.serveStream))
 
@@ -95,6 +100,16 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /api/labs/{id}/references", signIn.api(labsAPI.references))
 	mux.Handle("POST /api/labs/{id}/references", signIn.api(labsAPI.addReferences))
 	mux.Handle("POST /api/labs/{id}/uploads", signIn.api(labsAPI.addUploads))
+
+	artifactsAPI := &artifactsHandler{logger: logger, service: services.Artifacts, recent: recent, draftTimeout: cfg.AnswerTimeout}
+	mux.Handle("POST /api/labs/{id}/artifacts/outline", signIn.api(artifactsAPI.draft))
+	mux.Handle("POST /api/labs/{id}/artifacts", signIn.api(artifactsAPI.build))
+	mux.Handle("GET /api/labs/{id}/artifacts", signIn.api(artifactsAPI.list))
+	mux.Handle("POST /api/labs/{id}/artifacts/answers", signIn.api(artifactsAPI.saveAnswer))
+	mux.Handle("GET /api/artifacts/{id}", signIn.api(artifactsAPI.get))
+	mux.Handle("GET /api/artifacts/{id}/markdown", signIn.api(artifactsAPI.markdown))
+	mux.Handle("POST /api/artifacts/{id}/rebuild", signIn.api(artifactsAPI.rebuild))
+	mux.Handle("DELETE /api/artifacts/{id}", signIn.api(artifactsAPI.delete))
 
 	uploadsAPI := &uploadsHandler{logger: logger, files: services.Uploads}
 	mux.Handle("GET /uploads/{id}", signIn.page(uploadsAPI.serve))
@@ -148,6 +163,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 
 	mux.Handle("GET /{$}", signIn.page(serveIndex))
 	mux.Handle("GET /labs/{id}", signIn.page(serveLab))
+	mux.Handle("GET /labs/{id}/artifacts/{artifact}", signIn.page(serveArtifact))
 	mux.HandleFunc("GET /favicon.svg", serveFavicon)
 	mux.Handle("GET /static/", staticHandler())
 
