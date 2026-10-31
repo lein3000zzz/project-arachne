@@ -203,3 +203,93 @@ func TestEnginesAndSourcesFoundBySearch(t *testing.T) {
 		t.Errorf("into another user's lab: %v", err)
 	}
 }
+
+func TestReferencesOfALabsDocuments(t *testing.T) {
+	store, pool, lein, other := newStore(t)
+	ctx := context.Background()
+
+	producer := &fakeProducer{}
+	service := NewService(store, runs.NewService(runs.NewStore(nil, store.pool, time.Minute), producer,
+		runs.Limits{DefaultDepth: 2, MaxDepth: 5, DefaultLinks: 10, MaxLinks: 100}), nil, Limits{MaxSources: 5})
+
+	lab, err := service.Create(ctx, lein, "resnets", "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const paper, spam = "https://arxiv.org/pdf/1512.03385", "https://spam.example/paper.pdf"
+
+	for _, u := range []string{paper, spam, "https://arxiv.org/abs/1409.1556"} {
+		src, err := store.AddSource(ctx, lein, lab.ID, Source{URL: u, Scope: ScopePage, MaxDepth: 1, MaxLinks: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		crawled(t, pool, src.ID, u, 200)
+	}
+
+	refer := func(doc string, refs ...string) {
+		for i, u := range refs {
+			exec(t, pool, `INSERT INTO page_references (page_id, position, url, label) SELECT id, $2, $3, $4 FROM pages WHERE url = $1`,
+				doc, i+1, u, fmt.Sprintf("[%d] cited %s", i+1, u))
+		}
+	}
+
+	refer(paper, "https://arxiv.org/abs/1409.1556", "https://arxiv.org/abs/1502.03167", "https://doi.org/10.1109/5.726791")
+	refer(spam, "https://evil.example/")
+	exec(t, pool, `INSERT INTO page_reviews (url, content_hash, decision, reasons, summary, model, tool_calls, seconds)
+		VALUES ($1, 'h', 'skip', '{spam}', '', 'm', 1, 1)`, spam)
+
+	docs, err := service.References(ctx, lein, lab.ID)
+	if err != nil || len(docs) != 1 || docs[0].URL != paper || len(docs[0].References) != 3 {
+		t.Fatalf("documents: %+v, %v; want the paper alone, the spam set aside", docs, err)
+	}
+
+	if refs := docs[0].References; !refs[0].InLab || refs[1].InLab || refs[1].URL != "https://arxiv.org/abs/1502.03167" ||
+		refs[1].Label != "[2] cited https://arxiv.org/abs/1502.03167" {
+		t.Errorf("references: %+v", refs)
+	}
+
+	if _, err := service.References(ctx, other, lab.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another user's lab: %v", err)
+	}
+
+	for _, picks := range [][]Cited{
+		nil,
+		{{Document: paper, URL: "https://evil.example/"}},
+		{{Document: spam, URL: "https://evil.example/"}},
+		{{Document: paper, URL: "https://unrelated.example/"}},
+	} {
+		if _, err := service.AddReferences(ctx, lein, lab.ID, picks); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%+v: %v, want only the lab's documents' references", picks, err)
+		}
+	}
+
+	if _, err := service.AddReferences(ctx, lein, lab.ID, []Cited{{Document: paper, URL: "https://arxiv.org/abs/1409.1556"}}); !errors.Is(err, ErrSourceExists) {
+		t.Errorf("a reference the lab has as a source: %v", err)
+	}
+
+	runsBefore := len(producer.runs)
+
+	detail, err := service.AddReferences(ctx, lein, lab.ID, []Cited{
+		{Document: paper, URL: "https://arxiv.org/abs/1502.03167"},
+		{Document: paper, URL: "https://doi.org/10.1109/5.726791"},
+	})
+	if err != nil || len(detail.Sources) != 5 || len(producer.runs) != runsBefore+2 {
+		t.Fatalf("add: %d sources, %d runs, %v", len(detail.Sources), len(producer.runs)-runsBefore, err)
+	}
+
+	added := detail.Sources[3]
+	if added.Kind != KindReference || added.Scope != ScopePage || added.CitedBy != paper ||
+		added.Citation != "[2] cited https://arxiv.org/abs/1502.03167" || added.URL != "https://arxiv.org/abs/1502.03167" {
+		t.Errorf("reference source: %+v", added)
+	}
+
+	if last := producer.runs[len(producer.runs)-1]; last.MaxLinks != 1 || last.MaxDepth != 1 || !last.ReadDocuments {
+		t.Errorf("a reference is crawled alone, and read if it is a document: %+v", last)
+	}
+
+	if _, err := service.AddReferences(ctx, other, lab.ID, []Cited{{Document: paper, URL: "https://arxiv.org/abs/1502.03167"}}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("into another user's lab: %v", err)
+	}
+}

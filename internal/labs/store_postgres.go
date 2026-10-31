@@ -43,7 +43,7 @@ const (
 
 	sourceColumns = `
 		s.id, s.lab_id, s.kind, s.url, s.scope, s.max_depth, s.max_links, s.created_at, s.query, s.engines, s.reason,
-		coalesce(s.gathering_id, 0),
+		coalesce(s.gathering_id, 0), s.cited_by, s.citation,
 		(SELECT count(*) FROM source_pages sp JOIN pages p ON p.id = sp.page_id
 			WHERE sp.source_id = s.id AND p.status BETWEEN 200 AND 299),
 		coalesce((SELECT r.id FROM runs r WHERE r.source_id = s.id ORDER BY r.submitted_at DESC LIMIT 1), '')`
@@ -59,7 +59,7 @@ func scanLab(row pgx.CollectableRow) (Lab, error) {
 func scanSource(row pgx.CollectableRow) (Source, error) {
 	var s Source
 	err := row.Scan(&s.ID, &s.LabID, &s.Kind, &s.URL, &s.Scope, &s.MaxDepth, &s.MaxLinks, &s.CreatedAt, &s.Query, &s.Engines, &s.Reason,
-		&s.GatheringID, &s.Pages, &s.LastRunID)
+		&s.GatheringID, &s.CitedBy, &s.Citation, &s.Pages, &s.LastRunID)
 
 	return s, err
 }
@@ -138,11 +138,11 @@ func (s *PostgresStore) AddSource(ctx context.Context, ownerID, labID int64, src
 
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-			INSERT INTO sources (lab_id, kind, url, scope, max_depth, max_links, query, engines, reason, gathering_id)
-			SELECT id, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, 0) FROM labs WHERE id = $1 AND owner_id = $2
+			INSERT INTO sources (lab_id, kind, url, scope, max_depth, max_links, query, engines, reason, gathering_id, cited_by, citation)
+			SELECT id, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, 0), $12, $13 FROM labs WHERE id = $1 AND owner_id = $2
 			RETURNING id`,
 			labID, ownerID, kindOf(src), src.URL, src.Scope, src.MaxDepth, src.MaxLinks, src.Query, engineList(src.Engines), src.Reason,
-			src.GatheringID).Scan(&id)
+			src.GatheringID, src.CitedBy, src.Citation).Scan(&id)
 
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
@@ -256,6 +256,53 @@ func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID int64, limit i
 
 		return p, err
 	})
+}
+
+// References lists the lab's documents that link to or cite anything, with
+// what they do, in order. A document set aside on review offers nothing.
+func (s *PostgresStore) References(ctx context.Context, ownerID, labID int64) ([]Document, error) {
+	if _, err := s.Get(ctx, ownerID, labID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		WITH lab_pages AS (
+			SELECT DISTINCT sp.page_id FROM sources s JOIN source_pages sp ON sp.source_id = s.id WHERE s.lab_id = $1)
+		SELECT p.url, coalesce(p.title, ''), r.url, r.label,
+		       EXISTS (SELECT 1 FROM sources s WHERE s.lab_id = $1 AND s.url = r.url)
+		       OR EXISTS (SELECT 1 FROM pages q JOIN lab_pages lp ON lp.page_id = q.id WHERE q.url = r.url)
+		FROM page_references r
+		JOIN lab_pages lp ON lp.page_id = r.page_id
+		JOIN pages p ON p.id = r.page_id
+		LEFT JOIN page_reviews v ON v.url = p.url
+		WHERE v.decision IS DISTINCT FROM 'skip'
+		ORDER BY p.url, r.position`, labID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	docs := []Document{}
+
+	for rows.Next() {
+		var (
+			doc Document
+			ref Reference
+		)
+
+		if err := rows.Scan(&doc.URL, &doc.Title, &ref.URL, &ref.Label, &ref.InLab); err != nil {
+			return nil, err
+		}
+
+		if n := len(docs); n == 0 || docs[n-1].URL != doc.URL {
+			docs = append(docs, doc)
+		}
+
+		last := &docs[len(docs)-1]
+		last.References = append(last.References, ref)
+	}
+
+	return docs, rows.Err()
 }
 
 func kindOf(src Source) string {

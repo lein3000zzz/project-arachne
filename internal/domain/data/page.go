@@ -16,6 +16,16 @@ type PageData struct {
 	LastUpdatedAt time.Time `json:"lastUpdatedAt" bson:"lastUpdatedAt,omitempty"`
 	FoundAt       time.Time `json:"foundAt" bson:"foundAt,omitempty"`
 	ContentType   string    `json:"contentType" bson:"contentType"`
+	// A document's references, offered to the labs that hold it and never
+	// crawled. nil leaves the stored ones alone; empty removes them.
+	References []Reference `json:"references,omitempty" bson:"references,omitempty"`
+}
+
+// Reference is a link or a cited work found in a document, with the text
+// around it - in a paper's reference list, the citation.
+type Reference struct {
+	URL   string `json:"url"`
+	Label string `json:"label"`
 }
 
 func (p *PageData) MarshalBinary() ([]byte, error) {

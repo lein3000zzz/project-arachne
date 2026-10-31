@@ -19,7 +19,18 @@ type fakeLabs struct {
 	labIDs  []int64
 	created createLabRequest
 	request string
+	picks   []labs.Cited
 	err     error
+}
+
+func (f *fakeLabs) References(_ context.Context, owner, lab int64) ([]labs.Document, error) {
+	f.owner, f.labIDs = owner, []int64{lab}
+	return []labs.Document{{URL: "https://arxiv.org/pdf/1512.03385", References: []labs.Reference{{URL: "https://arxiv.org/abs/1409.1556"}}}}, f.err
+}
+
+func (f *fakeLabs) AddReferences(_ context.Context, owner, lab int64, picks []labs.Cited) (labs.Detail, error) {
+	f.owner, f.labIDs, f.picks = owner, []int64{lab}, picks
+	return labs.Detail{Lab: labs.Lab{ID: lab}}, f.err
 }
 
 func (f *fakeLabs) List(_ context.Context, owner int64) ([]labs.Lab, error) {
@@ -96,6 +107,18 @@ func TestLabRequestsActAsTheSignedInUser(t *testing.T) {
 	if rec := serveLabs(service, http.MethodPost, "/api/labs/4/sources/9/refresh", ""); rec.Code != http.StatusAccepted ||
 		fmt.Sprint(service.labIDs) != "[4 9]" {
 		t.Errorf("refresh: %d, ids %v", rec.Code, service.labIDs)
+	}
+
+	if rec := serveLabs(service, http.MethodGet, "/api/labs/4/references", ""); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"documents":[{"url":"https://arxiv.org/pdf/1512.03385"`) || service.labIDs[0] != 4 {
+		t.Errorf("references: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = serveLabs(service, http.MethodPost, "/api/labs/4/references",
+		`{"references":[{"document":"https://arxiv.org/pdf/1512.03385","url":"https://arxiv.org/abs/1409.1556"}]}`)
+	if rec.Code != http.StatusOK || service.owner != testUser.ID ||
+		fmt.Sprint(service.picks) != "[{https://arxiv.org/pdf/1512.03385 https://arxiv.org/abs/1409.1556}]" {
+		t.Errorf("add references: %d %s, picks %+v", rec.Code, rec.Body, service.picks)
 	}
 
 	if rec := serveLabs(service, http.MethodDelete, "/api/labs/4", ""); rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {

@@ -25,6 +25,8 @@ type LabService interface {
 	Refresh(ctx context.Context, ownerID, labID, sourceID int64) (labs.SourceStatus, error)
 	RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error
 	Pages(ctx context.Context, ownerID, labID int64, limit int) ([]labs.Page, error)
+	References(ctx context.Context, ownerID, labID int64) ([]labs.Document, error)
+	AddReferences(ctx context.Context, ownerID, labID int64, picks []labs.Cited) (labs.Detail, error)
 	PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error)
 	Plan(ctx context.Context, ownerID, labID int64, request string) (labs.Plan, error)
 }
@@ -58,6 +60,10 @@ type enginesRequest struct {
 
 type addSourcesRequest struct {
 	Sources []labs.SourceRequest `json:"sources"`
+}
+
+type addReferencesRequest struct {
+	References []labs.Cited `json:"references"`
 }
 
 type planRequest struct {
@@ -129,6 +135,25 @@ func (h *labsHandler) addSources(w http.ResponseWriter, r *http.Request) {
 
 	h.withLab(w, r, func(ctx context.Context, owner, lab int64) (int, any, error) {
 		detail, err := h.service.AddSources(ctx, owner, lab, req.Sources)
+		return http.StatusOK, detail, err
+	})
+}
+
+func (h *labsHandler) references(w http.ResponseWriter, r *http.Request) {
+	h.withLab(w, r, func(ctx context.Context, owner, lab int64) (int, any, error) {
+		docs, err := h.service.References(ctx, owner, lab)
+		return http.StatusOK, map[string]any{"documents": docs}, err
+	})
+}
+
+func (h *labsHandler) addReferences(w http.ResponseWriter, r *http.Request) {
+	var req addReferencesRequest
+	if !decodeLabBody(w, r, &req, "body must be JSON: {references: [{document, url}]}") {
+		return
+	}
+
+	h.withLab(w, r, func(ctx context.Context, owner, lab int64) (int, any, error) {
+		detail, err := h.service.AddReferences(ctx, owner, lab, req.References)
 		return http.StatusOK, detail, err
 	})
 }

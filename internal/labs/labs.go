@@ -35,6 +35,8 @@ const (
 	KindLink = "link"
 	// Found by the model searching the web while gathering.
 	KindSearch = "search"
+	// Taken from what one of the lab's documents links to or cites.
+	KindReference = "reference"
 )
 
 type Source struct {
@@ -56,6 +58,9 @@ type Source struct {
 	Engines     []string `json:"engines,omitempty"`
 	Reason      string   `json:"reason,omitempty"`
 	GatheringID int64    `json:"gathering_id,omitempty"`
+	// For a reference source: the document that cites it, and how.
+	CitedBy  string `json:"cited_by,omitempty"`
+	Citation string `json:"citation,omitempty"`
 }
 
 type Page struct {
@@ -65,6 +70,27 @@ type Page struct {
 	FetchedAt *time.Time `json:"fetched_at,omitempty"`
 	// The review before indexing, when there was one.
 	Review *PageReview `json:"review,omitempty"`
+}
+
+// Document is a page of the lab that links to or cites other works. Its
+// references are offered, never followed: the user picks which to add.
+type Document struct {
+	URL        string      `json:"url"`
+	Title      string      `json:"title"`
+	References []Reference `json:"references"`
+}
+
+type Reference struct {
+	URL   string `json:"url"`
+	Label string `json:"label"`
+	// The lab has it already, as a source or a page.
+	InLab bool `json:"in_lab"`
+}
+
+// Cited names one reference of one of the lab's documents.
+type Cited struct {
+	Document string `json:"document"`
+	URL      string `json:"url"`
 }
 
 type PageReview struct {

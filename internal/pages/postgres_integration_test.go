@@ -495,3 +495,37 @@ func TestRankLockAndStaleness(t *testing.T) {
 		t.Error("the lock must be released after the first ranker")
 	}
 }
+
+func TestSavePageKeepsADocumentsReferences(t *testing.T) {
+	repo := testRepo(t)
+
+	refsOf := `
+		SELECT r.position || ' ' || r.url || ' ' || r.label FROM page_references r
+		JOIN pages p ON p.id = r.page_id WHERE p.url = $1`
+
+	doc := page("https://example.com/paper.pdf", nil, nil)
+	doc.References = []data.Reference{
+		{URL: "https://arxiv.org/abs/1512.03385", Label: "[12] Deep residual learning."},
+		{URL: "https://doi.org/10.1145/1", Label: "[13] A DOI."},
+	}
+	repo.save(t, doc)
+
+	assertStrings(t, "references", repo.strings(t, refsOf, doc.URL),
+		"1 https://arxiv.org/abs/1512.03385 [12] Deep residual learning.", "2 https://doi.org/10.1145/1 [13] A DOI.")
+	assertStrings(t, "references are no links", repo.strings(t, linksOf, doc.URL))
+	assertStrings(t, "nor placeholder pages", repo.strings(t, `SELECT url FROM pages`), doc.URL)
+
+	// A failed read has none to give: the stored ones stay.
+	doc.References = nil
+	repo.save(t, doc)
+	assertStrings(t, "references after a save without", repo.strings(t, refsOf, doc.URL),
+		"1 https://arxiv.org/abs/1512.03385 [12] Deep residual learning.", "2 https://doi.org/10.1145/1 [13] A DOI.")
+
+	doc.References = []data.Reference{{URL: "https://doi.org/10.1145/1", Label: "[1] Renumbered."}}
+	repo.save(t, doc)
+	assertStrings(t, "references after a re-read", repo.strings(t, refsOf, doc.URL), "1 https://doi.org/10.1145/1 [1] Renumbered.")
+
+	doc.References = []data.Reference{}
+	repo.save(t, doc)
+	assertStrings(t, "references of a document gone", repo.strings(t, refsOf, doc.URL))
+}

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"web-crawler/internal/domain/data"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -40,14 +41,20 @@ func New(baseURL string, timeout time.Duration, maxRunes int) *Client {
 
 const errorBodyLimit = 512
 
-// Read returns the document's title and its text as Markdown, cut to the
-// configured length at a paragraph end.
-func (c *Client) Read(ctx context.Context, body []byte, contentType string) (title, text string, err error) {
+type Document struct {
+	Title string
+	// Markdown, cut to the configured length at a paragraph end.
+	Text string
+	// Found in the whole text: a long book's reference list is past the cut.
+	References []data.Reference
+}
+
+func (c *Client) Read(ctx context.Context, body []byte, contentType string) (Document, error) {
 	// One request gives text and metadata together: asking twice would OCR a
 	// scan twice.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.base+"/rmeta/markdown", bytes.NewReader(body))
 	if err != nil {
-		return "", "", err
+		return Document{}, err
 	}
 
 	req.Header.Set("Accept", "application/json")
@@ -58,37 +65,37 @@ func (c *Client) Read(ctx context.Context, body []byte, contentType string) (tit
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return Document{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
-		return "", "", fmt.Errorf("%w: HTTP %d: %s", ErrUnavailable, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return Document{}, fmt.Errorf("%w: HTTP %d: %s", ErrUnavailable, resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 
 	// One entry per document: the first is the file itself, the rest are files
 	// embedded in it - an EPUB's cover image - whose text is not the document's.
 	var entries []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
-		return "", "", fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return Document{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 
 	if len(entries) == 0 {
-		return "", "", ErrNoText
+		return Document{}, ErrNoText
 	}
 
-	text = clean(field(entries[0], "tk:content"))
+	text := clean(field(entries[0], "tk:content"))
 	if text == "" {
-		return "", "", ErrNoText
+		return Document{}, ErrNoText
 	}
 
-	title = oneLine(field(entries[0], "dc:title"))
+	title := oneLine(field(entries[0], "dc:title"))
 	if title == "" {
 		title = firstLine(text)
 	}
 
-	return title, cut(text, c.maxRunes), nil
+	return Document{Title: title, Text: cut(text, c.maxRunes), References: references(text)}, nil
 }
 
 func field(entry map[string]any, key string) string {

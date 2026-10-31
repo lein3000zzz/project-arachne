@@ -89,6 +89,8 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /api/labs/{id}/gathering", signIn.api(gatherAPI.latest))
 	mux.Handle("GET /api/labs/{id}/pages", signIn.api(labsAPI.pages))
 	mux.Handle("POST /api/labs/{id}/sources", signIn.api(labsAPI.addSources))
+	mux.Handle("GET /api/labs/{id}/references", signIn.api(labsAPI.references))
+	mux.Handle("POST /api/labs/{id}/references", signIn.api(labsAPI.addReferences))
 	mux.Handle("POST /api/labs/{id}/sources/{source}/refresh", signIn.api(labsAPI.refresh))
 	mux.Handle("DELETE /api/labs/{id}/sources/{source}", signIn.api(labsAPI.removeSource))
 

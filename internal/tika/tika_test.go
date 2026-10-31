@@ -37,7 +37,7 @@ func TestReadTakesTheDocumentNotWhatIsEmbedded(t *testing.T) {
 		{"Content-Type": "image/jpeg", "tk:content": "text OCR'd from the cover"}
 	]`, &got, &sent)
 
-	title, text, err := New(srv.URL+"/", time.Second, 1000).Read(context.Background(), []byte("PK..."), "application/epub+zip")
+	doc, err := New(srv.URL+"/", time.Second, 1000).Read(context.Background(), []byte("PK..."), "application/epub+zip")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +47,8 @@ func TestReadTakesTheDocumentNotWhatIsEmbedded(t *testing.T) {
 		t.Errorf("request %s %s %v, body %q", got.Method, got.URL.Path, got.Header, sent)
 	}
 
-	if title != "The Art of War" || text != "## Chapter I\n\nSun Tzŭ said: [1] The art of war & peace..." {
-		t.Errorf("title %q, text %q", title, text)
+	if doc.Title != "The Art of War" || doc.Text != "## Chapter I\n\nSun Tzŭ said: [1] The art of war & peace..." {
+		t.Errorf("title %q, text %q", doc.Title, doc.Text)
 	}
 }
 
@@ -60,9 +60,9 @@ func TestTitleFallsBackToTheFirstLine(t *testing.T) {
 
 	srv := server(t, http.StatusOK, `[{"tk:content": ["# Deep Residual Learning\n\nAbstract."]}]`, &got, &sent)
 
-	title, _, err := New(srv.URL, time.Second, 1000).Read(context.Background(), []byte("%PDF"), "application/pdf")
-	if err != nil || title != "Deep Residual Learning" {
-		t.Errorf("title %q, %v", title, err)
+	doc, err := New(srv.URL, time.Second, 1000).Read(context.Background(), []byte("%PDF"), "application/pdf")
+	if err != nil || doc.Title != "Deep Residual Learning" {
+		t.Errorf("title %q, %v", doc.Title, err)
 	}
 }
 
@@ -90,18 +90,18 @@ func TestFailures(t *testing.T) {
 		`not json`:                    ErrUnavailable,
 	} {
 		srv := server(t, http.StatusOK, body, &got, &sent)
-		if _, _, err := New(srv.URL, time.Second, 100).Read(context.Background(), nil, ""); !errors.Is(err, want) {
+		if _, err := New(srv.URL, time.Second, 100).Read(context.Background(), nil, ""); !errors.Is(err, want) {
 			t.Errorf("%s: %v, want %v", body, err, want)
 		}
 	}
 
 	srv := server(t, http.StatusUnprocessableEntity, "encrypted document", &got, &sent)
-	if _, _, err := New(srv.URL, time.Second, 100).Read(context.Background(), nil, ""); !errors.Is(err, ErrUnavailable) ||
+	if _, err := New(srv.URL, time.Second, 100).Read(context.Background(), nil, ""); !errors.Is(err, ErrUnavailable) ||
 		!strings.Contains(err.Error(), "encrypted") {
 		t.Errorf("422: %v", err)
 	}
 
-	if _, _, err := New("http://127.0.0.1:1", time.Second, 100).Read(context.Background(), nil, ""); !errors.Is(err, ErrUnavailable) {
+	if _, err := New("http://127.0.0.1:1", time.Second, 100).Read(context.Background(), nil, ""); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("down: %v", err)
 	}
 }

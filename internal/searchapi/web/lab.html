@@ -33,6 +33,7 @@
     <a href="#overview">Overview</a>
     <a href="#sources">Sources</a>
     <a href="#web">Web</a>
+    <a href="#references" id="refNav" hidden>References</a>
     <a href="#pages">Pages</a>
     <span class="later">Artifacts come later</span>
   </nav>
@@ -78,6 +79,19 @@
       <div id="gathering"></div>
     </section>
 
+    <section id="references" hidden>
+      <h2>References</h2>
+      <p class="note">What this lab's documents link to or cite. None of it is crawled unless you add it: each one
+        becomes a source of its own, that page alone, reviewed like any other page.</p>
+      <div class="field">
+        <label for="refFilter">Filter</label>
+        <input id="refFilter" type="search" placeholder="author, title, site…" autocomplete="off">
+      </div>
+      <div id="refDocs"></div>
+      <div class="buttons"><button type="button" class="action primary" id="refAdd" disabled>Add as sources</button></div>
+      <p class="note" id="refNote" aria-live="polite"></p>
+    </section>
+
     <section id="pages">
       <h2>Pages</h2>
       <ul class="pages" id="pageList"></ul>
@@ -114,10 +128,12 @@ function sourceRow(src) {
   const status = run ? stateOf(run.status) : el("span", { class: "note" }, "not crawled");
   const act = (label, onclick) => el("button", { type: "button", class: "action small", onclick }, label);
 
+  const tag = src.kind === "search" ? "found" : src.kind === "reference" ? "cited" : src.scope;
   return el("tr", {},
     el("td", { class: "url" }, el("a", { href: src.url, target: "_blank", rel: "noopener noreferrer" }, src.url),
-      el("span", { class: "tag" }, src.kind === "search" ? "found" : src.scope),
-      src.kind === "search" ? el("div", { class: "note" }, `“${src.query}”` + (src.reason ? " — " + src.reason : "")) : null),
+      el("span", { class: "tag" }, tag),
+      src.kind === "search" ? el("div", { class: "note" }, `“${src.query}”` + (src.reason ? " — " + src.reason : "")) : null,
+      src.kind === "reference" ? el("div", { class: "note" }, `in ${host(src.cited_by)}: ${src.citation}`) : null),
     el("td", { "data-label": "status" }, status),
     el("td", { class: "num", "data-label": "pages" }, String(src.pages)),
     el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–",
@@ -190,7 +206,109 @@ async function load() {
   const gathering = await loadGathering();
   if (gathering || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
   loadPages();
+  loadReferences();
 }
+
+// ---- references: what the lab's documents cite, offered and never followed ----
+// Ticks and open lists live here, not in the DOM: polling redraws the lists.
+const ticked = new Map();
+const opened = new Set();
+let shownReferences = "";
+
+// One citation can give a DOI and a direct link to the same work: one row, that
+// adds the direct link. doi.org sends crawlers on to publishers that often
+// refuse them.
+function citations(refs) {
+  const out = [];
+  for (const ref of refs) {
+    const last = out[out.length - 1];
+    if (last && ref.label && last.label === ref.label) last.refs.push(ref);
+    else out.push({ label: ref.label, refs: [ref] });
+  }
+  for (const c of out) {
+    c.url = (c.refs.find((r) => !r.url.startsWith("https://doi.org/")) || c.refs[0]).url;
+    c.inLab = c.refs.some((r) => r.in_lab);
+  }
+  return out;
+}
+
+function referenceItem(doc, c) {
+  const box = el("input", { type: "checkbox", disabled: c.inLab });
+  box.checked = ticked.has(c.url);
+  box.addEventListener("change", () => {
+    if (box.checked) ticked.set(c.url, doc.url);
+    else ticked.delete(c.url);
+    syncReferences();
+  });
+
+  const others = c.refs.filter((r) => r.url !== c.url);
+  return el("li", { class: c.inLab ? "had" : null, "data-text": (c.label + " " + c.refs.map((r) => r.url).join(" ")).toLowerCase() },
+    el("label", { class: "check" }, box,
+      el("span", {}, c.label || c.url, c.inLab ? el("span", { class: "tag" }, "in lab") : null)),
+    el("a", { class: "host", href: c.url, target: "_blank", rel: "noopener noreferrer" }, c.url),
+    others.map((r) => el("span", { class: "host" }, "also ",
+      el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.url))));
+}
+
+function referenceDoc(doc) {
+  const cs = citations(doc.references);
+  const had = cs.filter((c) => c.inLab).length;
+  const details = el("details", { class: "options ref-doc", open: opened.has(doc.url) },
+    el("summary", {}, `${doc.title || doc.url} · ${cs.length} references` + (had ? ` · ${had} in the lab` : "")),
+    el("ul", { class: "refs" }, cs.map((c) => referenceItem(doc, c))));
+  details.addEventListener("toggle", () => { details.open ? opened.add(doc.url) : opened.delete(doc.url); });
+  return details;
+}
+
+function syncReferences() {
+  $("refAdd").disabled = ticked.size === 0;
+  $("refAdd").textContent = ticked.size ? `Add ${ticked.size} as sources` : "Add as sources";
+}
+
+function filterReferences() {
+  const q = $("refFilter").value.trim().toLowerCase();
+  document.querySelectorAll("#refDocs .refs li").forEach((li) => { li.hidden = q !== "" && !li.dataset.text.includes(q); });
+}
+
+async function loadReferences() {
+  let documents;
+  try {
+    ({ documents } = await api(`${base}/references`));
+  } catch (err) {
+    $("refNote").textContent = err.message;
+    return;
+  }
+
+  const shown = JSON.stringify(documents);
+  if (shown === shownReferences) return;
+  shownReferences = shown;
+
+  $("references").hidden = $("refNav").hidden = documents.length === 0;
+
+  const offered = new Set(documents.flatMap((d) => citations(d.references).filter((c) => !c.inLab).map((c) => c.url)));
+  for (const url of [...ticked.keys()]) if (!offered.has(url)) ticked.delete(url);
+
+  $("refDocs").replaceChildren(...documents.map(referenceDoc));
+  filterReferences();
+  syncReferences();
+}
+
+$("refFilter").addEventListener("input", filterReferences);
+
+$("refAdd").addEventListener("click", async () => {
+  const references = [...ticked].map(([url, doc]) => ({ document: doc, url }));
+  $("refAdd").disabled = true;
+  $("refNote").textContent = "Adding…";
+  try {
+    await send("POST", `${base}/references`, { references });
+    ticked.clear();
+    $("refNote").textContent = `Added ${references.length}: each is crawled alone and reviewed before it is searchable.`;
+  } catch (err) {
+    $("refNote").textContent = err.message;
+    syncReferences();
+  }
+  load();
+});
 
 // ---- the web: which engines, and gathering ----
 let engines = { available: [], default: [] };

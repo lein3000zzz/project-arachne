@@ -17,6 +17,7 @@ import (
 	"web-crawler/internal/parser"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
+	"web-crawler/internal/tika"
 	"web-crawler/internal/webcrawler/runstates"
 
 	"go.uber.org/zap"
@@ -365,13 +366,19 @@ func (d docNetworker) Fetch(url string) (*networker.FetchResult, error) {
 }
 
 type fakeDocs struct {
-	read []string
-	err  error
+	read       []string
+	err        error
+	references []data.Reference
 }
 
-func (f *fakeDocs) Read(_ context.Context, _ []byte, contentType string) (string, string, error) {
+func (f *fakeDocs) Read(_ context.Context, _ []byte, contentType string) (tika.Document, error) {
 	f.read = append(f.read, contentType)
-	return "Oxide: The Essence of Rust", "Rust claims to advance industrial programming.", f.err
+
+	if f.err != nil {
+		return tika.Document{}, f.err
+	}
+
+	return tika.Document{Title: "Oxide: The Essence of Rust", Text: "Rust claims to advance industrial programming.", References: f.references}, nil
 }
 
 func TestOnlyALabsOwnDocumentIsRead(t *testing.T) {
@@ -427,5 +434,40 @@ func TestOnlyALabsOwnDocumentIsRead(t *testing.T) {
 				t.Errorf("title %q", sink.docs[0].Title)
 			}
 		})
+	}
+}
+
+func TestADocumentsReferencesAreKeptNotFollowed(t *testing.T) {
+	h := newHarness()
+	h.repo.exclude = compileExclude([]string{`^https?://excluded\.example/`})
+	h.repo.networker = docNetworker{body: "%PDF-1.5\n%\xe2\xe3\n1 0 obj", contentType: "application/pdf"}
+	h.repo.ReadsDocuments(&fakeDocs{references: []data.Reference{
+		{URL: "https://arxiv.org/abs/1512.03385", Label: "[12] Deep residual learning."},
+		{URL: "HTTPS://arxiv.org/abs/1512.03385#page=2", Label: "the same work again"},
+		{URL: "https://example.com/paper", Label: "the document itself"},
+		{URL: "https://excluded.example/a", Label: "a page the crawler may not fetch"},
+		{URL: "https://doi.org/10.1145/3292500.3330701", Label: "[13] A DOI."},
+	}})
+	h.task.URL = "https://example.com/paper"
+	h.task.Run.StartURL, h.task.Run.ReadDocuments = h.task.URL, true
+
+	pd, err := h.repo.scrap(h.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []data.Reference{
+		{URL: "https://arxiv.org/abs/1512.03385", Label: "[12] Deep residual learning."},
+		{URL: "https://doi.org/10.1145/3292500.3330701", Label: "[13] A DOI."},
+	}
+	if !slices.Equal(pd.References, want) || len(pd.Links) != 0 || len(pd.PageLinks) != 0 {
+		t.Errorf("references %+v, links %v %v; want %+v and no links", pd.References, pd.Links, pd.PageLinks, want)
+	}
+
+	// An unreadable document leaves the references it had alone.
+	h.repo.ReadsDocuments(&fakeDocs{err: errors.New("encrypted")})
+
+	if pd, _ := h.repo.scrap(h.task); pd.References != nil {
+		t.Errorf("references after a failed read = %+v, want nil", pd.References)
 	}
 }

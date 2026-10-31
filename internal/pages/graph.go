@@ -70,6 +70,13 @@ const (
 
 	deletePage = `DELETE FROM pages WHERE id = $1`
 
+	dropReferences = `DELETE FROM page_references WHERE page_id = $1`
+
+	insertReferences = `
+		INSERT INTO page_references (page_id, position, url, label)
+		SELECT $1, t.n, t.u, t.l FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS t (u, l, n)
+		ON CONFLICT (page_id, url) DO NOTHING`
+
 	recordAlias = `
 		INSERT INTO aliases (url, target_id) VALUES ($1, $2)
 		ON CONFLICT (url) DO UPDATE SET target_id = EXCLUDED.target_id`
@@ -90,6 +97,12 @@ func savePage(ctx context.Context, tx pgx.Tx, page *data.PageData) error {
 
 	if err := replaceLinks(ctx, tx, id, page); err != nil {
 		return err
+	}
+
+	if page.References != nil {
+		if err := replaceReferences(ctx, tx, id, page.References); err != nil {
+			return err
+		}
 	}
 
 	if page.LastRunID != "" {
@@ -125,6 +138,25 @@ func savePage(ctx context.Context, tx pgx.Tx, page *data.PageData) error {
 	}
 
 	return nil
+}
+
+func replaceReferences(ctx context.Context, tx pgx.Tx, id int64, refs []data.Reference) error {
+	if _, err := tx.Exec(ctx, dropReferences, id); err != nil {
+		return err
+	}
+
+	if len(refs) == 0 {
+		return nil
+	}
+
+	urls, labels := make([]string, len(refs)), make([]string, len(refs))
+	for i, ref := range refs {
+		urls[i], labels[i] = ref.URL, ref.Label
+	}
+
+	_, err := tx.Exec(ctx, insertReferences, id, urls, labels)
+
+	return err
 }
 
 func replaceLinks(ctx context.Context, tx pgx.Tx, id int64, page *data.PageData) error {

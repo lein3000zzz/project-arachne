@@ -24,6 +24,7 @@ type Store interface {
 	RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error
 	PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error)
 	Pages(ctx context.Context, ownerID, labID int64, limit int) ([]Page, error)
+	References(ctx context.Context, ownerID, labID int64) ([]Document, error)
 }
 
 type Runs interface {
@@ -167,6 +168,63 @@ func (s *Service) AddFound(ctx context.Context, ownerID, labID int64, f Found) (
 	_, err = s.submit(ctx, ownerID, added)
 
 	return added, err
+}
+
+// References are what the lab's documents link to or cite.
+func (s *Service) References(ctx context.Context, ownerID, labID int64) ([]Document, error) {
+	return s.store.References(ctx, ownerID, labID)
+}
+
+// AddReferences adds references of the lab's documents as sources of their
+// own - each page alone, its links not followed - and starts crawling them.
+// Only what one of the lab's documents gives can be added this way.
+func (s *Service) AddReferences(ctx context.Context, ownerID, labID int64, picks []Cited) (Detail, error) {
+	if len(picks) == 0 {
+		return Detail{}, fmt.Errorf("%w: pick at least one reference", ErrInvalid)
+	}
+
+	docs, err := s.store.References(ctx, ownerID, labID)
+	if err != nil {
+		return Detail{}, err
+	}
+
+	citations := map[Cited]string{}
+
+	for _, doc := range docs {
+		for _, ref := range doc.References {
+			citations[Cited{Document: doc.URL, URL: ref.URL}] = ref.Label
+		}
+	}
+
+	requests := make([]SourceRequest, len(picks))
+
+	for i, pick := range picks {
+		if _, ok := citations[pick]; !ok {
+			return Detail{}, fmt.Errorf("%w: %s is not a reference of a document in this lab", ErrInvalid, pick.URL)
+		}
+
+		requests[i] = SourceRequest{URL: pick.URL, Scope: ScopePage}
+	}
+
+	existing, err := s.store.Sources(ctx, ownerID, labID)
+	if err != nil {
+		return Detail{}, err
+	}
+
+	prepared, err := s.prepare(requests, existing)
+	if err != nil {
+		return Detail{}, err
+	}
+
+	for i := range prepared {
+		prepared[i].Kind, prepared[i].CitedBy, prepared[i].Citation = KindReference, picks[i].Document, citations[picks[i]]
+	}
+
+	if err := s.addAll(ctx, ownerID, labID, prepared); err != nil {
+		return Detail{}, err
+	}
+
+	return s.Get(ctx, ownerID, labID)
 }
 
 func (s *Service) AddSources(ctx context.Context, ownerID, labID int64, sources []SourceRequest) (Detail, error) {

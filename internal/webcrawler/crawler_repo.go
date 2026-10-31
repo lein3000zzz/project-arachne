@@ -21,6 +21,7 @@ import (
 	"web-crawler/internal/parser"
 	"web-crawler/internal/processor"
 	"web-crawler/internal/robots"
+	"web-crawler/internal/tika"
 	"web-crawler/internal/urlnorm"
 	"web-crawler/internal/webcrawler/cache"
 	"web-crawler/internal/webcrawler/runstates"
@@ -79,7 +80,7 @@ func NewCrawlerRepo(
 // DocumentReader turns a document - a PDF, an Office file, an EPUB, a scan -
 // into text; nil leaves documents unread.
 type DocumentReader interface {
-	Read(ctx context.Context, body []byte, contentType string) (title, text string, err error)
+	Read(ctx context.Context, body []byte, contentType string) (tika.Document, error)
 }
 
 // ReadsDocuments lets runs of lab sources read a document at their start URL.
@@ -293,12 +294,15 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 
 	ctx := context.Background()
 
-	var parsed *parser.ParseResult
+	var (
+		parsed     *parser.ParseResult
+		references []data.Reference
+	)
 
 	document := repo.readsDocument(task, fetchRes)
 
 	if document {
-		parsed = repo.readDocument(ctx, task.URL, fetchRes)
+		parsed, references = repo.readDocument(ctx, pageURL, fetchRes)
 	} else {
 		var errParse error
 
@@ -333,6 +337,11 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		LastUpdatedAt: time.Now(),
 		FoundAt:       time.Now(),
 		ContentType:   fetchRes.ContentType,
+		References:    references,
+	}
+
+	if fetchRes.Status == http.StatusNotFound || fetchRes.Status == http.StatusGone {
+		pageData.References = []data.Reference{}
 	}
 
 	if alias != "" {
@@ -358,17 +367,48 @@ func (repo *CrawlerRepo) readsDocument(task *config.Task, fetchRes *networker.Fe
 }
 
 // readDocument returns the document's text and no links: a document's links
-// are its references, not pages of the lab.
-func (repo *CrawlerRepo) readDocument(ctx context.Context, url string, fetchRes *networker.FetchResult) *parser.ParseResult {
-	title, text, err := repo.docs.Read(ctx, fetchRes.Body, fetchRes.ContentType)
+// are its references, not pages of the lab. They are kept apart, for the lab
+// to take or leave; nil when the document could not be read.
+func (repo *CrawlerRepo) readDocument(ctx context.Context, url string, fetchRes *networker.FetchResult) (*parser.ParseResult, []data.Reference) {
+	doc, err := repo.docs.Read(ctx, fetchRes.Body, fetchRes.ContentType)
 	if err != nil {
 		repo.logger.Warnw("Failed to read a document", "url", url, "type", fetchRes.ContentType, "err", err)
-		return &parser.ParseResult{}
+		return &parser.ParseResult{}, nil
 	}
 
-	repo.logger.Infow("Read a document", "url", url, "type", fetchRes.ContentType, "title", title, "runes", utf8.RuneCountInString(text))
+	references := repo.references(url, doc.References)
 
-	return &parser.ParseResult{Title: title, Content: text}
+	repo.logger.Infow("Read a document", "url", url, "type", fetchRes.ContentType, "title", doc.Title,
+		"runes", utf8.RuneCountInString(doc.Text), "references", len(references))
+
+	return &parser.ParseResult{Title: doc.Title, Content: doc.Text}, references
+}
+
+// A paper cites dozens of works, a thesis hundreds; past this many a list is
+// not one anybody ticks through.
+const maxReferences = 300
+
+// references keeps what a lab could take as a source: web pages other than the
+// document itself, not excluded from crawling, each once.
+func (repo *CrawlerRepo) references(docURL string, found []data.Reference) []data.Reference {
+	out := []data.Reference{}
+	seen := map[string]bool{docURL: true}
+
+	for _, ref := range found {
+		u, ok := urlnorm.Canonical(ref.URL, nil)
+		if !ok || seen[u] || repo.Excluded(u) {
+			continue
+		}
+
+		seen[u] = true
+		out = append(out, data.Reference{URL: u, Label: ref.Label})
+
+		if len(out) == maxReferences {
+			break
+		}
+	}
+
+	return out
 }
 
 // pageIdentity names the page a fetch returned. When the requested URL turned out
