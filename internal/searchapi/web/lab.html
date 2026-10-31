@@ -414,6 +414,17 @@ $("reportForm").addEventListener("submit", (e) => {
   if (outlineRequest) draftOutline();
 });
 
+// Arriving from Look up with a question to make a report of: outline it.
+{
+  const p = new URLSearchParams(location.search);
+  if (p.get("report")) {
+    outlineRequest = p.get("report").trim().slice(0, 1000);
+    $("reportText").value = outlineRequest;
+    history.replaceState(null, "", location.pathname + location.hash);
+    draftOutline();
+  }
+}
+
 // ---- uploads: files of the user's own, sources like links ----
 $("uploadInput").addEventListener("change", async (e) => {
   const files = [...e.target.files];

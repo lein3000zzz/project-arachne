@@ -365,8 +365,9 @@ function showClaim(i) {
 }
 
 // Keeps the answer, checked, as an artifact of a lab: named by its id, so the
-// server saves what it said, not what the page holds.
-function offerSave(id) {
+// server saves what it said, not what the page holds. Or makes the question a
+// report of that lab.
+function offerSave(id, question) {
   const box = $("saveAnswer");
   box.hidden = !id;
   if (!id) return;
@@ -378,6 +379,11 @@ function offerSave(id) {
     [...labs].sort((a, b) => ticked.has(b.id) - ticked.has(a.id)).map((l) => el("option", { value: String(l.id) }, l.name)));
   const note = el("span", { class: "note", "aria-live": "polite" });
   const button = el("button", { type: "button", class: "action small" }, "Add to lab");
+  const report = el("a", { class: "action small", href: "#" }, "Make a report");
+  report.addEventListener("click", (e) => {
+    e.preventDefault();
+    location.assign(`/labs/${pick.value}?report=${encodeURIComponent(question)}#artifacts`);
+  });
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -388,7 +394,7 @@ function offerSave(id) {
       button.disabled = false;
     }
   });
-  box.replaceChildren(pick, button, note);
+  box.replaceChildren(pick, button, report, note);
 }
 
 function summarize(seconds) {
@@ -475,7 +481,7 @@ function searchAndAnswer(q) {
     if (!checking) {
       stream.close();
       badge(`${done.model} · ${total} s`);
-      offerSave(answerID);
+      offerSave(answerID, q);
       return;
     }
     badge("checking claims…", "busy");
@@ -502,7 +508,7 @@ function searchAndAnswer(q) {
     checking = false;
     $("verifyMeta").textContent = summarize(v.seconds) + ` · ${v.model}`;
     badge(`checked · ${((performance.now() - started) / 1000).toFixed(1)} s`);
-    offerSave(answerID);
+    offerSave(answerID, q);
   });
 
   stream.addEventListener("error", (e) => {

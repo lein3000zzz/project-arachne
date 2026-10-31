@@ -413,3 +413,5 @@ section:last-of-type { border-bottom: 0; }
 .outline li > div:first-child { flex: 1 1 20rem; }
 .save-answer { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: center; margin: 0 0 1rem; font-size: 0.82rem; }
 .save-answer select { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); padding: 0.1rem 0.3rem; }
+.report-body h2 .rewrite { margin-left: 0.8rem; vertical-align: 0.2em; }
+.extend { border-top: 1px solid var(--line); margin-top: 1rem; }

@@ -48,6 +48,18 @@
       <p class="note answer-meta" id="checks"></p>
       <p id="claimInfo" class="claim-info" aria-live="polite" hidden></p>
       <div class="report-body" id="body"></div>
+
+      <section class="extend" id="extend" hidden>
+        <form id="extendForm" class="ask">
+          <div class="field">
+            <label for="extendText">Add a section</label>
+            <textarea id="extendText" placeholder="the bottleneck blocks of deeper ResNets" required></textarea>
+          </div>
+          <button class="action" id="extendGo">Plan section</button>
+        </form>
+        <p class="note" id="extendNote" aria-live="polite"></p>
+        <div id="extendCard"></div>
+      </section>
     </article>
   </div>
 
@@ -95,6 +107,23 @@ function render(data) {
   ].filter(Boolean).join(" · ");
 
   $("body").innerHTML = data.html;
+
+  // Sections are changed by asking, on the newest version only: a rewrite or
+  // an added section is the next version.
+  const newest = v.number === Math.max(...versions);
+  const changeable = a.kind === "report" && newest && v.status !== "running";
+  if (changeable) {
+    document.querySelectorAll("#body section.part > h2").forEach((h2) => {
+      const id = h2.parentElement.id;
+      if (!/^s\d+$/.test(id)) return;
+      h2.append(el("button", {
+        type: "button", class: "action small rewrite", "data-section": id.slice(1),
+        title: "Write this section again from what the lab holds now",
+      }, "rewrite"));
+    });
+  }
+  $("extend").hidden = a.kind !== "report" || !newest;
+  $("extendGo").disabled = v.status === "running";
   $("toc").replaceChildren(...(data.toc || []).map((h) => el("li", {}, el("a", { href: "#" + h.id }, h.text))));
 
   claims = {};
@@ -144,12 +173,27 @@ $("body").addEventListener("click", async (e) => {
     return;
   }
 
+  const rewrite = e.target.closest(".rewrite");
+  if (rewrite) {
+    rewrite.disabled = true;
+    try {
+      await send("POST", `/api/artifacts/${artifactID}/sections/${rewrite.dataset.section}/rewrite`);
+      $("actionNote").textContent = `Rewriting section ${rewrite.dataset.section} as a new version; the others stay as they are.`;
+      load(0);
+      loadNav();
+    } catch (err) {
+      rewrite.disabled = false;
+      $("actionNote").replaceChildren(el("span", { class: "error" }, err.message));
+    }
+    return;
+  }
+
   const gather = e.target.closest(".gather");
   if (gather) {
     gather.disabled = true;
     try {
       await send("POST", `/api/labs/${labID}/gather`, { request: gather.dataset.focus });
-      gather.replaceWith(el("span", { class: "note" }, "Gathering for this section. Rebuild the report when it is done: ",
+      gather.replaceWith(el("span", { class: "note" }, "Gathering for this section. When it is done, rewrite the section: ",
         el("a", { href: `/labs/${labID}#web` }, "follow it on the lab page"), "."));
     } catch (err) {
       gather.disabled = false;
@@ -182,6 +226,55 @@ async function load(version) {
 }
 
 $("version").addEventListener("change", (e) => load(Number(e.target.value)));
+
+// ---- adding a section: the model plans it from what is asked, the user says yes ----
+let planned = null;
+
+function renderPlanned() {
+  if (!planned) {
+    $("extendCard").replaceChildren();
+    return;
+  }
+  $("extendCard").replaceChildren(el("div", { class: "plan" },
+    el("h3", {}, planned.heading),
+    el("p", { class: "note" }, planned.focus),
+    el("div", { class: "buttons" },
+      el("button", { type: "button", class: "action primary", onclick: (e) => extend(e.target) }, "Add and write it"),
+      el("button", { type: "button", class: "action", onclick: () => { planned = null; renderPlanned(); } }, "Cancel"))));
+}
+
+async function extend(button) {
+  button.disabled = true;
+  try {
+    await send("POST", `/api/artifacts/${artifactID}/sections`, planned);
+    planned = null;
+    renderPlanned();
+    $("extendText").value = "";
+    $("extendNote").textContent = "Writing the new section as the next version; the others stay as they are.";
+    load(0);
+    loadNav();
+  } catch (err) {
+    $("extendNote").replaceChildren(el("span", { class: "error" }, err.message));
+    button.disabled = false;
+  }
+}
+
+$("extendForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const request = $("extendText").value.trim();
+  if (!request) return;
+  $("extendGo").disabled = true;
+  $("extendNote").textContent = "Planning…";
+  try {
+    planned = await send("POST", `/api/artifacts/${artifactID}/sections/plan`, { request });
+    $("extendNote").textContent = "";
+  } catch (err) {
+    $("extendNote").replaceChildren(el("span", { class: "error" }, err.message));
+  } finally {
+    $("extendGo").disabled = false;
+  }
+  renderPlanned();
+});
 
 $("rebuild").addEventListener("click", async () => {
   $("rebuild").disabled = true;

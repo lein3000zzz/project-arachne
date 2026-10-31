@@ -166,7 +166,9 @@ func (f *scripted) Verify(_ context.Context, res answer.Result, _ answer.VerifyE
 	for h, text := range f.written {
 		if text == res.Answer {
 			for i := range claims {
-				claims[i].Verdict = f.verdicts[h][i]
+				if i < len(f.verdicts[h]) {
+					claims[i].Verdict = f.verdicts[h][i]
+				}
 			}
 		}
 	}
@@ -379,5 +381,125 @@ func TestASavedAnswerKeepsItsCheck(t *testing.T) {
 
 	if _, err := s.SaveAnswer(context.Background(), 1, 7, SavedAnswer{Question: "q"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("an empty answer: %v", err)
+	}
+}
+
+func TestASectionIsRewrittenOrAddedAloneAndSourcesStayTidy(t *testing.T) {
+	store := newMemoryStore()
+	answers := &scripted{
+		sources: map[string][]answer.Source{
+			"A": {{N: 1, Result: retrieval.Result{URL: paper, Title: "Paper"}}},
+			"B": {{N: 1, Result: retrieval.Result{URL: book, Title: "Book"}}, {N: 2, Result: retrieval.Result{URL: paper, Title: "Paper"}}},
+			"C": nil,
+		},
+		written: map[string]string{
+			"A": "A cites the paper [1].",
+			"B": "B cites the book [1] and the paper [2].",
+		},
+		verdicts: map[string][]answer.Verdict{"B": {answer.Supported}},
+	}
+
+	s := newService(store, answers, &model{}, &fakeLabs{})
+	ctx := context.Background()
+
+	a, err := s.Build(ctx, 1, 7, "", Outline{Title: "T", Sections: []Planned{{Heading: "A"}, {Heading: "B"}, {Heading: "C"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.running.Wait()
+
+	// The lab has gathered since: A now rests on the book alone, C on the paper.
+	answers.sources["A"] = []answer.Source{{N: 1, Result: retrieval.Result{URL: book, Title: "Book"}}}
+	answers.written["A"] = "A now cites the book [1]."
+	answers.sources["C"] = []answer.Source{{N: 1, Result: retrieval.Result{URL: paper, Title: "Paper"}}}
+	answers.written["C"] = "C cites the paper [1]."
+
+	asked := len(answers.asked)
+
+	if _, err := s.Rewrite(ctx, 1, a.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	s.running.Wait()
+
+	v, _ := store.Version(ctx, 1, a.ID, 0)
+	if len(answers.asked) != asked+1 || v.Number != 2 || v.Sections[2].State != StateThin {
+		t.Fatalf("rewriting A asked %d times, version %+v; want A alone written", len(answers.asked)-asked, v)
+	}
+
+	// The book is now first cited, in A: [1]. The paper, cited only by B now, is [2].
+	if v.Sections[0].Text != "A now cites the book [1]." || v.Sections[1].Text != "B cites the book [1] and the paper [2]." ||
+		len(v.Sources) != 2 || v.Sources[0].URL != book || v.Sources[1].URL != paper || !slices.Equal(v.Sections[1].Claims[0].Cites, []int{1, 2}) {
+		t.Errorf("renumbered: %q, %q, sources %+v, claims %+v", v.Sections[0].Text, v.Sections[1].Text, v.Sources, v.Sections[1].Claims)
+	}
+
+	if _, err := s.Rewrite(ctx, 1, a.ID, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	s.running.Wait()
+
+	if v, _ = store.Version(ctx, 1, a.ID, 0); v.Sections[2].State != StateDone || v.Sections[2].Text != "C cites the paper [2]." {
+		t.Errorf("C after gathering: %+v", v.Sections[2])
+	}
+
+	answers.sources["D"] = []answer.Source{{N: 1, Result: retrieval.Result{URL: "https://example.com/d", Title: "D"}}}
+	answers.written["D"] = "D cites something new [1]."
+	asked = len(answers.asked)
+
+	if _, err := s.Extend(ctx, 1, a.ID, Planned{Heading: "D", Focus: "something new"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.running.Wait()
+
+	v, _ = store.Version(ctx, 1, a.ID, 0)
+	if len(answers.asked) != asked+1 || len(v.Sections) != 4 || len(v.Outline.Sections) != 4 || v.Sections[3].Text != "D cites something new [3]." {
+		t.Errorf("extended: %d asked, %+v", len(answers.asked)-asked, v)
+	}
+
+	if _, err := s.Extend(ctx, 1, a.ID, Planned{Heading: "E"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.running.Wait()
+
+	if _, err := s.Extend(ctx, 1, a.ID, Planned{Heading: "F"}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("past max_sections: %v", err)
+	}
+
+	for _, n := range []int{0, 6} {
+		if _, err := s.Rewrite(ctx, 1, a.ID, n); !errors.Is(err, ErrInvalid) {
+			t.Errorf("rewrite section %d: %v", n, err)
+		}
+	}
+
+	saved, _ := s.SaveAnswer(ctx, 1, 7, SavedAnswer{Question: "q", Text: "An answer [1].", Sources: answers.sources["A"]})
+	if _, err := s.Rewrite(ctx, 1, saved.ID, 1); !errors.Is(err, ErrInvalid) {
+		t.Errorf("rewriting a saved answer: %v", err)
+	}
+}
+
+func TestDraftSectionKnowsTheReport(t *testing.T) {
+	store := newMemoryStore()
+	id, _ := store.Create(context.Background(), 1, 7, KindReport, "Residual networks", "")
+	_, _ = store.StartVersion(context.Background(), id, Version{Status: StatusDone, Outline: Outline{Title: "Residual networks"},
+		Sections: []Section{{Heading: "Degradation"}, {Heading: "Blocks"}}})
+
+	chat := &recordingModel{reply: `{"heading": "Bottleneck blocks", "focus": "the 1x1, 3x3, 1x1 bottleneck design of deeper ResNets"}`}
+
+	p, err := newService(store, &scripted{}, chat, &fakeLabs{}).DraftSection(context.Background(), 1, id, "the bottleneck design")
+	if err != nil || p.Heading != "Bottleneck blocks" || !strings.Contains(p.Focus, "1x1") {
+		t.Fatalf("section = %+v, %v", p, err)
+	}
+
+	if prompt := chat.got.Messages[0].Content; !strings.Contains(prompt, "- Degradation\n- Blocks\n") || !strings.Contains(prompt, "Request: the bottleneck design") {
+		t.Errorf("prompt:\n%s", prompt)
+	}
+
+	chat.reply = "no"
+	if p, _ := newService(store, &scripted{}, chat, &fakeLabs{}).DraftSection(context.Background(), 1, id, "the bottleneck design"); p.Heading != "the bottleneck design" {
+		t.Errorf("with nothing usable, the request is the section: %+v", p)
 	}
 }

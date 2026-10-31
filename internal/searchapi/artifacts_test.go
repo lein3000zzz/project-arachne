@@ -23,7 +23,24 @@ type fakeArtifacts struct {
 	lab     int64
 	outline artifacts.Outline
 	saved   artifacts.SavedAnswer
+	section int
+	planned artifacts.Planned
 	err     error
+}
+
+func (f *fakeArtifacts) Rewrite(_ context.Context, owner, id int64, section int) (artifacts.Artifact, error) {
+	f.owner, f.section = owner, section
+	return artifacts.Artifact{ID: id}, f.err
+}
+
+func (f *fakeArtifacts) DraftSection(_ context.Context, owner, _ int64, request string) (artifacts.Planned, error) {
+	f.owner = owner
+	return artifacts.Planned{Heading: request, Focus: request}, f.err
+}
+
+func (f *fakeArtifacts) Extend(_ context.Context, owner, id int64, p artifacts.Planned) (artifacts.Artifact, error) {
+	f.owner, f.planned = owner, p
+	return artifacts.Artifact{ID: id}, f.err
 }
 
 func (f *fakeArtifacts) Draft(_ context.Context, owner, lab int64, request string) (artifacts.Outline, error) {
@@ -58,6 +75,9 @@ func serveArtifacts(service ArtifactService, recent *recentAnswers, method, targ
 	mux.HandleFunc("POST /api/labs/{id}/artifacts/answers", h.saveAnswer)
 	mux.HandleFunc("GET /api/artifacts/{id}", h.get)
 	mux.HandleFunc("GET /api/artifacts/{id}/markdown", h.markdown)
+	mux.HandleFunc("POST /api/artifacts/{id}/sections/plan", h.draftSection)
+	mux.HandleFunc("POST /api/artifacts/{id}/sections", h.extend)
+	mux.HandleFunc("POST /api/artifacts/{id}/sections/{section}/rewrite", h.rewrite)
 
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -176,5 +196,32 @@ func TestRecentAnswersAreBounded(t *testing.T) {
 	stale := newRecentAnswers(10, -time.Second)
 	if _, ok := stale.get(1, stale.add(1, "a", answer.Result{}, true)); ok {
 		t.Error("an expired answer is kept")
+	}
+}
+
+func TestAReportIsExtendedByAsking(t *testing.T) {
+	service := &fakeArtifacts{}
+
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections/3/rewrite", ""); rec.Code != http.StatusAccepted ||
+		service.section != 3 || service.owner != testUser.ID {
+		t.Errorf("rewrite: %d %s", rec.Code, rec.Body)
+	}
+
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections/x/rewrite", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("a section that is no number: %d", rec.Code)
+	}
+
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections/plan", `{"request":"bottlenecks"}`); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"heading":"bottlenecks"`) {
+		t.Errorf("plan: %d %s", rec.Code, rec.Body)
+	}
+
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections", `{"heading":"Bottlenecks","focus":"1x1 convolutions"}`); rec.Code != http.StatusAccepted ||
+		service.planned.Heading != "Bottlenecks" || service.planned.Focus != "1x1 convolutions" {
+		t.Errorf("extend: %d %s, %+v", rec.Code, rec.Body, service.planned)
+	}
+
+	if rec := serveArtifacts(&fakeArtifacts{err: artifacts.ErrBuilding}, nil, http.MethodPost, "/api/artifacts/7/sections/1/rewrite", ""); rec.Code != http.StatusConflict {
+		t.Errorf("while building: %d", rec.Code)
 	}
 }

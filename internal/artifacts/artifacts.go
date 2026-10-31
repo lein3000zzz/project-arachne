@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -208,7 +209,7 @@ func (s *Service) Build(ctx context.Context, ownerID, labID int64, request strin
 		return Artifact{}, err
 	}
 
-	if err := s.start(ctx, ownerID, labID, id, outline); err != nil {
+	if err := s.start(ctx, ownerID, labID, id, fresh(outline)); err != nil {
 		return Artifact{}, err
 	}
 
@@ -218,6 +219,62 @@ func (s *Service) Build(ctx context.Context, ownerID, labID int64, request strin
 // Rebuild builds a report again from its outline, as a new version: the lab
 // may hold more by now.
 func (s *Service) Rebuild(ctx context.Context, ownerID, artifactID int64) (Artifact, error) {
+	return s.change(ctx, ownerID, artifactID, func(latest Version) (Version, error) {
+		return fresh(latest.Outline), nil
+	})
+}
+
+// Rewrite writes one section again (numbered from 1), as a new version, the
+// others kept as they are: after gathering for a section the lab held too
+// little on, say.
+func (s *Service) Rewrite(ctx context.Context, ownerID, artifactID int64, section int) (Artifact, error) {
+	return s.change(ctx, ownerID, artifactID, func(latest Version) (Version, error) {
+		if section < 1 || section > len(latest.Sections) {
+			return Version{}, fmt.Errorf("%w: the report has sections 1 to %d", ErrInvalid, len(latest.Sections))
+		}
+
+		v := carried(latest)
+		old := v.Sections[section-1]
+		v.Sections[section-1] = Section{Heading: old.Heading, Focus: old.Focus, State: StatePending}
+
+		return v, nil
+	})
+}
+
+// Extend adds a section at the end and writes it alone, as a new version: a
+// report is extended by asking, never by editing it.
+func (s *Service) Extend(ctx context.Context, ownerID, artifactID int64, planned Planned) (Artifact, error) {
+	heading, err := clean(planned.Heading, maxHeadingRunes, "a heading")
+	if err != nil || heading == "" {
+		return Artifact{}, fmt.Errorf("%w: a section needs a heading of at most %d characters", ErrInvalid, maxHeadingRunes)
+	}
+
+	focus, err := clean(planned.Focus, maxFocusRunes, "a focus")
+	if err != nil {
+		return Artifact{}, err
+	}
+
+	if focus == "" {
+		focus = heading
+	}
+
+	planned = Planned{Heading: oneLine(heading), Focus: oneLine(focus)}
+
+	return s.change(ctx, ownerID, artifactID, func(latest Version) (Version, error) {
+		if len(latest.Sections) >= s.cfg.MaxSections {
+			return Version{}, fmt.Errorf("%w: a report has at most %d sections", ErrInvalid, s.cfg.MaxSections)
+		}
+
+		v := carried(latest)
+		v.Outline.Sections = append(v.Outline.Sections, planned)
+		v.Sections = append(v.Sections, Section{Heading: planned.Heading, Focus: planned.Focus, State: StatePending})
+
+		return v, nil
+	})
+}
+
+// change starts a new version of a report, made from its newest by next.
+func (s *Service) change(ctx context.Context, ownerID, artifactID int64, next func(Version) (Version, error)) (Artifact, error) {
 	if s.answers == nil || s.chat == nil {
 		return Artifact{}, ErrUnavailable
 	}
@@ -228,7 +285,7 @@ func (s *Service) Rebuild(ctx context.Context, ownerID, artifactID int64) (Artif
 	}
 
 	if a.Kind != KindReport {
-		return Artifact{}, fmt.Errorf("%w: only a report is rebuilt", ErrInvalid)
+		return Artifact{}, fmt.Errorf("%w: only a report is rebuilt or extended", ErrInvalid)
 	}
 
 	latest, err := s.store.Version(ctx, ownerID, artifactID, 0)
@@ -236,18 +293,49 @@ func (s *Service) Rebuild(ctx context.Context, ownerID, artifactID int64) (Artif
 		return Artifact{}, err
 	}
 
-	if err := s.start(ctx, ownerID, a.LabID, artifactID, latest.Outline); err != nil {
+	if latest.Status == StatusRunning {
+		return Artifact{}, ErrBuilding
+	}
+
+	v, err := next(latest)
+	if err != nil {
+		return Artifact{}, err
+	}
+
+	if err := s.start(ctx, ownerID, a.LabID, artifactID, v); err != nil {
 		return Artifact{}, err
 	}
 
 	return s.store.Get(ctx, ownerID, artifactID)
 }
 
-func (s *Service) start(ctx context.Context, ownerID, labID, artifactID int64, outline Outline) error {
-	v := Version{Status: StatusRunning, Outline: outline, Model: s.chat.Model(), Sources: []Source{}}
+// fresh is a version to write in full from an outline.
+func fresh(outline Outline) Version {
+	v := Version{Outline: outline, Sources: []Source{}}
 	for _, p := range outline.Sections {
 		v.Sections = append(v.Sections, Section{Heading: p.Heading, Focus: p.Focus, State: StatePending})
 	}
+
+	return v
+}
+
+// carried is the newest version's sections and sources, to change one part of.
+func carried(latest Version) Version {
+	v := Version{Outline: latest.Outline, Sources: slices.Clone(latest.Sources), Sections: make([]Section, len(latest.Sections))}
+	v.Outline.Sections = slices.Clone(latest.Outline.Sections)
+
+	for i, sec := range latest.Sections {
+		sec.Claims = slices.Clone(sec.Claims)
+		v.Sections[i] = sec
+	}
+
+	return v
+}
+
+// start records v as the next version and writes its pending sections in the
+// background.
+func (s *Service) start(ctx context.Context, ownerID, labID, artifactID int64, v Version) error {
+	v.Status, v.Model, v.Markdown, v.Error, v.Seconds, v.FinishedAt = StatusRunning, s.chat.Model(), "", "", 0, nil
 
 	number, err := s.store.StartVersion(ctx, artifactID, v)
 	if err != nil {

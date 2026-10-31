@@ -17,6 +17,9 @@ type ArtifactService interface {
 	Draft(ctx context.Context, ownerID, labID int64, request string) (artifacts.Outline, error)
 	Build(ctx context.Context, ownerID, labID int64, request string, outline artifacts.Outline) (artifacts.Artifact, error)
 	Rebuild(ctx context.Context, ownerID, artifactID int64) (artifacts.Artifact, error)
+	Rewrite(ctx context.Context, ownerID, artifactID int64, section int) (artifacts.Artifact, error)
+	DraftSection(ctx context.Context, ownerID, artifactID int64, request string) (artifacts.Planned, error)
+	Extend(ctx context.Context, ownerID, artifactID int64, planned artifacts.Planned) (artifacts.Artifact, error)
 	List(ctx context.Context, ownerID, labID int64) ([]artifacts.Artifact, error)
 	Get(ctx context.Context, ownerID, artifactID int64, version int) (artifacts.Artifact, artifacts.Version, []int, error)
 	Delete(ctx context.Context, ownerID, artifactID int64) error
@@ -160,6 +163,43 @@ func (h *artifactsHandler) rebuild(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *artifactsHandler) rewrite(w http.ResponseWriter, r *http.Request) {
+	section, err := strconv.Atoi(r.PathValue("section"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "no such section"})
+		return
+	}
+
+	h.artifact(w, r, func(ctx context.Context, owner, id int64) (int, any, error) {
+		a, err := h.service.Rewrite(ctx, owner, id, section)
+		return http.StatusAccepted, a, err
+	})
+}
+
+func (h *artifactsHandler) draftSection(w http.ResponseWriter, r *http.Request) {
+	var req outlineRequest
+	if !decodeLabBody(w, r, &req, "body must be JSON: {request}") {
+		return
+	}
+
+	h.artifactFor(w, r, h.draftTimeout, func(ctx context.Context, owner, id int64) (int, any, error) {
+		p, err := h.service.DraftSection(ctx, owner, id, req.Request)
+		return http.StatusOK, p, err
+	})
+}
+
+func (h *artifactsHandler) extend(w http.ResponseWriter, r *http.Request) {
+	var planned artifacts.Planned
+	if !decodeLabBody(w, r, &planned, "body must be JSON: {heading, focus}") {
+		return
+	}
+
+	h.artifact(w, r, func(ctx context.Context, owner, id int64) (int, any, error) {
+		a, err := h.service.Extend(ctx, owner, id, planned)
+		return http.StatusAccepted, a, err
+	})
+}
+
 func (h *artifactsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	h.artifact(w, r, func(ctx context.Context, owner, id int64) (int, any, error) {
 		return http.StatusNoContent, nil, h.service.Delete(ctx, owner, id)
@@ -192,13 +232,17 @@ func (h *artifactsHandler) inLab(w http.ResponseWriter, r *http.Request, timeout
 }
 
 func (h *artifactsHandler) artifact(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, owner, id int64) (int, any, error)) {
+	h.artifactFor(w, r, artifactsTimeout, do)
+}
+
+func (h *artifactsHandler) artifactFor(w http.ResponseWriter, r *http.Request, timeout time.Duration, do func(ctx context.Context, owner, id int64) (int, any, error)) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: artifacts.ErrNotFound.Error()})
 		return
 	}
 
-	h.run(w, r, artifactsTimeout, func(ctx context.Context, owner int64) (int, any, error) { return do(ctx, owner, id) })
+	h.run(w, r, timeout, func(ctx context.Context, owner int64) (int, any, error) { return do(ctx, owner, id) })
 }
 
 func (h *artifactsHandler) run(w http.ResponseWriter, r *http.Request, timeout time.Duration, do func(ctx context.Context, owner int64) (int, any, error)) {

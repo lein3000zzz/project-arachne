@@ -109,6 +109,9 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /api/artifacts/{id}", signIn.api(artifactsAPI.get))
 	mux.Handle("GET /api/artifacts/{id}/markdown", signIn.api(artifactsAPI.markdown))
 	mux.Handle("POST /api/artifacts/{id}/rebuild", signIn.api(artifactsAPI.rebuild))
+	mux.Handle("POST /api/artifacts/{id}/sections/plan", signIn.api(artifactsAPI.draftSection))
+	mux.Handle("POST /api/artifacts/{id}/sections", signIn.api(artifactsAPI.extend))
+	mux.Handle("POST /api/artifacts/{id}/sections/{section}/rewrite", signIn.api(artifactsAPI.rewrite))
 	mux.Handle("DELETE /api/artifacts/{id}", signIn.api(artifactsAPI.delete))
 
 	uploadsAPI := &uploadsHandler{logger: logger, files: services.Uploads}
