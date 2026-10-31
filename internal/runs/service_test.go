@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -45,10 +46,18 @@ func TestBuildValidates(t *testing.T) {
 		{URL: "go.dev", Depth: 6},
 		{URL: "go.dev", Links: 2001},
 		{URL: "go.dev", Depth: -1},
+		// An uploaded file's address: only a lab's upload may crawl it, and an
+		// upload only that.
+		{URL: "https://uploads.arachne.invalid/" + strings.Repeat("ab", 20)},
+		{URL: "go.dev", Upload: true},
 	} {
 		if _, err := s.build(req); err == nil {
 			t.Errorf("%+v must be rejected", req)
 		}
+	}
+
+	if _, err := s.build(Request{URL: "https://uploads.arachne.invalid/" + strings.Repeat("ab", 20), Upload: true, Depth: 1, Links: 1}); err != nil {
+		t.Errorf("a lab's upload: %v", err)
 	}
 }
 

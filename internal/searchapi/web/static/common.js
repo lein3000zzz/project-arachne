@@ -82,3 +82,26 @@ api("/api/me").then((me) => { $("who").textContent = me.username; }).catch(() =>
 $("logout").addEventListener("click", async () => {
   try { await fetch("/api/logout", { method: "POST" }); } finally { location.assign("/login"); }
 });
+
+// An uploaded file's address is on a reserved host no site can have; only its
+// owner opens it, through /uploads/.
+const uploadsPrefix = "https://uploads.arachne.invalid/";
+const isUpload = (url) => typeof url === "string" && url.startsWith(uploadsPrefix);
+const pageHref = (url) => (isUpload(url) ? "/uploads/" + url.slice(uploadsPrefix.length) : url);
+
+const maxUploadBytes = 32 << 20;
+
+function fileSize(bytes) {
+  return bytes < 1 << 20 ? Math.max(1, Math.round(bytes / 1024)) + " KiB" : (bytes / (1 << 20)).toFixed(1) + " MiB";
+}
+
+// tooBig names the files the server would refuse, before sending megabytes.
+function tooBig(files) {
+  return [...files].filter((f) => f.size > maxUploadBytes).map((f) => f.name);
+}
+
+async function uploadFiles(labID, files) {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return api(`/api/labs/${labID}/uploads`, { method: "POST", body: form });
+}

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end check of a running stack: crawl a few pages through the search
 # service, wait until they are indexed and ranked, then search and ask; then
-# build a lab of the two best pages, ask with it ticked, and delete it.
+# build a lab of the two best pages, ask with it ticked, upload a file to it
+# that only the lab may find, and delete it.
 #
 # usage: scripts/smoke.sh   (SEARCH_URL, URL, QUERY, LINKS, TIMEOUT to override)
 # Needs ARACHNE_TOKEN, an API token: make token NAME=<user>.
@@ -124,5 +125,20 @@ case "$code" in
     ;;
   *) fail "HTTP $code: $(jq -r .error /tmp/arachne-smoke-lab.json 2>/dev/null)" ;;
 esac
+
+# An uploaded file is its owner's: found with its lab ticked, never without.
+step "upload"
+word="smoke$(date +%s)quokka"
+upload=$(mktemp)
+printf '# Umbrella ledger\n\nThe %s ledger records every borrowed umbrella with a teal stamp and a sequence number. An umbrella that comes back is crossed out in green; one that does not is chased after a week. The ledger is kept at the front desk.\n' "$word" >"$upload"
+upload_run=$(api -sf -X POST "$BASE/api/labs/$lab_id/uploads" -F "files=@$upload;filename=smoke-notes.md;type=text/markdown" \
+  | jq -r '.sources[] | select(.kind == "upload") | .run.id') || fail "the upload was refused"
+rm -f "$upload"
+wait_for "$upload_run" '.status == "finished" and .docs_indexed + .docs_rejected >= 1' >/dev/null
+found() { api -sf -G "$BASE/search" --data-urlencode "q=$word" --data-urlencode mode=bm25 --data-urlencode rerank=false "$@" \
+  | jq '[.results[] | select(.url | startswith("https://uploads.arachne.invalid/"))] | length'; }
+[ "$(found --data-urlencode "labs=$lab_id")" -ge 1 ] || fail "the lab does not find its own upload"
+[ "$(found)" -eq 0 ] || fail "the shared search found an uploaded file"
+ok "found with lab $lab_id ticked, not without"
 
 echo "passed in $(( $(date +%s) - started )) s"

@@ -12,6 +12,8 @@ type FetchResult struct {
 	Body        []byte
 	Status      int
 	ContentType string
+	// The name a file was uploaded under: the title of one that gives none.
+	Filename string
 }
 
 type Networker interface {

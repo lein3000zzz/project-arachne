@@ -44,7 +44,7 @@
       <h1 id="title">&hellip;</h1>
       <p class="lede" id="topic"></p>
       <p class="note" id="coverage"></p>
-      <div class="buttons"><a class="action primary" id="askWith" href="/">Search with this lab</a></div>
+      <div class="buttons"><a class="action primary" id="askWith" href="/">Look up with this lab</a></div>
     </section>
 
     <section id="sources">
@@ -63,6 +63,12 @@
       </form>
       <p class="note" id="growNote" aria-live="polite"></p>
       <div id="growCard"></div>
+
+      <div class="upload">
+        <label class="action file-pick">Upload files<input type="file" id="uploadInput" multiple></label>
+        <p class="note" id="uploadNote" aria-live="polite">PDF, Word, EPUB, scans and other documents, up to 32 MiB each.
+          Found only when this lab is ticked.</p>
+      </div>
     </section>
 
     <section id="web" hidden>
@@ -128,9 +134,10 @@ function sourceRow(src) {
   const status = run ? stateOf(run.status) : el("span", { class: "note" }, "not crawled");
   const act = (label, onclick) => el("button", { type: "button", class: "action small", onclick }, label);
 
-  const tag = src.kind === "search" ? "found" : src.kind === "reference" ? "cited" : src.scope;
+  const tag = { search: "found", reference: "cited", upload: "file" }[src.kind] || src.scope;
+  const upload = src.kind === "upload";
   return el("tr", {},
-    el("td", { class: "url" }, el("a", { href: src.url, target: "_blank", rel: "noopener noreferrer" }, src.url),
+    el("td", { class: "url" }, el("a", { href: pageHref(src.url), target: "_blank", rel: "noopener noreferrer" }, upload ? src.filename : src.url),
       el("span", { class: "tag" }, tag),
       src.kind === "search" ? el("div", { class: "note" }, `“${src.query}”` + (src.reason ? " — " + src.reason : "")) : null,
       src.kind === "reference" ? el("div", { class: "note" }, `in ${host(src.cited_by)}: ${src.citation}`) : null),
@@ -146,7 +153,9 @@ function sourceRow(src) {
           load();
         }),
         act("remove", async () => {
-          if (!confirm("Remove " + src.url + "? Its pages leave this lab, not the shared base.")) return;
+          const asked = upload ? `Remove ${src.filename}? Unless another of your labs holds it, the file is deleted.`
+            : `Remove ${src.url}? Its pages leave this lab, not the shared base.`;
+          if (!confirm(asked)) return;
           try { await send("DELETE", `${base}/sources/${src.id}`); } catch (err) { alert(err.message); }
           load();
         }))));
@@ -164,7 +173,7 @@ function pageItem(p) {
   const setAside = r && r.decision === "skip";
   return el("li", { class: setAside ? "set-aside" : null },
     el("span", { class: "status" }, p.status ? String(p.status) : "–"),
-    el("a", { href: p.url, target: "_blank", rel: "noopener noreferrer" }, p.title || p.url),
+    el("a", { href: pageHref(p.url), target: "_blank", rel: "noopener noreferrer" }, p.title || (isUpload(p.url) ? "an uploaded file" : p.url)),
     setAside ? el("span", { class: "tag" }, "set aside: " + (r.reasons.map((x) => reasonNames[x] || x).join(", ") || "review")) : null,
     r && r.unreviewed ? el("span", { class: "tag" }, "unreviewed") : null,
     r && r.summary ? el("div", { class: "page-summary" }, r.summary) : null);
@@ -254,7 +263,7 @@ function referenceDoc(doc) {
   const cs = citations(doc.references);
   const had = cs.filter((c) => c.inLab).length;
   const details = el("details", { class: "options ref-doc", open: opened.has(doc.url) },
-    el("summary", {}, `${doc.title || doc.url} · ${cs.length} references` + (had ? ` · ${had} in the lab` : "")),
+    el("summary", {}, `${doc.title || host(doc.url)} · ${cs.length} references` + (had ? ` · ${had} in the lab` : "")),
     el("ul", { class: "refs" }, cs.map((c) => referenceItem(doc, c))));
   details.addEventListener("toggle", () => { details.open ? opened.add(doc.url) : opened.delete(doc.url); });
   return details;
@@ -295,6 +304,28 @@ async function loadReferences() {
 
 $("refFilter").addEventListener("input", filterReferences);
 
+// ---- uploads: files of the user's own, sources like links ----
+$("uploadInput").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  if (!files.length) return;
+
+  const big = tooBig(files);
+  if (big.length) {
+    $("uploadNote").replaceChildren(el("span", { class: "error" }, `Over 32 MiB: ${big.join(", ")}.`));
+    return;
+  }
+
+  $("uploadNote").textContent = `Uploading ${files.length === 1 ? files[0].name : files.length + " files"}…`;
+  try {
+    await uploadFiles(labID, files);
+    $("uploadNote").textContent = `Uploaded ${files.length === 1 ? files[0].name : files.length + " files"}: each is read and reviewed before it is searchable.`;
+  } catch (err) {
+    $("uploadNote").replaceChildren(el("span", { class: "error" }, err.message));
+  }
+  load();
+});
+
 $("refAdd").addEventListener("click", async () => {
   const references = [...ticked].map(([url, doc]) => ({ document: doc, url }));
   $("refAdd").disabled = true;
@@ -331,6 +362,7 @@ async function saveEngines() {
 }
 
 function host(u) {
+  if (isUpload(u)) return "an uploaded file";
   try { return new URL(u).hostname; } catch (_) { return u; }
 }
 

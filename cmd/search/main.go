@@ -15,6 +15,7 @@ import (
 	"web-crawler/internal/retrieval"
 	"web-crawler/internal/runs"
 	"web-crawler/internal/searchapi"
+	"web-crawler/internal/uploads"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -120,11 +121,14 @@ func main() {
 		logger.Infow("Crawl submission enabled", "maxDepth", cfg.CrawlAPI.MaxDepth, "maxLinks", cfg.CrawlAPI.MaxLinks)
 	}
 
+	uploadStore := uploads.NewStore(db, func(ctx context.Context, url string) error { return store.Replace(ctx, url, nil) })
+
 	labService := labs.NewService(labs.NewPostgresStore(db), labRuns, chat, labs.Limits{
 		MaxSources:     cfg.Labs.MaxSources,
 		DefaultEngines: cfg.WebSearch.DefaultEngines,
-	})
-	services.Labs = labService
+		Documents:      cfg.Documents.Enabled,
+	}).KeepsUploads(uploadStore)
+	services.Labs, services.Uploads = labService, uploadStore
 
 	// Pages a gathering finds are crawled, so it needs crawling as well as the
 	// engines and the model; a nil search makes it report itself unavailable.

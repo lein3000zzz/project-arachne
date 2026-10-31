@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"web-crawler/internal/uploads"
+
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/milvusclient"
 )
@@ -281,6 +283,26 @@ func TestSearchReturnsHitsWithTheirFields(t *testing.T) {
 	both, err := m.SearchText(ctx, "channels", 5, Filter{URLs: []string{a, b}, Host: "other.example"})
 	if err != nil || len(both) != 1 || both[0].URL != b {
 		t.Errorf("URL and host filters together: %+v, %v", both, err)
+	}
+
+	const upload = "https://uploads.arachne.invalid/" + "0123456789abcdef0123456789abcdef01234567"
+
+	private := row(upload, "ab03", "channels in an uploaded file", 1, 0, 0, 0)
+	private.Host = uploads.Host
+	if err := m.Replace(ctx, upload, []Row{private}); err != nil {
+		t.Fatal(err)
+	}
+
+	inLab := waitFor(func() ([]Hit, error) { return m.SearchText(ctx, "channels", 5, Filter{URLs: []string{upload}}) }, 1)
+	if len(inLab) != 1 || inLab[0].URL != upload {
+		t.Errorf("a lab holding the upload finds it: %+v", inLab)
+	}
+
+	for _, f := range []Filter{{}, {Host: uploads.Host}} {
+		hits, err := m.SearchText(ctx, "channels", 5, f)
+		if err != nil || slices.ContainsFunc(hits, func(h Hit) bool { return h.URL == upload }) {
+			t.Errorf("%+v: an unrestricted search must not find an upload: %+v, %v", f, hits, err)
+		}
 	}
 
 	for _, urls := range [][]string{{}, {`x" or page_url != "y`}, {`"] or page_url != ["`}} {

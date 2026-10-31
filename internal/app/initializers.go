@@ -20,6 +20,7 @@ import (
 	"web-crawler/internal/processor"
 	"web-crawler/internal/processor/queue"
 	"web-crawler/internal/runs"
+	"web-crawler/internal/uploads"
 	"web-crawler/internal/utils"
 	"web-crawler/internal/webcrawler"
 	"web-crawler/internal/webcrawler/cache"
@@ -82,7 +83,7 @@ func InitApp() *CrawlerApp {
 
 	processorQueue := processor.NewTaskProcessorKafka(logger, tasksQueue, runsQueue, runStateManager)
 
-	fetcher := networker.NewNetworker(logger, cfg.Crawler.UserAgent, cfg.Crawler.FetchTimeout.Std())
+	fetcher := uploads.NewFetcher(networker.NewNetworker(logger, cfg.Crawler.UserAgent, cfg.Crawler.FetchTimeout.Std()), db)
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 

@@ -36,7 +36,8 @@ type Hit struct {
 type Filter struct {
 	Host string
 	// Non-nil restricts the search to these page URLs, so an empty, non-nil
-	// list matches nothing: a lab without pages is not the whole index.
+	// list matches nothing: a lab without pages is not the whole index. Nil
+	// searches everything but uploaded files.
 	URLs []string
 }
 

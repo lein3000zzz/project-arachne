@@ -43,7 +43,7 @@ const (
 
 	sourceColumns = `
 		s.id, s.lab_id, s.kind, s.url, s.scope, s.max_depth, s.max_links, s.created_at, s.query, s.engines, s.reason,
-		coalesce(s.gathering_id, 0), s.cited_by, s.citation,
+		coalesce(s.gathering_id, 0), s.cited_by, s.citation, s.filename,
 		(SELECT count(*) FROM source_pages sp JOIN pages p ON p.id = sp.page_id
 			WHERE sp.source_id = s.id AND p.status BETWEEN 200 AND 299),
 		coalesce((SELECT r.id FROM runs r WHERE r.source_id = s.id ORDER BY r.submitted_at DESC LIMIT 1), '')`
@@ -59,7 +59,7 @@ func scanLab(row pgx.CollectableRow) (Lab, error) {
 func scanSource(row pgx.CollectableRow) (Source, error) {
 	var s Source
 	err := row.Scan(&s.ID, &s.LabID, &s.Kind, &s.URL, &s.Scope, &s.MaxDepth, &s.MaxLinks, &s.CreatedAt, &s.Query, &s.Engines, &s.Reason,
-		&s.GatheringID, &s.CitedBy, &s.Citation, &s.Pages, &s.LastRunID)
+		&s.GatheringID, &s.CitedBy, &s.Citation, &s.Filename, &s.Pages, &s.LastRunID)
 
 	return s, err
 }
@@ -138,11 +138,11 @@ func (s *PostgresStore) AddSource(ctx context.Context, ownerID, labID int64, src
 
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
-			INSERT INTO sources (lab_id, kind, url, scope, max_depth, max_links, query, engines, reason, gathering_id, cited_by, citation)
-			SELECT id, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, 0), $12, $13 FROM labs WHERE id = $1 AND owner_id = $2
+			INSERT INTO sources (lab_id, kind, url, scope, max_depth, max_links, query, engines, reason, gathering_id, cited_by, citation, filename)
+			SELECT id, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, 0), $12, $13, $14 FROM labs WHERE id = $1 AND owner_id = $2
 			RETURNING id`,
 			labID, ownerID, kindOf(src), src.URL, src.Scope, src.MaxDepth, src.MaxLinks, src.Query, engineList(src.Engines), src.Reason,
-			src.GatheringID, src.CitedBy, src.Citation).Scan(&id)
+			src.GatheringID, src.CitedBy, src.Citation, src.Filename).Scan(&id)
 
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):

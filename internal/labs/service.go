@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"unicode"
@@ -33,7 +34,10 @@ type Runs interface {
 	Get(ctx context.Context, id string) (runs.Run, error)
 }
 
-var ErrCrawlingDisabled = errors.New("crawling is disabled (crawl_api.enabled), so labs cannot gather sources")
+var (
+	ErrCrawlingDisabled = errors.New("crawling is disabled (crawl_api.enabled), so labs cannot gather sources")
+	ErrUploadsDisabled  = errors.New("uploading is not available: it needs crawling (crawl_api.enabled)")
+)
 
 const (
 	maxNameRunes  = 80
@@ -44,6 +48,24 @@ type Limits struct {
 	MaxSources int
 	// What a new lab may search when its creator did not choose.
 	DefaultEngines []string
+	// Whether the crawler reads documents (documents.enabled): without, only
+	// text files are worth uploading.
+	Documents bool
+}
+
+// Uploads keeps uploaded files, under addresses no web page can have.
+type Uploads interface {
+	Save(ctx context.Context, ownerID int64, name, contentType string, data []byte) (url string, err error)
+	// Forget deletes, of these addresses, the files no lab of the owner holds
+	// any more, with their pages and chunks.
+	Forget(ctx context.Context, ownerID int64, urls []string) error
+}
+
+// File is an uploaded file, as received.
+type File struct {
+	Name        string
+	ContentType string
+	Data        []byte
 }
 
 const (
@@ -79,10 +101,11 @@ type Detail struct {
 }
 
 type Service struct {
-	store  Store
-	runs   Runs
-	chat   llm.Client
-	limits Limits
+	store   Store
+	runs    Runs
+	chat    llm.Client
+	limits  Limits
+	uploads Uploads
 }
 
 // NewService takes nil runs when crawling is off: labs can then be read and
@@ -90,6 +113,12 @@ type Service struct {
 // reading the request literally.
 func NewService(store Store, runs Runs, chat llm.Client, limits Limits) *Service {
 	return &Service{store: store, runs: runs, chat: chat, limits: limits}
+}
+
+// KeepsUploads lets users upload files to their labs.
+func (s *Service) KeepsUploads(u Uploads) *Service {
+	s.uploads = u
+	return s
 }
 
 func (s *Service) List(ctx context.Context, ownerID int64) ([]Lab, error) {
@@ -227,6 +256,65 @@ func (s *Service) AddReferences(ctx context.Context, ownerID, labID int64, picks
 	return s.Get(ctx, ownerID, labID)
 }
 
+// AddUploads keeps the files and adds each as a source of its own, crawled
+// from the store rather than the web. A file the lab already holds is an
+// error, like a link it has.
+func (s *Service) AddUploads(ctx context.Context, ownerID, labID int64, files []File) (Detail, error) {
+	if s.uploads == nil || s.runs == nil {
+		return Detail{}, ErrUploadsDisabled
+	}
+
+	if len(files) == 0 {
+		return Detail{}, fmt.Errorf("%w: no files", ErrInvalid)
+	}
+
+	existing, err := s.store.Sources(ctx, ownerID, labID)
+	if err != nil {
+		return Detail{}, err
+	}
+
+	if len(existing)+len(files) > s.limits.MaxSources {
+		return Detail{}, fmt.Errorf("%w: a lab has at most %d sources", ErrInvalid, s.limits.MaxSources)
+	}
+
+	for _, f := range files {
+		if len(f.Data) == 0 {
+			return Detail{}, fmt.Errorf("%w: %s is empty", ErrInvalid, f.Name)
+		}
+
+		if !s.limits.Documents && !strings.HasPrefix(http.DetectContentType(f.Data), "text/") {
+			return Detail{}, fmt.Errorf("%w: %s is not a text file, and reading documents is off (documents.enabled)", ErrInvalid, f.Name)
+		}
+	}
+
+	seen := make(map[string]bool, len(existing))
+	for _, src := range existing {
+		seen[src.URL] = true
+	}
+
+	sources := make([]Source, 0, len(files))
+
+	for _, f := range files {
+		url, err := s.uploads.Save(ctx, ownerID, f.Name, f.ContentType, f.Data)
+		if err != nil {
+			return Detail{}, err
+		}
+
+		if seen[url] {
+			return Detail{}, fmt.Errorf("%w: %s", ErrSourceExists, f.Name)
+		}
+
+		seen[url] = true
+		sources = append(sources, Source{Kind: KindUpload, URL: url, Scope: ScopePage, MaxDepth: 1, MaxLinks: 1, Filename: f.Name})
+	}
+
+	if err := s.addAll(ctx, ownerID, labID, sources); err != nil {
+		return Detail{}, err
+	}
+
+	return s.Get(ctx, ownerID, labID)
+}
+
 func (s *Service) AddSources(ctx context.Context, ownerID, labID int64, sources []SourceRequest) (Detail, error) {
 	existing, err := s.store.Sources(ctx, ownerID, labID)
 	if err != nil {
@@ -267,7 +355,16 @@ func (s *Service) Refresh(ctx context.Context, ownerID, labID, sourceID int64) (
 }
 
 func (s *Service) RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error {
-	return s.store.RemoveSource(ctx, ownerID, labID, sourceID)
+	src, err := s.store.Source(ctx, ownerID, labID, sourceID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.store.RemoveSource(ctx, ownerID, labID, sourceID); err != nil {
+		return err
+	}
+
+	return s.forget(ctx, ownerID, []Source{src})
 }
 
 func (s *Service) Get(ctx context.Context, ownerID, labID int64) (Detail, error) {
@@ -304,7 +401,35 @@ func (s *Service) Get(ctx context.Context, ownerID, labID int64) (Detail, error)
 }
 
 func (s *Service) Delete(ctx context.Context, ownerID, labID int64) error {
-	return s.store.Delete(ctx, ownerID, labID)
+	sources, err := s.store.Sources(ctx, ownerID, labID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.store.Delete(ctx, ownerID, labID); err != nil {
+		return err
+	}
+
+	return s.forget(ctx, ownerID, sources)
+}
+
+// forget deletes the uploaded files among these sources that the owner's
+// labs no longer hold. A crawled page outlives its lab in the shared base; an
+// uploaded file was never shared, so it goes.
+func (s *Service) forget(ctx context.Context, ownerID int64, sources []Source) error {
+	var urls []string
+
+	for _, src := range sources {
+		if src.Kind == KindUpload {
+			urls = append(urls, src.URL)
+		}
+	}
+
+	if len(urls) == 0 || s.uploads == nil {
+		return nil
+	}
+
+	return s.uploads.Forget(ctx, ownerID, urls)
 }
 
 func (s *Service) Pages(ctx context.Context, ownerID, labID int64, limit int) ([]Page, error) {
@@ -394,6 +519,8 @@ func runRequest(src Source) runs.Request {
 	if src.Scope == ScopePage {
 		req.Scope, req.Depth, req.Links = runs.ScopeSection, 1, 1
 	}
+
+	req.Upload = src.Kind == KindUpload
 
 	return req
 }

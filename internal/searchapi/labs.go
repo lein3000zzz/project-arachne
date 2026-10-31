@@ -27,6 +27,7 @@ type LabService interface {
 	Pages(ctx context.Context, ownerID, labID int64, limit int) ([]labs.Page, error)
 	References(ctx context.Context, ownerID, labID int64) ([]labs.Document, error)
 	AddReferences(ctx context.Context, ownerID, labID int64, picks []labs.Cited) (labs.Detail, error)
+	AddUploads(ctx context.Context, ownerID, labID int64, files []labs.File) (labs.Detail, error)
 	PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error)
 	Plan(ctx context.Context, ownerID, labID int64, request string) (labs.Plan, error)
 }
@@ -191,13 +192,17 @@ func (h *labsHandler) pages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *labsHandler) withLab(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, owner, lab int64) (int, any, error)) {
+	h.withLabFor(w, r, labsTimeout, do)
+}
+
+func (h *labsHandler) withLabFor(w http.ResponseWriter, r *http.Request, timeout time.Duration, do func(ctx context.Context, owner, lab int64) (int, any, error)) {
 	lab, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: labs.ErrNotFound.Error()})
 		return
 	}
 
-	h.run(w, r, labsTimeout, func(ctx context.Context, owner int64) (int, any, error) { return do(ctx, owner, lab) })
+	h.run(w, r, timeout, func(ctx context.Context, owner int64) (int, any, error) { return do(ctx, owner, lab) })
 }
 
 func (h *labsHandler) withSource(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, owner, lab, source int64) (int, any, error)) {
@@ -254,7 +259,7 @@ func labFailure(logger *zap.SugaredLogger, err error) (int, string) {
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, labs.ErrInvalid):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, labs.ErrCrawlingDisabled):
+	case errors.Is(err, labs.ErrCrawlingDisabled), errors.Is(err, labs.ErrUploadsDisabled):
 		return http.StatusServiceUnavailable, err.Error()
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, "the request timed out"

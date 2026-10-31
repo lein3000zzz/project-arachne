@@ -53,6 +53,7 @@ type Services struct {
 	Runs     RunService
 	Labs     LabService
 	Gatherer Gatherer
+	Uploads  UploadStore
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -91,6 +92,10 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("POST /api/labs/{id}/sources", signIn.api(labsAPI.addSources))
 	mux.Handle("GET /api/labs/{id}/references", signIn.api(labsAPI.references))
 	mux.Handle("POST /api/labs/{id}/references", signIn.api(labsAPI.addReferences))
+	mux.Handle("POST /api/labs/{id}/uploads", signIn.api(labsAPI.addUploads))
+
+	uploadsAPI := &uploadsHandler{logger: logger, files: services.Uploads}
+	mux.Handle("GET /uploads/{id}", signIn.page(uploadsAPI.serve))
 	mux.Handle("POST /api/labs/{id}/sources/{source}/refresh", signIn.api(labsAPI.refresh))
 	mux.Handle("DELETE /api/labs/{id}/sources/{source}", signIn.api(labsAPI.removeSource))
 

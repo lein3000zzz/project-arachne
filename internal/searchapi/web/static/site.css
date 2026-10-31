@@ -329,6 +329,17 @@ section:last-of-type { border-bottom: 0; }
 .web-choice { display: grid; gap: 0.7rem; margin: 0.4rem 0 1.2rem; }
 .web-choice .ticks { margin: 0; }
 
+/* Files: the file input inside a button-styled label, out of sight but still
+   reachable from the keyboard; the chosen files listed. */
+.upload { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; align-items: baseline; margin: 1.4rem 0 0; }
+.upload .note { margin: 0; }
+.file-pick { position: relative; cursor: pointer; }
+.file-pick input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.file-pick:has(input:focus-visible) { outline: 2px solid var(--fg); outline-offset: 2px; }
+.file-list { flex-basis: 100%; list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; font-family: var(--mono); font-size: 0.8rem; }
+.file-list:empty { display: none; }
+.file-list .host { color: var(--muted); margin: 0 0.6rem; }
+
 /* A document's references, each ticked to become a source of its own. */
 .ref-doc { margin: 1.2rem 0; }
 .refs { list-style: none; margin: 0.8rem 0 0; padding: 0; display: grid; gap: 0.6rem; max-width: 72ch; }

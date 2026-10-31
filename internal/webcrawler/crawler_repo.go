@@ -318,6 +318,10 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 		}
 	}
 
+	if parsed.Title == "" {
+		parsed.Title = fetchRes.Filename
+	}
+
 	// After a temporary redirect elsewhere the body is another page's - a login
 	// form, a mirror - and indexing it under pageURL would make pageURL findable by
 	// text it does not have. That page is indexed when it is crawled itself. A

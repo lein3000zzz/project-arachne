@@ -471,3 +471,30 @@ func TestADocumentsReferencesAreKeptNotFollowed(t *testing.T) {
 		t.Errorf("references after a failed read = %+v, want nil", pd.References)
 	}
 }
+
+type untitledParser struct{}
+
+func (untitledParser) Parse(context.Context, *parser.ParseParams) (*parser.ParseResult, error) {
+	return &parser.ParseResult{Content: "The quokka ledger method records every borrowed umbrella."}, nil
+}
+
+type uploadNetworker struct{ nopNetworker }
+
+func (uploadNetworker) Fetch(url string) (*networker.FetchResult, error) {
+	return &networker.FetchResult{Status: http.StatusOK, Body: []byte("notes"), ContentType: "text/plain", FinalURL: url, IdentityURL: url,
+		Filename: "field notes.md"}, nil
+}
+
+func TestAFileWithoutATitleIsTitledByItsName(t *testing.T) {
+	h := newHarness()
+	h.repo.parser, h.repo.networker = untitledParser{}, uploadNetworker{}
+
+	pd, err := h.repo.scrap(h.task)
+	if err != nil || pd.Title != "field notes.md" {
+		t.Errorf("title %q, %v", pd.Title, err)
+	}
+
+	if sink := h.repo.documents.(*recordingSink); len(sink.docs) != 1 || sink.docs[0].Title != "field notes.md" {
+		t.Errorf("indexed as %+v", sink.docs)
+	}
+}

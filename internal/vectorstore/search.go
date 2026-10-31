@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"web-crawler/internal/uploads"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
@@ -58,6 +59,11 @@ func (m *Milvus) search(ctx context.Context, vector entity.Vector, field string,
 	if filter.URLs != nil {
 		conditions = append(conditions, FieldURL+" in {urls}")
 		opt = opt.WithTemplateParam("urls", filter.URLs)
+	} else {
+		// An uploaded file is its owner's: only a search restricted to the pages
+		// of labs that hold it may find it.
+		conditions = append(conditions, FieldHost+" != {uploads}")
+		opt = opt.WithTemplateParam("uploads", uploads.Host)
 	}
 
 	if len(conditions) > 0 {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"web-crawler/internal/domain/config"
+	"web-crawler/internal/uploads"
 	"web-crawler/internal/urlnorm"
 	"web-crawler/internal/utils"
 
@@ -26,6 +27,8 @@ type Request struct {
 	Links    int    `json:"links"`
 	Scope    string `json:"scope"`
 	UseCache bool   `json:"use_cache"`
+	// An uploaded file's address; set only by labs, never read from a body.
+	Upload bool `json:"-"`
 }
 
 // Origin says who asked for a run and for which lab source. It is never read
@@ -108,6 +111,10 @@ func (s *Service) Submit(ctx context.Context, req Request, origin Origin) (Run, 
 func (s *Service) build(req Request) (*config.Run, error) {
 	start, ok := urlnorm.FromUserInput(req.URL)
 	if !ok {
+		return nil, fmt.Errorf("%w: %q is not a web address", ErrInvalidRequest, req.URL)
+	}
+
+	if uploads.Is(start) != req.Upload {
 		return nil, fmt.Errorf("%w: %q is not a web address", ErrInvalidRequest, req.URL)
 	}
 

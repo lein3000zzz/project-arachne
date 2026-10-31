@@ -37,6 +37,8 @@ const (
 	KindSearch = "search"
 	// Taken from what one of the lab's documents links to or cites.
 	KindReference = "reference"
+	// A file the user uploaded; its address is package uploads'.
+	KindUpload = "upload"
 )
 
 type Source struct {
@@ -61,6 +63,8 @@ type Source struct {
 	// For a reference source: the document that cites it, and how.
 	CitedBy  string `json:"cited_by,omitempty"`
 	Citation string `json:"citation,omitempty"`
+	// For an uploaded file: its name as uploaded.
+	Filename string `json:"filename,omitempty"`
 }
 
 type Page struct {

@@ -20,7 +20,13 @@ type fakeLabs struct {
 	created createLabRequest
 	request string
 	picks   []labs.Cited
+	files   []labs.File
 	err     error
+}
+
+func (f *fakeLabs) AddUploads(_ context.Context, owner, lab int64, files []labs.File) (labs.Detail, error) {
+	f.owner, f.labIDs, f.files = owner, []int64{lab}, files
+	return labs.Detail{Lab: labs.Lab{ID: lab}}, f.err
 }
 
 func (f *fakeLabs) References(_ context.Context, owner, lab int64) ([]labs.Document, error) {

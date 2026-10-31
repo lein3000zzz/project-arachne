@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 	"web-crawler/internal/domain/config"
+	"web-crawler/internal/uploads"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -143,7 +144,9 @@ const selectRuns = `
 	FROM runs r LEFT JOIN pages p ON p.last_run_id = r.id`
 
 func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {
-	rows, err := s.pool.Query(ctx, selectRuns+` GROUP BY r.id ORDER BY r.submitted_at DESC LIMIT $1`, limit)
+	// Everyone sees this list: crawls of uploaded files are their owners' alone.
+	rows, err := s.pool.Query(ctx, selectRuns+` WHERE r.start_url NOT LIKE $2 GROUP BY r.id ORDER BY r.submitted_at DESC LIMIT $1`,
+		limit, "https://"+uploads.Host+"/%")
 	if err != nil {
 		return nil, err
 	}

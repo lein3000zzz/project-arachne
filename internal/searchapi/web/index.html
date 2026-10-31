@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>arachne</title>
-<meta name="description" content="Search with a cited answer, from your labs and the crawled web">
+<meta name="description" content="Look things up with a cited answer, from your labs and the crawled web">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script>
 // Blocking, before first paint: applied any later, the wrong theme flashes.
@@ -29,7 +29,7 @@
 </header>
 
 <nav class="tabs" role="tablist" aria-label="Views">
-  <button type="button" class="tab" role="tab" id="tab-search" data-tab="search" aria-controls="search" aria-selected="true">Search</button>
+  <button type="button" class="tab" role="tab" id="tab-search" data-tab="search" aria-controls="search" aria-selected="true">Look up</button>
   <button type="button" class="tab" role="tab" id="tab-labs" data-tab="labs" aria-controls="labs" aria-selected="false">Labs</button>
 </nav>
 
@@ -38,14 +38,14 @@
 <div id="search" role="tabpanel" aria-labelledby="tab-search">
   <section class="hero">
     <p class="eyebrow">@arachne</p>
-    <h1>Search.</h1>
+    <h1>Look up.</h1>
 
     <form id="searchForm" class="query" role="search">
       <div class="field">
         <label for="q">Query</label>
         <input id="q" type="search" placeholder="how do goroutines communicate?" autocomplete="off" autofocus required>
       </div>
-      <button class="action primary" id="go">Search</button>
+      <button class="action primary" id="go">Look up</button>
     </form>
     <div class="ticks" id="ticks"></div>
 
@@ -89,7 +89,7 @@
           <input id="host" type="text" placeholder="any" autocomplete="off">
         </div>
       </div>
-      <p class="note">With the answer off, ticked labs narrow the search to their pages.</p>
+      <p class="note">With the answer off, ticked labs narrow the results to their pages.</p>
     </details>
 
     <div class="badge" id="badge" aria-live="polite" hidden>
@@ -115,7 +115,7 @@
   <section class="hero">
     <p class="eyebrow">@arachne</p>
     <h1>Labs.</h1>
-    <p class="lede">Topics the model builds from your links. Tick them when you search.</p>
+    <p class="lede">Topics the model builds from your links and files. Tick them when you look something up.</p>
 
     <form id="planForm" class="ask">
       <div class="field">
@@ -275,12 +275,12 @@ function signals(r) {
 function renderResults(list) {
   $("resultsBox").hidden = list.length === 0;
   $("results").replaceChildren(...list.map((r, i) => el("article", { class: "row" },
-    el("p", { class: "row-when" }, el("span", { class: "n" }, String(i + 1).padStart(2, "0")), r.host || ""),
+    el("p", { class: "row-when" }, el("span", { class: "n" }, String(i + 1).padStart(2, "0")), isUpload(r.url) ? "your file" : r.host || ""),
     el("div", {},
-      el("h3", {}, el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url),
+      el("h3", {}, el("a", { href: pageHref(r.url), target: "_blank", rel: "noopener noreferrer" }, r.title || (isUpload(r.url) ? "your file" : r.url)),
         r.source ? el("span", { class: "tag source" }, "source " + r.source) : null,
         r.in_lab ? el("span", { class: "tag lab" }, "lab") : null),
-      el("p", { class: "result-url" }, r.url),
+      isUpload(r.url) ? null : el("p", { class: "result-url" }, r.url),
       el("p", { class: "snippet" }, r.snippet || ""),
       signals(r)))));
 }
@@ -289,8 +289,8 @@ function renderRead(sources, withLabs) {
   $("read").replaceChildren(...sources.map((s) => el("li", { id: "src-" + s.n },
     el("span", { class: "n" }, "[" + s.n + "]"),
     el("span", {},
-      el("a", { href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.title || s.url),
-      el("span", { class: "host" }, s.host || ""),
+      el("a", { href: pageHref(s.url), target: "_blank", rel: "noopener noreferrer" }, s.title || (isUpload(s.url) ? "your file" : s.url)),
+      el("span", { class: "host" }, isUpload(s.url) ? "your file" : s.host || ""),
       withLabs ? el("span", { class: "tag" + (s.in_lab ? " lab" : "") }, s.in_lab ? "lab" : "shared") : null))));
 }
 
@@ -341,7 +341,7 @@ function searchAndAnswer(q) {
   $("answerText").replaceChildren();
   $("answerMeta").textContent = "";
   $("read").replaceChildren();
-  badge("searching…", "busy");
+  badge("looking up…", "busy");
 
   const p = params(q);
   p.set("results", String(RESULTS));
@@ -397,7 +397,7 @@ async function searchOnly(q) {
   if (stream) stream.close();
   $("go").disabled = true;
   $("answerBox").hidden = true;
-  badge("searching…", "busy");
+  badge("looking up…", "busy");
   try {
     const p = params(q);
     if (ticked.size) p.set("labs", [...ticked].join(","));
@@ -406,7 +406,7 @@ async function searchOnly(q) {
     renderResults(body.results);
     badge(body.results.length ? `${body.results.length} results · ${body.took_ms} ms` : "nothing found");
   } catch (err) {
-    badge("search failed: " + err.message, "failed");
+    badge("look-up failed: " + err.message, "failed");
   } finally {
     $("go").disabled = false;
   }
@@ -478,14 +478,40 @@ $("crawlForm").addEventListener("submit", async (e) => {
 });
 
 // ---- new lab: the model drafts, the user confirms ----
+let planFiles = [];
+
+function renderPlanFiles() {
+  $("planFiles").replaceChildren(...planFiles.map((f, i) => el("li", {},
+    f.name, el("span", { class: "host" }, fileSize(f.size)),
+    el("button", { type: "button", class: "action small", onclick: () => { planFiles.splice(i, 1); renderPlanFiles(); } }, "remove"))));
+}
+
+function addPlanFiles(plan, files) {
+  const big = tooBig(files);
+  $("planNote").replaceChildren(big.length ? el("span", { class: "error" }, `Over 32 MiB, left out: ${big.join(", ")}.`) : "");
+
+  const firstFiles = planFiles.length === 0;
+  planFiles.push(...[...files].filter((f) => f.size <= maxUploadBytes));
+  renderPlanFiles();
+
+  // Files are sources too: a lab made of them need not search the web.
+  if (firstFiles && planFiles.length && !plan.sources.length && $("planWeb")) $("planWeb").checked = false;
+}
+
 function renderPlan(plan) {
+  planFiles = [];
   $("planCard").replaceChildren(el("div", { class: "plan" },
     el("p", { class: "eyebrow" }, plan.model ? "drafted by " + plan.model : "read literally: the model could not draft it"),
     el("h3", {}, plan.name),
     plan.topic ? el("p", { class: "note" }, plan.topic) : null,
     plan.sources.length
       ? el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope))))
-      : el("p", { class: "note" }, engines.available.length ? "No links: the model will search the web for sources." : "No links: the lab starts empty."),
+      : el("p", { class: "note" }, engines.available.length ? "No links: add files, or let the model search the web for sources." : "No links: add files, or the lab starts empty."),
+    el("div", { class: "upload" },
+      el("label", { class: "action small file-pick" }, "Add files",
+        el("input", { type: "file", multiple: true, onchange: (e) => { addPlanFiles(plan, e.target.files); e.target.value = ""; } })),
+      el("span", { class: "note" }, "PDF, Word, EPUB, scans…, up to 32 MiB each; only your labs see them."),
+      el("ul", { class: "file-list", id: "planFiles" })),
     // Without links, searching is how the lab gets anything, so it starts ticked.
     engines.available.length ? el("div", { class: "web-choice" },
       el("label", { class: "check" }, el("input", { type: "checkbox", id: "planWeb", checked: plan.sources.length === 0 }),
@@ -500,17 +526,32 @@ function renderPlan(plan) {
 
 async function build(plan, button) {
   button.disabled = true;
+  let lab;
   try {
     const body = { name: plan.name, topic: plan.topic, sources: plan.sources };
     if (engines.available.length) body.engines = [...document.querySelectorAll(".planEngine:checked")].map((box) => box.value);
-    const lab = await send("POST", "/api/labs", body);
-    // The lab exists either way; a gathering that cannot start says why on its page.
-    if ($("planWeb") && $("planWeb").checked) await send("POST", `/api/labs/${lab.id}/gather`, {}).catch(() => {});
-    location.assign("/labs/" + lab.id + "#web");
+    lab = await send("POST", "/api/labs", body);
   } catch (err) {
     $("planNote").replaceChildren(el("span", { class: "error" }, err.message));
     button.disabled = false;
+    return;
   }
+
+  if (planFiles.length) {
+    $("planNote").textContent = `Uploading ${planFiles.length === 1 ? planFiles[0].name : planFiles.length + " files"}…`;
+    try {
+      await uploadFiles(lab.id, planFiles);
+    } catch (err) {
+      $("planNote").replaceChildren(el("span", { class: "error" }, `The lab is made, but the files were not uploaded: ${err.message}. `),
+        el("a", { href: `/labs/${lab.id}#sources` }, "Open the lab"));
+      return;
+    }
+  }
+
+  // The lab exists either way; a gathering that cannot start says why on its page.
+  const gather = $("planWeb") && $("planWeb").checked;
+  if (gather) await send("POST", `/api/labs/${lab.id}/gather`, {}).catch(() => {});
+  location.assign("/labs/" + lab.id + (gather ? "#web" : "#sources"));
 }
 
 $("planForm").addEventListener("submit", async (e) => {

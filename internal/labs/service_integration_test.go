@@ -14,6 +14,7 @@ import (
 	"web-crawler/internal/domain/data"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/runs"
+	"web-crawler/internal/uploads"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
@@ -291,5 +292,79 @@ func TestReferencesOfALabsDocuments(t *testing.T) {
 
 	if _, err := service.AddReferences(ctx, other, lab.ID, []Cited{{Document: paper, URL: "https://arxiv.org/abs/1502.03167"}}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("into another user's lab: %v", err)
+	}
+}
+
+func TestUploadsAreSourcesTheirLabsAlone(t *testing.T) {
+	store, pool, lein, other := newStore(t)
+	ctx := context.Background()
+
+	var purged []string
+	files := uploads.NewStore(pool, func(_ context.Context, url string) error {
+		purged = append(purged, url)
+		return nil
+	})
+
+	producer := &fakeProducer{}
+	runService := runs.NewService(runs.NewStore(nil, store.pool, time.Minute), producer,
+		runs.Limits{DefaultDepth: 2, MaxDepth: 5, DefaultLinks: 10, MaxLinks: 100})
+	service := NewService(store, runService, nil, Limits{MaxSources: 3, Documents: true}).KeepsUploads(files)
+
+	first, _ := service.Create(ctx, lein, "first", "", nil, nil)
+	second, _ := service.Create(ctx, lein, "second", "", nil, nil)
+
+	pdf := File{Name: "resnet.pdf", ContentType: "application/pdf", Data: []byte("%PDF-1.5\n%\xe2\xe3 resnet")}
+	notes := File{Name: "notes.md", ContentType: "text/markdown", Data: []byte("# Notes\n\nResidual connections.")}
+
+	detail, err := service.AddUploads(ctx, lein, first.ID, []File{pdf, notes})
+	if err != nil || len(detail.Sources) != 2 {
+		t.Fatalf("add: %+v, %v", detail.Sources, err)
+	}
+
+	src := detail.Sources[0]
+	if src.Kind != KindUpload || !uploads.Is(src.URL) || src.Filename != "resnet.pdf" || src.Scope != ScopePage {
+		t.Errorf("upload source: %+v", src)
+	}
+
+	if run := producer.runs[0]; run.StartURL != src.URL || !run.ReadDocuments || run.MaxLinks != 1 || run.MaxDepth != 1 {
+		t.Errorf("an upload is crawled alone, and read: %+v", run)
+	}
+
+	if _, err := service.AddUploads(ctx, lein, first.ID, []File{pdf}); !errors.Is(err, ErrSourceExists) {
+		t.Errorf("the same file twice in a lab: %v", err)
+	}
+
+	if again, err := service.AddUploads(ctx, lein, second.ID, []File{pdf}); err != nil || again.Sources[0].URL != src.URL {
+		t.Errorf("the same file in another lab is the same upload: %+v, %v", again.Sources, err)
+	}
+
+	if _, err := service.AddUploads(ctx, other, first.ID, []File{notes}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("into another user's lab: %v", err)
+	}
+
+	if _, err := service.AddUploads(ctx, lein, second.ID, []File{notes, {Name: "a.txt", Data: []byte("a")}, {Name: "b.txt", Data: []byte("b")}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("past the lab's sources: %v", err)
+	}
+
+	textOnly := NewService(store, runService, nil, Limits{MaxSources: 3}).KeepsUploads(files)
+	if _, err := textOnly.AddUploads(ctx, lein, second.ID, []File{{Name: "scan.pdf", Data: pdf.Data}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a document while documents are off: %v", err)
+	}
+
+	if _, err := service.AddSources(ctx, lein, second.ID, []SourceRequest{{URL: src.URL}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("an upload's address pasted as a link: %v", err)
+	}
+
+	if err := service.RemoveSource(ctx, lein, first.ID, src.ID); err != nil || len(purged) != 0 {
+		t.Errorf("removed from one lab of two: %v, purged %v", err, purged)
+	}
+
+	if err := service.Delete(ctx, lein, second.ID); err != nil || len(purged) != 1 || purged[0] != src.URL {
+		t.Errorf("the last lab holding it deleted: %v, purged %v", err, purged)
+	}
+
+	id, _ := uploads.ID(src.URL)
+	if _, err := files.Owned(ctx, lein, id); !errors.Is(err, uploads.ErrNotFound) {
+		t.Errorf("the file outlived its last lab: %v", err)
 	}
 }
