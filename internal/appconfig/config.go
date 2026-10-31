@@ -24,6 +24,7 @@ type Config struct {
 	Labs        Labs        `yaml:"labs"`
 	Review      Review      `yaml:"review"`
 	WebSearch   WebSearch   `yaml:"websearch"`
+	Documents   Documents   `yaml:"documents"`
 	Gathering   Gathering   `yaml:"gathering"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
@@ -142,6 +143,18 @@ type Review struct {
 	PartRunes    int      `yaml:"part_runes"`
 	MaxTokens    int      `yaml:"max_tokens"`
 	Timeout      Duration `yaml:"timeout"`
+}
+
+// Documents is reading the documents a lab adds - PDFs, Office files, EPUB,
+// scans - with Apache Tika, whose address is in Vault. Off, Tika does not start
+// and such documents stay unread. Only a lab's own source is ever read, never
+// a document merely linked from a crawled page.
+type Documents struct {
+	Enabled bool `yaml:"enabled"`
+	// Text kept per document: a 300-page book would otherwise be thousands of
+	// chunks to embed.
+	MaxRunes int      `yaml:"max_runes"`
+	Timeout  Duration `yaml:"timeout"`
 }
 
 // WebSearch is the SearXNG instance labs gather from; its address is in Vault.
@@ -325,6 +338,10 @@ func Default() Config {
 			MaxTokens:    300,
 			Timeout:      Duration(3 * time.Minute),
 		},
+		Documents: Documents{
+			MaxRunes: 150000,
+			Timeout:  Duration(5 * time.Minute),
+		},
 		WebSearch: WebSearch{
 			DefaultEngines: []string{"brave", "google cse", "bing", "wikipedia"},
 			RequestTimeout: Duration(15 * time.Second),
@@ -432,6 +449,7 @@ func (c *Config) Validate() error {
 		{"gathering.sources", c.Gathering.Sources},
 		{"gathering.results", c.Gathering.Results},
 		{"gathering.max_tokens", c.Gathering.MaxTokens},
+		{"documents.max_runes", c.Documents.MaxRunes},
 	}
 
 	for _, field := range positive {
@@ -468,6 +486,7 @@ func (c *Config) Validate() error {
 		{"review.timeout", c.Review.Timeout},
 		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
 		{"gathering.timeout", c.Gathering.Timeout},
+		{"documents.timeout", c.Documents.Timeout},
 	}
 
 	for _, field := range durations {

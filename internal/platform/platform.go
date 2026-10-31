@@ -15,6 +15,7 @@ import (
 	"web-crawler/internal/llm"
 	"web-crawler/internal/rerank"
 	"web-crawler/internal/review"
+	"web-crawler/internal/tika"
 	"web-crawler/internal/vectorstore"
 	"web-crawler/internal/websearch"
 
@@ -234,6 +235,25 @@ func NewChatClient(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.S
 	}
 
 	return client
+}
+
+// NewDocumentReader returns nil when documents are off in the config: a
+// document a lab adds then stays unread.
+func NewDocumentReader(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) *tika.Client {
+	if !cfg.Documents.Enabled {
+		logger.Info("Documents are off (documents.enabled): PDFs and other files labs add stay unread")
+		return nil
+	}
+
+	base := optionalSecret(sm, "DOCUMENTS_BASE_URL")
+	if base == "" {
+		logger.Warn("documents.enabled is set but DOCUMENTS_BASE_URL is not in Vault: documents stay unread")
+		return nil
+	}
+
+	logger.Infow("Documents labs add are read", "maxRunes", cfg.Documents.MaxRunes)
+
+	return tika.New(base, cfg.Documents.Timeout.Std(), cfg.Documents.MaxRunes)
 }
 
 // NewWebSearch returns nil when no SearXNG address is in Vault: labs then

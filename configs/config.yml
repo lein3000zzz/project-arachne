@@ -146,6 +146,19 @@ review:
   max_tokens: 300
   timeout: 3m
 
+documents:
+  # read the documents labs add - PDFs, Office files, EPUB, scans (OCR, Russian
+  # and English) - with Apache Tika. Only a lab's own source is read: a link
+  # given, or a page the model chose while gathering. Off, Tika does not start
+  # (make reads this) and such documents stay unread. Tika: 0.3 GB idle, at
+  # most 1.5 GB; its address is in Vault (DOCUMENTS_BASE_URL).
+  enabled: true
+  # text kept per document, in characters: 150k is ~130 chunks, a few minutes
+  # of embedding on 4 cores
+  max_runes: 150000
+  # one document, OCR included: a scan takes ~1-2 s a page
+  timeout: 5m
+
 websearch:
   # engines a new lab may search unless its creator chooses (the SearXNG
   # instance's address is in Vault: WEBSEARCH_BASE_URL)

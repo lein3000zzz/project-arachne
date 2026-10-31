@@ -101,6 +101,11 @@ func InitApp() *CrawlerApp {
 
 	crawler := webcrawler.NewCrawlerRepo(logger, contentParser, fetcher, extraWorker, redisPagesCache, redisRobotsCache, runStateManager, documentSink, runStore, cfg)
 
+	// A nil *tika.Client in the interface would not compare equal to nil.
+	if reader := platform.NewDocumentReader(logger, cfg, sm); reader != nil {
+		crawler.ReadsDocuments(reader)
+	}
+
 	initGraphSchema(logger, pageRepo, documentSink, crawler.Excluded, cfg.Crawler.Exclude)
 
 	return NewCrawlerApp(logger, crawler, pageRepo, processorQueue, runStateManager, runStore, tp, cfg)

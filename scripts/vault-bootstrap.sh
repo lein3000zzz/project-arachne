@@ -42,6 +42,7 @@ case "$PROFILE" in
     VLLM_URL=http://vllm:8000/v1
     RERANKER_URL=http://reranker:8080/v1
     SEARXNG_URL=http://searxng:8080
+    TIKA_URL=http://tika:9998
     ;;
   host)
     APP_ENV=dev
@@ -55,6 +56,7 @@ case "$PROFILE" in
     VLLM_URL=http://localhost:8001/v1
     RERANKER_URL=http://localhost:8002/v1
     SEARXNG_URL=http://localhost:8888
+    TIKA_URL=http://localhost:9998
     ;;
   *)
     echo "unknown profile '$PROFILE' (want: docker | host)" >&2
@@ -212,6 +214,8 @@ vault_auth kv put kv/main/rerank RERANK_BASE_URL="${RERANK_BASE_URL:-$RERANKER_U
 if [ -n "$RERANK_API_KEY" ]; then
   vault_auth kv put kv/main/rerank_key RERANK_API_KEY="$RERANK_API_KEY" >/dev/null
 fi
+# The bundled Tika; it runs only when documents.enabled is set in the config.
+vault_auth kv put kv/main/documents DOCUMENTS_BASE_URL="$TIKA_URL" >/dev/null
 # The bundled SearXNG unless WEBSEARCH_BASE_URL points at another instance.
 vault_auth kv put kv/main/websearch WEBSEARCH_BASE_URL="${WEBSEARCH_BASE_URL:-$SEARXNG_URL}" >/dev/null
 if [ -n "$MILVUS_TOKEN" ]; then

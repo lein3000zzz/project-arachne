@@ -343,3 +343,89 @@ func TestExcludedLinksAreNotFollowed(t *testing.T) {
 			"pkg.go.dev's side tabs are excluded, its documentation - versioned links too - is not", sent, want)
 	}
 }
+
+type docNetworker struct {
+	nopNetworker
+	body, contentType string
+	// A temporary redirect to here, as a download link to a cache.
+	servedFrom string
+}
+
+func (d docNetworker) Fetch(url string) (*networker.FetchResult, error) {
+	if strings.HasSuffix(url, "/robots.txt") {
+		return &networker.FetchResult{Status: http.StatusNotFound}, nil
+	}
+
+	final := url
+	if d.servedFrom != "" {
+		final = d.servedFrom
+	}
+
+	return &networker.FetchResult{Status: http.StatusOK, Body: []byte(d.body), ContentType: d.contentType, FinalURL: final, IdentityURL: url}, nil
+}
+
+type fakeDocs struct {
+	read []string
+	err  error
+}
+
+func (f *fakeDocs) Read(_ context.Context, _ []byte, contentType string) (string, string, error) {
+	f.read = append(f.read, contentType)
+	return "Oxide: The Essence of Rust", "Rust claims to advance industrial programming.", f.err
+}
+
+func TestOnlyALabsOwnDocumentIsRead(t *testing.T) {
+	const pdf, epub = "%PDF-1.5\n%\xe2\xe3\n1 0 obj", "PK\x03\x04\x14\x00\x00\x00mimetypeapplication/epub+zip"
+
+	cases := []struct {
+		name        string
+		start       string
+		read        bool
+		body, ctype string
+		err         error
+		wantRead    bool
+		wantText    bool
+		servedFrom  string
+	}{
+		{"the lab's PDF", "https://example.com/paper", true, pdf, "application/pdf", nil, true, true, ""},
+		{"the lab's EPUB, from a cache", "https://example.com/paper", true, epub, "application/epub+zip", nil, true, true,
+			"https://cache.example.com/pg132.epub"},
+		{"the lab's EPUB, typed wrongly", "https://example.com/paper", true, epub, "application/octet-stream", nil, true, true, ""},
+		{"a plain crawl", "https://example.com/paper", false, pdf, "application/pdf", nil, false, false, ""},
+		{"linked from a lab's source", "https://example.com/", true, pdf, "application/pdf", nil, false, false, ""},
+		{"a lab's web page", "https://example.com/paper", true, "<html><body>hi</body></html>", "text/html", nil, false, false, ""},
+		{"unreadable", "https://example.com/paper", true, pdf, "application/pdf", errors.New("encrypted"), true, false, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness()
+			docs := &fakeDocs{err: tc.err}
+			h.repo.networker = docNetworker{body: tc.body, contentType: tc.ctype, servedFrom: tc.servedFrom}
+			h.repo.ReadsDocuments(docs)
+			h.task.URL = "https://example.com/paper"
+			h.task.Run.StartURL, h.task.Run.ReadDocuments = tc.start, tc.read
+
+			h.run()
+
+			if read := len(docs.read) > 0; read != tc.wantRead {
+				t.Errorf("read the document: %v, want %v", read, tc.wantRead)
+			}
+
+			if tc.wantRead && docs.read[0] != tc.ctype {
+				t.Errorf("passed content type %q", docs.read[0])
+			}
+
+			sink := h.repo.documents.(*recordingSink)
+			gotText := len(sink.docs) > 0 && sink.docs[0].Content == "Rust claims to advance industrial programming."
+
+			if gotText != tc.wantText {
+				t.Errorf("indexed its text: %v, want %v (docs %+v)", gotText, tc.wantText, sink.docs)
+			}
+
+			if tc.wantText && sink.docs[0].Title != "Oxide: The Essence of Rust" {
+				t.Errorf("title %q", sink.docs[0].Title)
+			}
+		})
+	}
+}

@@ -33,6 +33,9 @@ services:
       vllm:
         condition: service_healthy
         required: false
+      tika:
+        condition: service_healthy
+        required: false
 
   search:
     build:
@@ -237,6 +240,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 20s
+
+  # Reads the documents labs add - PDFs, Office files, EPUB, scans (OCR). Runs
+  # only when documents.enabled is set in the config; make adds the profile.
+  tika:
+    build:
+      context: deployments/tika
+    profiles: [documents]
+    mem_limit: 1536m
+    cpus: ${DOCUMENTS_CPUS:-2}
+    environment:
+      # Tesseract's own threads on top of Tika's would oversubscribe the cores.
+      OMP_THREAD_LIMIT: "1"
+    ports:
+      - "127.0.0.1:9998:9998"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:9998/tika >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
       start_period: 20s
 
   reranker:

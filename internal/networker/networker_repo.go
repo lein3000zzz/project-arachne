@@ -22,6 +22,12 @@ const maxRedirects = 10
 
 var errTooManyRedirects = errors.New("stopped after 10 redirects")
 
+// A body this large is a file, not a page: a dataset, a video, a book scan.
+// The largest documents read on purpose, lab PDFs, fit well within it.
+const maxBodyBytes = 32 << 20
+
+var ErrBodyTooLarge = errors.New("response body too large")
+
 type NetworkWorker struct {
 	Logger     *zap.SugaredLogger
 	httpClient *http.Client
@@ -86,10 +92,15 @@ func (nw *NetworkWorker) Fetch(url string) (*FetchResult, error) {
 		fetchResult := &FetchResult{}
 		defer resp.Body.Close()
 
-		fetchResult.Body, err = io.ReadAll(resp.Body)
+		fetchResult.Body, err = io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 		if err != nil {
 			nw.Logger.Errorf("read body for %s error: %v", url, err)
 			return nil, err
+		}
+
+		if len(fetchResult.Body) > maxBodyBytes {
+			nw.Logger.Warnf("body of %s is over %d MiB, not read", url, maxBodyBytes>>20)
+			return nil, ErrBodyTooLarge
 		}
 
 		// Header first: DetectContentType has no JavaScript verdict and reports

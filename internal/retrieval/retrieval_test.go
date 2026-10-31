@@ -425,3 +425,26 @@ func TestPagesWithTheSameExcerptCountOnce(t *testing.T) {
 		t.Errorf("results = %v: one page per excerpt, the best-ranked kept", got)
 	}
 }
+
+func TestALongDocumentKeepsFurtherPassages(t *testing.T) {
+	store := &fakeStore{
+		dense: []vectorstore.Hit{hit("book", 0.9, "chapter one"), hit("page", 0.8, "a page"), hit("book", 0.7, "chapter seven"),
+			hit("book", 0.6, "chapter three"), hit("book", 0.5, "chapter nine"), hit("book", 0.4, "chapter two")},
+		text: []vectorstore.Hit{hit("book", 9, "chapter seven"), hit("book", 8, "the preface")},
+	}
+
+	results, err := newRetriever(t, store, &fakeEmbedder{}).Search(context.Background(), Request{Query: "q", Limit: 10, Mode: ModeHybrid})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	book := results[0]
+	if book.URL != "book" || book.Snippet != "chapter one" ||
+		strings.Join(book.Passages, "|") != "chapter seven|chapter three|chapter nine" {
+		t.Errorf("book: snippet %q, passages %q: the other matched chunks, each once, at most 3", book.Snippet, book.Passages)
+	}
+
+	if page := results[1]; len(page.Passages) != 0 {
+		t.Errorf("a page that matched once has no further passages: %q", page.Passages)
+	}
+}

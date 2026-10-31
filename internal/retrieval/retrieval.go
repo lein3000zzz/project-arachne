@@ -67,10 +67,16 @@ type Result struct {
 	// it, ahead of the rest.
 	Rerank *Signal `json:"rerank,omitempty"`
 
+	// Other chunks of the page that matched, best first: an answer may read
+	// them when it has fewer pages than room.
+	Passages []string `json:"-"`
+
 	// Each distinct chunk the lists matched for the page. Which one ranks higher
 	// depends on the other pages searched, a lab's few or the whole index, so
 	// the reranker reads them all rather than let that decide.
 	chunks []string
+	// Chunks past the best of each list, for Passages.
+	further []string
 }
 
 type RankSource interface {
@@ -174,7 +180,29 @@ func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
 		results = results[:req.Limit]
 	}
 
+	for i := range results {
+		results[i].Passages = passages(&results[i])
+	}
+
 	return results, nil
+}
+
+// passages are the page's matched chunks other than its snippet, the best
+// chunks first and then the further ones, each once.
+func passages(res *Result) []string {
+	var out []string
+
+	for _, text := range append(slices.Clone(res.chunks), res.further...) {
+		if len(out) == maxPassages {
+			break
+		}
+
+		if text != res.Snippet && !slices.Contains(out, text) {
+			out = append(out, text)
+		}
+	}
+
+	return out
 }
 
 // widen keeps a float32 score's shortest decimal form: a plain float64(f) turns
@@ -247,21 +275,31 @@ func (r *Retriever) searchBM25(ctx context.Context, query string, filter vectors
 type page struct {
 	hit  vectorstore.Hit
 	rank int
+	// The page's next chunks in this list, best first.
+	more []vectorstore.Hit
 }
+
+// Further chunks kept per page, beyond its best: a long document - a paper, a
+// book - may hold an answer outside its best-matching chunk.
+const maxPassages = 3
 
 // pages folds a chunk list into a page list: a page ranks where its best chunk
 // does, and its other chunks drop out. Ranking chunks instead would let one long
 // page fill the results, and RRF would count it once per chunk.
 func pages(hits []vectorstore.Hit) []page {
-	seen := make(map[string]struct{}, len(hits))
+	index := make(map[string]int, len(hits))
 	out := make([]page, 0, len(hits))
 
 	for _, hit := range hits {
-		if _, dup := seen[hit.URL]; dup {
+		if i, dup := index[hit.URL]; dup {
+			if len(out[i].more) < maxPassages {
+				out[i].more = append(out[i].more, hit)
+			}
+
 			continue
 		}
 
-		seen[hit.URL] = struct{}{}
+		index[hit.URL] = len(out)
 		out = append(out, page{hit: hit, rank: len(out) + 1})
 	}
 
@@ -302,6 +340,17 @@ func fuse(dense, bm25 []page, k int, mode Mode) []Result {
 
 		if !slices.Contains(res.chunks, text) {
 			res.chunks = append(res.chunks, text)
+		}
+	}
+
+	// Further passages after the chunks reranking looks at, the two lists
+	// taking turns.
+	for _, list := range [][]page{dense, bm25} {
+		for _, p := range list {
+			res := byURL[p.hit.URL]
+			for _, hit := range p.more {
+				res.further = append(res.further, snippet(hit))
+			}
 		}
 	}
 

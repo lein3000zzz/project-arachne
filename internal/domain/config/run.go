@@ -19,6 +19,10 @@ type Run struct {
 	// URL prefix every followed page must start with; empty follows links anywhere.
 	// Links out of scope are still recorded in the graph, only not fetched.
 	Scope string `json:"scope,omitempty"`
+	// The run crawls a lab's source: a document at its start URL - a PDF, an
+	// Office file, an EPUB, a scan - is read. One merely linked from a crawled
+	// page never is.
+	ReadDocuments bool `json:"read_documents,omitempty"`
 
 	ack func()
 }

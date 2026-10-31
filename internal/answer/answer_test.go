@@ -123,34 +123,6 @@ func TestAnswerKeepsWhatWasGeneratedOnFailure(t *testing.T) {
 	}
 }
 
-func TestExcerpt(t *testing.T) {
-	cases := []struct {
-		text  string
-		limit int
-		want  string
-	}{
-		{"short text", 100, "short text"},
-		// A sentence end in the last third of the limit is where the cut goes...
-		{"The first sentence is long enough. Then a second one runs past the limit.", 45, "The first sentence is long enough. …"},
-		{"Строка первая и длинная.\nСтрока вторая и ещё немного текста", 30, "Строка первая и длинная. …"},
-		// ...an earlier one would throw most of the excerpt away, so a word boundary wins.
-		{"Short. Then a much longer sentence that runs well past the limit.", 40, "Short. Then a much longer sentence that …"},
-		{"no sentence end in this long run of words at all", 20, "no sentence end in …"},
-		{"anything", 0, "anything"},
-	}
-
-	for _, tc := range cases {
-		got := excerpt(tc.text, tc.limit)
-		if got != tc.want {
-			t.Errorf("excerpt(%q, %d) = %q, want %q", tc.text, tc.limit, got, tc.want)
-		}
-
-		if tc.limit > 0 && len([]rune(got)) > tc.limit+2 {
-			t.Errorf("excerpt(%q, %d) is %d runes long", tc.text, tc.limit, len([]rune(got)))
-		}
-	}
-}
-
 // scopedSearch answers a search restricted to lab pages from lab, any other
 // from shared.
 type scopedSearch struct {
@@ -334,5 +306,44 @@ func TestOnlyAnEmptySearchGoesUnanswered(t *testing.T) {
 	res, err := labService(t, search, chat).Answer(context.Background(), Request{Query: "q", LabURLs: []string{"l1"}}, Events{})
 	if !errors.Is(err, ErrNoSources) || res.Scope != ScopeNone || len(chat.got.Messages) != 0 || len(search.requests) != 2 {
 		t.Errorf("scope %s, err %v, searches %d, model asked %v", res.Scope, err, len(search.requests), len(chat.got.Messages) != 0)
+	}
+}
+
+func TestFewSourcesAreReadDeeper(t *testing.T) {
+	book := reranked("book", 3)
+	book.Passages = []string{"book passage two", "book passage three", "book passage four"}
+	paper := reranked("paper", 2)
+	paper.Passages = []string{"paper passage two"}
+
+	chat := &fakeChat{reply: "x"}
+	search := &fakeSearch{results: []retrieval.Result{book, paper}}
+
+	s, err := New(search, chat, Config{Sources: 5, MaxTokens: 256, SourceRunes: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.Answer(context.Background(), Request{Query: "q"}, Events{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Join(res.Sources[0].Excerpts, "|") != "book passage two|book passage three" ||
+		strings.Join(res.Sources[1].Excerpts, "|") != "paper passage two" {
+		t.Errorf("excerpts %q / %q: three spare slots, taking turns", res.Sources[0].Excerpts, res.Sources[1].Excerpts)
+	}
+
+	prompt := chat.got.Messages[0].Content
+	if !strings.Contains(prompt, "text of book\n…\nbook passage two\n…\nbook passage three\n") || strings.Contains(prompt, "book passage four") {
+		t.Errorf("prompt:\n%s", prompt)
+	}
+
+	full := []retrieval.Result{book, paper, reranked("c", 1), reranked("d", 1), reranked("e", 1)}
+	res, _ = service(t, &fakeSearch{results: full}, &fakeChat{reply: "x"}).Answer(context.Background(), Request{Query: "q"}, Events{})
+
+	for _, src := range res.Sources {
+		if len(src.Excerpts) != 0 {
+			t.Errorf("with every slot taken by a source, none reads deeper: %+v", src.Excerpts)
+		}
 	}
 }

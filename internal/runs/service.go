@@ -86,6 +86,8 @@ func (s *Service) Submit(ctx context.Context, req Request, origin Origin) (Run, 
 		return Run{}, err
 	}
 
+	run.ReadDocuments = origin.SourceID != 0
+
 	if err := s.store.Submitted(ctx, run, origin); err != nil {
 		return Run{}, err
 	}

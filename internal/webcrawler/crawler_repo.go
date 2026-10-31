@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"web-crawler/internal/appconfig"
 	"web-crawler/internal/documents"
 	"web-crawler/internal/domain/config"
@@ -41,6 +42,7 @@ type CrawlerRepo struct {
 	documents       documents.Sink
 	runs            RunRecorder
 	settings        appconfig.Config
+	docs            DocumentReader
 
 	cfg     *CrawlerConfig
 	workers sync.WaitGroup
@@ -72,6 +74,18 @@ func NewCrawlerRepo(
 		runs:            runs,
 		settings:        settings,
 	}
+}
+
+// DocumentReader turns a document - a PDF, an Office file, an EPUB, a scan -
+// into text; nil leaves documents unread.
+type DocumentReader interface {
+	Read(ctx context.Context, body []byte, contentType string) (title, text string, err error)
+}
+
+// ReadsDocuments lets runs of lab sources read a document at their start URL.
+func (repo *CrawlerRepo) ReadsDocuments(r DocumentReader) *CrawlerRepo {
+	repo.docs = r
+	return repo
 }
 
 func (repo *CrawlerRepo) StartCrawler(cfg *CrawlerConfig) {
@@ -279,21 +293,33 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 
 	ctx := context.Background()
 
-	parsed, errParse := repo.parser.Parse(ctx, &parser.ParseParams{
-		Body:        fetchRes.Body,
-		BaseURL:     linkBase(task.URL, fetchRes),
-		ContentType: fetchRes.ContentType,
-	})
-	if errParse != nil {
-		repo.logger.Warnw("Failed to parse page", "url", task.URL, "err", errParse)
+	var parsed *parser.ParseResult
 
-		parsed = &parser.ParseResult{}
+	document := repo.readsDocument(task, fetchRes)
+
+	if document {
+		parsed = repo.readDocument(ctx, task.URL, fetchRes)
+	} else {
+		var errParse error
+
+		parsed, errParse = repo.parser.Parse(ctx, &parser.ParseParams{
+			Body:        fetchRes.Body,
+			BaseURL:     linkBase(task.URL, fetchRes),
+			ContentType: fetchRes.ContentType,
+		})
+		if errParse != nil {
+			repo.logger.Warnw("Failed to parse page", "url", task.URL, "err", errParse)
+
+			parsed = &parser.ParseResult{}
+		}
 	}
 
 	// After a temporary redirect elsewhere the body is another page's - a login
 	// form, a mirror - and indexing it under pageURL would make pageURL findable by
-	// text it does not have. That page is indexed when it is crawled itself.
-	if final, ok := urlnorm.Canonical(fetchRes.FinalURL, nil); !ok || final == pageURL {
+	// text it does not have. That page is indexed when it is crawled itself. A
+	// lab's document is the exception: whichever server handed it out, it is the
+	// file the lab asked for, and its redirect target is never crawled on its own.
+	if final, ok := urlnorm.Canonical(fetchRes.FinalURL, nil); !ok || final == pageURL || document {
 		repo.submitDocument(ctx, pageURL, task.Run.ID, fetchRes, parsed)
 	}
 
@@ -315,6 +341,34 @@ func (repo *CrawlerRepo) scrap(task *config.Task) (*data.PageData, error) {
 	}
 
 	return pageData, nil
+}
+
+// readsDocument: a lab added this very document, not a page that links to it.
+// A document is whatever does not sniff as text - PDF, Office, EPUB, images.
+func (repo *CrawlerRepo) readsDocument(task *config.Task, fetchRes *networker.FetchResult) bool {
+	if repo.docs == nil || !task.Run.ReadDocuments || len(fetchRes.Body) == 0 ||
+		strings.HasPrefix(http.DetectContentType(fetchRes.Body), "text/") {
+		return false
+	}
+
+	start, ok1 := urlnorm.Canonical(task.Run.StartURL, nil)
+	here, ok2 := urlnorm.Canonical(task.URL, nil)
+
+	return ok1 && ok2 && start == here
+}
+
+// readDocument returns the document's text and no links: a document's links
+// are its references, not pages of the lab.
+func (repo *CrawlerRepo) readDocument(ctx context.Context, url string, fetchRes *networker.FetchResult) *parser.ParseResult {
+	title, text, err := repo.docs.Read(ctx, fetchRes.Body, fetchRes.ContentType)
+	if err != nil {
+		repo.logger.Warnw("Failed to read a document", "url", url, "type", fetchRes.ContentType, "err", err)
+		return &parser.ParseResult{}
+	}
+
+	repo.logger.Infow("Read a document", "url", url, "type", fetchRes.ContentType, "title", title, "runes", utf8.RuneCountInString(text))
+
+	return &parser.ParseResult{Title: title, Content: text}
 }
 
 // pageIdentity names the page a fetch returned. When the requested URL turned out

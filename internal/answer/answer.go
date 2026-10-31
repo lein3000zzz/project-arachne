@@ -69,6 +69,8 @@ type Source struct {
 	N     int  `json:"n"`
 	InLab bool `json:"in_lab"`
 	retrieval.Result
+	// Passages read beyond the snippet, when there were fewer sources than room.
+	Excerpts []string `json:"excerpts,omitempty"`
 }
 
 // Found is a search result listed beside the answer.
@@ -207,8 +209,32 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 	}
 
 	sources = number(picked, req.LabURLs)
+	s.deepen(sources)
 
 	return list(shared[:min(len(shared), req.Results)], sources, req.LabURLs), sources, weak, nil
+}
+
+// deepen gives the room fewer sources leave to further passages of the same
+// sources, taking turns: from a lab of three documents the model reads more of
+// each, not one chunk of a book.
+func (s *Service) deepen(sources []Source) {
+	room := s.cfg.Sources - len(sources)
+
+	for round := 0; room > 0; round++ {
+		added := false
+
+		for i := range sources {
+			if room > 0 && round < len(sources[i].Passages) {
+				sources[i].Excerpts = append(sources[i].Excerpts, sources[i].Passages[round])
+				room--
+				added = true
+			}
+		}
+
+		if !added {
+			return
+		}
+	}
 }
 
 func list(results []retrieval.Result, sources []Source, labURLs []string) []Found {
@@ -292,8 +318,16 @@ func prompt(query string, sources []Source, runes int, weak bool) string {
 
 	b.WriteString("Sources:\n\n")
 
+	asked := terms(query)
+
 	for _, src := range sources {
-		fmt.Fprintf(&b, "[%d] %s\n%s\n%s\n\n", src.N, src.Title, src.URL, excerpt(src.Snippet, runes))
+		fmt.Fprintf(&b, "[%d] %s\n%s\n%s\n", src.N, src.Title, src.URL, focus(src.Snippet, runes, asked))
+
+		for _, more := range src.Excerpts {
+			fmt.Fprintf(&b, "…\n%s\n", focus(more, runes, asked))
+		}
+
+		b.WriteString("\n")
 	}
 
 	if weak {
@@ -304,30 +338,6 @@ func prompt(query string, sources []Source, runes int, weak bool) string {
 	b.WriteString(query)
 
 	return b.String()
-}
-
-// excerpt cuts text to at most limit runes, at the last sentence or line end in
-// its final third if there is one, else at a word boundary.
-func excerpt(text string, limit int) string {
-	text = strings.TrimSpace(text)
-
-	runes := []rune(text)
-	if limit <= 0 || len(runes) <= limit {
-		return text
-	}
-
-	cut := string(runes[:limit])
-	floor := len(string(runes[:limit*2/3]))
-
-	if i := max(strings.LastIndex(cut, ". "), strings.LastIndex(cut, "\n")); i >= floor {
-		return strings.TrimSpace(cut[:i+1]) + " …"
-	}
-
-	if i := strings.LastIndexAny(cut, " \t"); i > 0 {
-		return strings.TrimSpace(cut[:i]) + " …"
-	}
-
-	return cut + "…"
 }
 
 var citation = regexp.MustCompile(`\[(\d{1,3})\]`)

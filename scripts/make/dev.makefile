@@ -13,7 +13,7 @@ GO           ?= go
 ENV_FILE     ?= main.env
 EMBEDDERS    := ollama vllm
 # Every optional profile, so down and reset stop whatever a previous run started.
-ALL_PROFILES := ollama,vllm,reranker,tools
+ALL_PROFILES := ollama,vllm,reranker,documents,tools
 # Not waited on: nothing depends on the UI, and it fails its first start whenever
 # it beats the broker up.
 UI           := kafka-ui
@@ -50,10 +50,6 @@ RERANK_BASE_URL ?=
 RERANK_API_KEY  ?=
 RERANKER_SERVICE := $(if $(RERANK_BASE_URL),,reranker)
 
-export COMPOSE_PROFILES := $(subst $(space),$(comma),$(strip $(EMBEDDER_SERVICE) $(RERANKER_SERVICE)))
-
-INFRA := vault postgres redis broker jaeger milvus searxng $(EMBEDDER_SERVICE) $(RERANKER_SERVICE)
-
 CONFIG_OVERLAY_vllm := ,configs/vllm.yml
 CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
 
@@ -62,6 +58,15 @@ CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
 config_value = $(shell awk -v section="$(1):" -v key="$(2):" \
 	'/^[^[:space:]\#]/ { insec = ($$1 == section) } insec && $$1 == key { v = $$2 } END { gsub(/["\047]/, "", v); print v }' \
 	$(subst $(comma), ,$(CONFIG_PATH)))
+
+# Tika reads the documents labs add; it runs only when the config turns it on.
+DOCUMENTS_SERVICE := $(if $(filter true,$(call config_value,documents,enabled)),tika)
+DOCUMENTS_PROFILE := $(if $(DOCUMENTS_SERVICE),documents)
+
+export COMPOSE_PROFILES := $(subst $(space),$(comma),$(strip $(EMBEDDER_SERVICE) $(RERANKER_SERVICE) $(DOCUMENTS_PROFILE)))
+
+INFRA := vault postgres redis broker jaeger milvus searxng $(EMBEDDER_SERVICE) $(RERANKER_SERVICE) $(DOCUMENTS_SERVICE)
+
 
 EMBEDDING_MODEL ?= $(call config_value,embedding,model)
 export EMBEDDING_MODEL

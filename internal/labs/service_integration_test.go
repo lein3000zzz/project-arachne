@@ -56,8 +56,8 @@ func TestASourcesCrawlFillsTheLab(t *testing.T) {
 		t.Fatalf("created: %+v", detail)
 	}
 
-	if len(producer.runs) != 1 || producer.runs[0].UseCacheFlag || producer.runs[0].Scope != "https://go.dev/doc/" {
-		t.Fatalf("produced %+v: want one run, past the page cache, in the section", producer.runs)
+	if len(producer.runs) != 1 || producer.runs[0].UseCacheFlag || producer.runs[0].Scope != "https://go.dev/doc/" || !producer.runs[0].ReadDocuments {
+		t.Fatalf("produced %+v: want one run, past the page cache, in the section, reading a document at its start", producer.runs)
 	}
 
 	run := producer.runs[0]
@@ -107,6 +107,11 @@ func TestASourcesCrawlFillsTheLab(t *testing.T) {
 	grown, err := service.AddSources(ctx, lein, detail.ID, []SourceRequest{{URL: "https://gobyexample.com/"}})
 	if err != nil || len(grown.Sources) != 2 || grown.Sources[1].Scope != runs.ScopeSite {
 		t.Errorf("grown: %+v, %v", grown, err)
+	}
+
+	if _, err := runService.Submit(ctx, runs.Request{URL: "https://example.com/"}, runs.Origin{UserID: lein}); err != nil ||
+		producer.runs[len(producer.runs)-1].ReadDocuments {
+		t.Errorf("a plain crawl reads no documents: %v", err)
 	}
 }
 
