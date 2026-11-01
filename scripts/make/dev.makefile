@@ -45,10 +45,13 @@ MODEL_CPUS ?= $(or $(OLLAMA_CPUS),4)
 export MODEL_CPUS
 export MODEL_CPUSET := 0-$(shell expr $(MODEL_CPUS) - 1)
 
-# Reranker: the bundled llama.cpp server unless RERANK_BASE_URL points elsewhere.
+# Reranker: local (the bundled llama.cpp server, on CPU), external
+# (RERANK_BASE_URL) or off (search without reranking). Remembered in
+# $(ENV_FILE); giving RERANK_BASE_URL alone means external.
 RERANK_BASE_URL ?=
 RERANK_API_KEY  ?=
-RERANKER_SERVICE := $(if $(RERANK_BASE_URL),,reranker)
+RERANKER ?= $(if $(RERANK_BASE_URL),external,$(or $(shell sed -n 's/^RERANKER=//p' $(ENV_FILE) 2>/dev/null),local))
+RERANKER_SERVICE := $(if $(filter local,$(RERANKER)),reranker)
 
 CONFIG_OVERLAY_vllm := ,configs/vllm.yml
 CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
@@ -63,21 +66,35 @@ config_value = $(shell awk -v section="$(1):" -v key="$(2):" \
 DOCUMENTS_SERVICE := $(if $(filter true,$(call config_value,documents,enabled)),tika)
 DOCUMENTS_PROFILE := $(if $(DOCUMENTS_SERVICE),documents)
 
-export COMPOSE_PROFILES := $(subst $(space),$(comma),$(strip $(EMBEDDER_SERVICE) $(RERANKER_SERVICE) $(DOCUMENTS_PROFILE)))
+# Chat model of the server: local (the bundled Ollama, on CPU), external
+# (CHAT_BASE_URL) or off (none - users bring their own on their settings page).
+# Remembered in $(ENV_FILE); giving CHAT_BASE_URL alone means external.
+CHAT_BASE_URL ?=
+CHAT_API_KEY  ?=
+CHAT ?= $(if $(CHAT_BASE_URL),external,$(or $(shell sed -n 's/^CHAT=//p' $(ENV_FILE) 2>/dev/null),local))
+CHAT_LOCAL := $(if $(filter local,$(CHAT)),yes)
 
-INFRA := vault postgres redis broker jaeger milvus searxng $(EMBEDDER_SERVICE) $(RERANKER_SERVICE) $(DOCUMENTS_SERVICE)
+# The bundled models that run: Ollama serves local embeddings and a local chat
+# model alike. None of them starts unless chosen.
+MODEL_SERVICES := $(sort $(EMBEDDER_SERVICE) $(if $(CHAT_LOCAL),ollama) $(RERANKER_SERVICE))
+
+ifeq ($(filter $(CHAT),local external off),)
+$(error CHAT is local, external or off, not "$(CHAT)")
+endif
+ifeq ($(filter $(RERANKER),local external off),)
+$(error RERANKER is local, external or off, not "$(RERANKER)")
+endif
+
+export COMPOSE_PROFILES := $(subst $(space),$(comma),$(strip $(MODEL_SERVICES) $(DOCUMENTS_PROFILE)))
+
+INFRA := vault postgres redis broker jaeger milvus searxng $(MODEL_SERVICES) $(DOCUMENTS_SERVICE)
 
 
 EMBEDDING_MODEL ?= $(call config_value,embedding,model)
 export EMBEDDING_MODEL
 
-# Chat model for answers. Without CHAT_BASE_URL it runs on the bundled Ollama,
-# when there is one; otherwise answering is off until an endpoint is given.
-CHAT_BASE_URL ?=
-CHAT_API_KEY  ?=
 CHAT_MODEL    ?= $(call config_value,chat,model)
 CHAT_PROVIDER ?= $(call config_value,chat,provider)
-CHAT_LOCAL    := $(if $(and $(filter ollama,$(EMBEDDER)),$(if $(CHAT_BASE_URL),,yes),$(filter openai-compatible,$(CHAT_PROVIDER))),yes)
 
 # API token of the make targets that call the search service (make token). It
 # reaches curl on stdin, never as an argument other processes could read.
@@ -92,7 +109,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	KAFKA_TOPIC_TASKS=$(KAFKA_TOPIC_TASKS) KAFKA_TOPIC_RUNS=$(KAFKA_TOPIC_RUNS) \
 	KAFKA_TASKS_CONSUMER_GROUP=$(KAFKA_TASKS_CONSUMER_GROUP) \
 	KAFKA_RUNS_CONSUMER_GROUP=$(KAFKA_RUNS_CONSUMER_GROUP) \
-	CONFIG_PATH=$(CONFIG_PATH) EMBEDDER=$(EMBEDDER) \
+	CONFIG_PATH=$(CONFIG_PATH) EMBEDDER=$(EMBEDDER) CHAT=$(CHAT) RERANKER=$(RERANKER) \
 	EMBEDDING_BASE_URL="$(EMBEDDING_BASE_URL)" EMBEDDING_API_KEY="$(EMBEDDING_API_KEY)" \
 	MILVUS_TOKEN="$(MILVUS_TOKEN)" \
 	CHAT_BASE_URL="$(CHAT_BASE_URL)" CHAT_API_KEY="$(CHAT_API_KEY)" \
@@ -131,12 +148,16 @@ help:
 	@echo "         make up EMBEDDER=vllm     bundled vLLM (CPU), for x86 servers"
 	@echo "         make up EMBEDDING_BASE_URL=https://... [EMBEDDING_API_KEY=...]   external"
 	@echo ""
-	@echo "chat model (answers): configs/config.yml chat.*, endpoint and key in Vault"
-	@echo "         make up                   local $(CHAT_MODEL) on the bundled Ollama"
+	@echo "server chat model (remembered, now: $(CHAT)); users may also bring their own in Settings:"
+	@echo "         make up CHAT=local        $(CHAT_MODEL) on the bundled Ollama, on CPU"
 	@echo "         make up CONFIG_PATH=configs/config.yml,configs/chat-anthropic.yml \\"
-	@echo "                 CHAT_BASE_URL=https://api.anthropic.com/v1 CHAT_API_KEY=..."
+	@echo "                 CHAT_BASE_URL=https://api.anthropic.com/v1 CHAT_API_KEY=...   external"
+	@echo "         make up CHAT=off          none: only users' own endpoints answer"
 	@echo ""
-	@echo "reranker: bundled llama.cpp (bge-reranker-v2-m3), or RERANK_BASE_URL=... [RERANK_API_KEY=...]"
+	@echo "reranker (remembered, now: $(RERANKER)):"
+	@echo "         make up RERANKER=local    bundled llama.cpp (bge-reranker-v2-m3), on CPU"
+	@echo "         make up RERANK_BASE_URL=... [RERANK_API_KEY=...]   external"
+	@echo "         make up RERANKER=off      search without reranking"
 	@echo ""
 	@echo "UI: kafka-ui http://localhost:8080  jaeger http://localhost:16686"
 	@echo "    postgres localhost:5432          vault  http://localhost:8200"
@@ -237,9 +258,11 @@ ifeq ($(CHAT_LOCAL),yes)
 endif
 	@echo "embedding model '$(EMBEDDING_MODEL)' ready ($(EMBEDDER)$(if $(filter ollama,$(EMBEDDER)), on $(MODEL_CPUS) cores))"
 
+# Stops the bundled models no longer chosen, so a switch to external frees
+# their memory.
 stop-other-embedders:
-	@COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS)) \
-		$(COMPOSE) stop $(filter-out $(EMBEDDER_SERVICE),$(EMBEDDERS)) 2>/dev/null || true
+	@COMPOSE_PROFILES=$(subst $(space),$(comma),$(EMBEDDERS) reranker) \
+		$(COMPOSE) stop $(filter-out $(MODEL_SERVICES),$(EMBEDDERS) reranker) 2>/dev/null || true
 
 restart:
 	$(COMPOSE) restart crawler

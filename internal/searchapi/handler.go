@@ -33,6 +33,8 @@ type Config struct {
 	MaxLimit       int
 	RequestTimeout time.Duration
 	AnswerTimeout  time.Duration
+	// Shown on the settings page beside a user's own endpoint.
+	ServerModel ServerModel
 }
 
 type Response struct {
@@ -57,6 +59,7 @@ type Services struct {
 	Gatherer  Gatherer
 	Uploads   UploadStore
 	Artifacts ArtifactService
+	Endpoints EndpointService
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -113,6 +116,13 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("POST /api/artifacts/{id}/sections", signIn.api(artifactsAPI.extend))
 	mux.Handle("POST /api/artifacts/{id}/sections/{section}/rewrite", signIn.api(artifactsAPI.rewrite))
 	mux.Handle("DELETE /api/artifacts/{id}", signIn.api(artifactsAPI.delete))
+
+	endpointsAPI := &endpointsHandler{logger: logger, service: services.Endpoints, server: cfg.ServerModel}
+	mux.Handle("GET /api/me/model", signIn.api(endpointsAPI.get))
+	mux.Handle("PUT /api/me/model", signIn.api(endpointsAPI.set))
+	mux.Handle("DELETE /api/me/model", signIn.api(endpointsAPI.delete))
+	mux.Handle("POST /api/me/model/test", signIn.api(endpointsAPI.test))
+	mux.Handle("GET /settings", signIn.page(serveSettings))
 
 	uploadsAPI := &uploadsHandler{logger: logger, files: services.Uploads}
 	mux.Handle("GET /uploads/{id}", signIn.page(uploadsAPI.serve))

@@ -159,6 +159,23 @@ verify:
   max_tokens: 100
   timeout: 3m
 
+endpoints:
+  # users may bring their own chat model on their settings page: an OpenAI- or
+  # Anthropic-compatible endpoint, used for their answers, claim checks, lab
+  # plans, reports and gatherings. Without one, the server's model (chat.*)
+  # answers. Keys are sealed with ENDPOINT_KEY from Vault. Page review stays
+  # on the server's model: it serves the shared base.
+  enabled: true
+  # endpoints are called from inside the server's network, so they may not
+  # reach private addresses (Vault, Postgres...) unless the host is listed
+  # here - a model server on this machine, say. Only listed hosts may use
+  # plain http. Example: [host.docker.internal]
+  allowed_hosts: []
+  # any address, private ones included: only where every user is trusted
+  # with the server's network
+  allow_private_networks: false
+  test_timeout: 30s
+
 artifacts:
   # research reports: the model drafts an outline, the user confirms it, then
   # each section is written from the lab's documents alone - a section the

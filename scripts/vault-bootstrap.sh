@@ -20,6 +20,8 @@ KAFKA_TASKS_CONSUMER_GROUP="${KAFKA_TASKS_CONSUMER_GROUP:-arachne-tasks}"
 KAFKA_RUNS_CONSUMER_GROUP="${KAFKA_RUNS_CONSUMER_GROUP:-arachne-runs}"
 CONFIG_PATH="${CONFIG_PATH:-configs/config.yml}"
 EMBEDDER="${EMBEDDER:-ollama}"
+CHAT="${CHAT:-local}"
+RERANKER="${RERANKER:-local}"
 CHAT_BASE_URL="${CHAT_BASE_URL:-}"
 CHAT_API_KEY="${CHAT_API_KEY:-}"
 RERANK_BASE_URL="${RERANK_BASE_URL:-}"
@@ -196,23 +198,55 @@ fi
 if [ -n "$EMBEDDING_API_KEY" ]; then
   vault_auth kv put kv/main/embedding_key EMBEDDING_API_KEY="$EMBEDDING_API_KEY" >/dev/null
 fi
-# The chat endpoint follows the same rule as the embedding one: given once, it
-# stays. Without one, answers use the bundled Ollama when it runs; a pointer to
-# Ollama left over from an earlier profile is removed rather than left to fail.
-if [ -n "$CHAT_BASE_URL" ]; then
-  vault_auth kv put kv/main/chat CHAT_BASE_URL="$CHAT_BASE_URL" >/dev/null
-elif [ "$EMBEDDER" = ollama ]; then
-  vault_auth kv put kv/main/chat CHAT_BASE_URL="$OLLAMA_URL" >/dev/null
-elif [ "$(vault_auth kv get -field=CHAT_BASE_URL kv/main/chat 2>/dev/null)" = "$OLLAMA_URL" ]; then
-  vault_auth kv metadata delete kv/main/chat >/dev/null
-fi
+# The server's chat model (CHAT): the bundled Ollama, an external endpoint -
+# given once, it stays - or none, when only users' own endpoints answer.
+case "$CHAT" in
+  local)
+    vault_auth kv put kv/main/chat CHAT_BASE_URL="$OLLAMA_URL" >/dev/null ;;
+  external)
+    current="$(vault_auth kv get -field=CHAT_BASE_URL kv/main/chat 2>/dev/null || true)"
+    if [ -n "$CHAT_BASE_URL" ]; then
+      vault_auth kv put kv/main/chat CHAT_BASE_URL="$CHAT_BASE_URL" >/dev/null
+    elif [ -z "$current" ] || [ "$current" = "$OLLAMA_URL" ]; then
+      echo "CHAT=external needs CHAT_BASE_URL on the first run" >&2
+      exit 1
+    fi ;;
+  off)
+    vault_auth kv metadata delete kv/main/chat >/dev/null 2>&1 || true ;;
+  *)
+    echo "unknown chat '$CHAT' (want: local | external | off)" >&2
+    exit 1 ;;
+esac
 if [ -n "$CHAT_API_KEY" ]; then
   vault_auth kv put kv/main/chat_key CHAT_API_KEY="$CHAT_API_KEY" >/dev/null
 fi
-# The bundled reranker runs unless RERANK_BASE_URL points elsewhere.
-vault_auth kv put kv/main/rerank RERANK_BASE_URL="${RERANK_BASE_URL:-$RERANKER_URL}" >/dev/null
+# The reranker (RERANKER): the bundled one, an external endpoint - given once,
+# it stays - or none, and search runs without reranking.
+case "$RERANKER" in
+  local)
+    vault_auth kv put kv/main/rerank RERANK_BASE_URL="$RERANKER_URL" >/dev/null ;;
+  external)
+    current="$(vault_auth kv get -field=RERANK_BASE_URL kv/main/rerank 2>/dev/null || true)"
+    if [ -n "$RERANK_BASE_URL" ]; then
+      vault_auth kv put kv/main/rerank RERANK_BASE_URL="$RERANK_BASE_URL" >/dev/null
+    elif [ -z "$current" ] || [ "$current" = "$RERANKER_URL" ]; then
+      echo "RERANKER=external needs RERANK_BASE_URL on the first run" >&2
+      exit 1
+    fi ;;
+  off)
+    vault_auth kv metadata delete kv/main/rerank >/dev/null 2>&1 || true ;;
+  *)
+    echo "unknown reranker '$RERANKER' (want: local | external | off)" >&2
+    exit 1 ;;
+esac
 if [ -n "$RERANK_API_KEY" ]; then
   vault_auth kv put kv/main/rerank_key RERANK_API_KEY="$RERANK_API_KEY" >/dev/null
+fi
+# Seals the API keys users save for their own chat models. Made once and never
+# replaced: a new one would leave every saved key unreadable.
+if ! vault_auth kv get kv/main/endpoints >/dev/null 2>&1; then
+  vault_auth kv put kv/main/endpoints \
+    ENDPOINT_KEY="$(python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())')" >/dev/null
 fi
 # The bundled Tika; it runs only when documents.enabled is set in the config.
 vault_auth kv put kv/main/documents DOCUMENTS_BASE_URL="$TIKA_URL" >/dev/null
@@ -227,5 +261,7 @@ set_env VAULT_ADDRESS "$VAULT_ADDRESS"
 set_env REDIS_PASSWORD "$REDIS_PASSWORD"
 set_env CONFIG_PATH "$CONFIG_PATH"
 set_env EMBEDDER "$EMBEDDER"
+set_env CHAT "$CHAT"
+set_env RERANKER "$RERANKER"
 
 echo "==> vault ready"

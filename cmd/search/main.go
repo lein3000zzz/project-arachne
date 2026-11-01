@@ -9,6 +9,7 @@ import (
 	"time"
 	"web-crawler/internal/answer"
 	"web-crawler/internal/artifacts"
+	"web-crawler/internal/endpoints"
 	"web-crawler/internal/gathering"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/llm"
@@ -85,9 +86,26 @@ func main() {
 		// Interfaces, left nil without a model, for reports to write with.
 		reportAnswers artifacts.Answers
 		reportChat    llm.Client
+		chat          llm.Client
+		serverModel   searchapi.ServerModel
+		ownEndpoints  endpoints.Clients
 	)
 
-	chat := platform.NewChatClient(logger, cfg, sm)
+	// The server's model may be none: users who bring their own still get
+	// answers, and the rest are told to set one.
+	serverChat := platform.NewChatClient(logger, cfg, sm)
+	if serverChat != nil {
+		serverModel = searchapi.ServerModel{Provider: cfg.Chat.Provider, Model: serverChat.Model()}
+	}
+
+	own := platform.NewEndpoints(logger, cfg, sm, db)
+	if own != nil {
+		ownEndpoints = own
+	}
+
+	if serverChat != nil || own != nil {
+		chat = endpoints.NewRouter(ownEndpoints, serverChat)
+	}
 
 	if chat != nil {
 		service, err := answer.New(retriever, chat, answer.Config{
@@ -102,22 +120,32 @@ func main() {
 			logger.Fatal("Error initializing answering:", err)
 		}
 
-		if verifier := platform.NewVerifyClient(logger, cfg, sm, chat); verifier != nil {
-			service.Verifies(verifier, answer.VerifyConfig{
+		if cfg.Verify.Enabled {
+			// A user's own endpoint checks their answers too; the rest get the
+			// server's checking model, which may be none.
+			var serverVerifier llm.Client
+			if serverChat != nil {
+				serverVerifier = platform.NewVerifyClient(logger, cfg, sm, serverChat)
+			}
+
+			service.Verifies(endpoints.NewRouter(ownEndpoints, serverVerifier), answer.VerifyConfig{
 				MaxClaims: cfg.Verify.MaxClaims,
 				MaxTokens: cfg.Verify.MaxTokens,
 				Timeout:   cfg.Verify.Timeout.Std(),
 			})
 
-			logger.Infow("Answers are checked claim by claim", "model", verifier.Model(), "maxClaims", cfg.Verify.MaxClaims)
+			logger.Infow("Answers are checked claim by claim", "maxClaims", cfg.Verify.MaxClaims)
 		}
 
 		answerer, reportAnswers, reportChat = service, service, chat
 
-		logger.Infow("Answering enabled", "provider", cfg.Chat.Provider, "model", chat.Model())
+		logger.Infow("Answering enabled", "serverModel", serverModel.Model, "ownEndpoints", own != nil)
 	}
 
 	services := searchapi.Services{Auth: accounts, Searcher: retriever, Answerer: answerer}
+	if own != nil {
+		services.Endpoints = own
+	}
 
 	// Interfaces, left nil when off: a nil *runs.Service inside one would not
 	// compare equal to nil.
@@ -176,6 +204,7 @@ func main() {
 	services.Artifacts = artifactService
 
 	handler := searchapi.NewHandler(logger, services, searchapi.Config{
+		ServerModel:    serverModel,
 		DefaultLimit:   cfg.Retrieval.DefaultLimit,
 		MaxLimit:       cfg.Retrieval.MaxLimit,
 		RequestTimeout: cfg.Search.RequestTimeout.Std(),

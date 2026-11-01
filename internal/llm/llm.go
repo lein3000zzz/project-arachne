@@ -4,6 +4,7 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -87,6 +88,21 @@ type Client interface {
 	Model() string
 }
 
+// ContextModel is a client whose model depends on who is asking: a user's own
+// endpoint, or the server's.
+type ContextModel interface {
+	ModelFor(ctx context.Context) string
+}
+
+// ModelOf names the model that answers a request made with ctx.
+func ModelOf(ctx context.Context, c Client) string {
+	if cm, ok := c.(ContextModel); ok {
+		return cm.ModelFor(ctx)
+	}
+
+	return c.Model()
+}
+
 type Config struct {
 	Provider string
 	// Up to and including the version segment: https://api.openai.com/v1,
@@ -95,6 +111,9 @@ type Config struct {
 	APIKey     string
 	Model      string
 	MaxRetries int
+	// Nil is the default transport. A user's own endpoint gets one that will
+	// not dial into the server's network.
+	Transport http.RoundTripper
 }
 
 func New(cfg Config) (Client, error) {
@@ -113,7 +132,7 @@ func New(cfg Config) (Client, error) {
 		cfg: cfg,
 		// No client timeout: a reply streams for as long as it takes. The caller's
 		// context bounds it.
-		http:       &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		http:       &http.Client{Transport: otelhttp.NewTransport(cmp.Or(cfg.Transport, http.DefaultTransport))},
 		retryDelay: retryBaseDelay,
 	}
 

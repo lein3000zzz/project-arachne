@@ -25,6 +25,7 @@ type Config struct {
 	Review      Review      `yaml:"review"`
 	Verify      Verify      `yaml:"verify"`
 	Artifacts   Artifacts   `yaml:"artifacts"`
+	Endpoints   Endpoints   `yaml:"endpoints"`
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
 	Gathering   Gathering   `yaml:"gathering"`
@@ -169,6 +170,20 @@ type Artifacts struct {
 	// Check each section's claims (with verify's model and limits) when
 	// verify.enabled is on.
 	Verify bool `yaml:"verify"`
+}
+
+// Endpoints are the chat models users bring: an OpenAI- or
+// Anthropic-compatible endpoint each, set on their settings page. Their keys
+// are sealed with ENDPOINT_KEY from Vault.
+type Endpoints struct {
+	Enabled bool `yaml:"enabled"`
+	// Every address, private ones included: only where all users are trusted
+	// with the server's network.
+	AllowPrivate bool `yaml:"allow_private_networks"`
+	// Hosts reachable whatever their address, and the only ones plain http
+	// may be used with: a model server on the host, say.
+	AllowedHosts []string `yaml:"allowed_hosts"`
+	TestTimeout  Duration `yaml:"test_timeout"`
 }
 
 // Documents is reading the documents a lab adds - PDFs, Office files, EPUB,
@@ -370,6 +385,10 @@ func Default() Config {
 			MaxTokens: 100,
 			Timeout:   Duration(3 * time.Minute),
 		},
+		Endpoints: Endpoints{
+			Enabled:     true,
+			TestTimeout: Duration(30 * time.Second),
+		},
 		Artifacts: Artifacts{
 			MaxSections:   7,
 			SectionTokens: 600,
@@ -530,6 +549,7 @@ func (c *Config) Validate() error {
 		{"review.timeout", c.Review.Timeout},
 		{"verify.timeout", c.Verify.Timeout},
 		{"artifacts.timeout", c.Artifacts.Timeout},
+		{"endpoints.test_timeout", c.Endpoints.TestTimeout},
 		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
 		{"gathering.timeout", c.Gathering.Timeout},
 		{"documents.timeout", c.Documents.Timeout},

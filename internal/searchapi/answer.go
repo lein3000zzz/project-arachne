@@ -10,6 +10,7 @@ import (
 	"time"
 	"web-crawler/internal/answer"
 	"web-crawler/internal/auth"
+	"web-crawler/internal/llm"
 	"web-crawler/internal/retrieval"
 
 	"go.uber.org/zap"
@@ -225,6 +226,8 @@ func (h *answerHandler) failure(req answer.Request, err error) (int, string) {
 	switch {
 	case errors.Is(err, answer.ErrNoSources):
 		return http.StatusNotFound, err.Error()
+	case errors.Is(err, llm.ErrNoModel):
+		return http.StatusServiceUnavailable, llm.ErrNoModel.Error()
 	case errors.Is(err, retrieval.ErrEmptyQuery), errors.Is(err, retrieval.ErrInvalidRequest), errors.Is(err, retrieval.ErrUnknownMode),
 		errors.Is(err, retrieval.ErrNoReranker):
 		return http.StatusBadRequest, err.Error()

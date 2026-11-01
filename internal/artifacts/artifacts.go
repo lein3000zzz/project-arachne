@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 	"web-crawler/internal/answer"
+	"web-crawler/internal/auth"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/llm"
 
@@ -335,7 +336,7 @@ func carried(latest Version) Version {
 // start records v as the next version and writes its pending sections in the
 // background.
 func (s *Service) start(ctx context.Context, ownerID, labID, artifactID int64, v Version) error {
-	v.Status, v.Model, v.Markdown, v.Error, v.Seconds, v.FinishedAt = StatusRunning, s.chat.Model(), "", "", 0, nil
+	v.Status, v.Model, v.Markdown, v.Error, v.Seconds, v.FinishedAt = StatusRunning, llm.ModelOf(auth.WithUser(ctx, auth.User{ID: ownerID}), s.chat), "", "", 0, nil
 
 	number, err := s.store.StartVersion(ctx, artifactID, v)
 	if err != nil {

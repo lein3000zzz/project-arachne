@@ -415,3 +415,8 @@ section:last-of-type { border-bottom: 0; }
 .save-answer select { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); padding: 0.1rem 0.3rem; }
 .report-body h2 .rewrite { margin-left: 0.8rem; vertical-align: 0.2em; }
 .extend { border-top: 1px solid var(--line); margin-top: 1rem; }
+
+/* Settings: header links look like the header's buttons. */
+a.theme { text-decoration: none; display: inline-flex; align-items: center; }
+a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
+.settings-form { display: grid; gap: 1.3rem; max-width: 40rem; margin-top: 1.6rem; }

@@ -115,7 +115,7 @@ func (s *Service) draft(ctx context.Context, request string, found []string, lab
 
 		plan, err := parsePlan(resp.Text, found, lab == nil)
 		if err == nil {
-			plan.Model = s.chat.Model()
+			plan.Model = llm.ModelOf(ctx, s.chat)
 			return plan
 		}
 

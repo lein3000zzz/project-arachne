@@ -174,7 +174,7 @@ func (s *Service) Read(ctx context.Context, req Request) (Result, error) {
 	}
 
 	return Result{
-		Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Results: found, Model: s.chat.Model(), Cited: []int{},
+		Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Results: found, Model: llm.ModelOf(ctx, s.chat), Cited: []int{},
 		shown: shown(strings.TrimSpace(req.Query), sources, s.cfg.SourceRunes),
 	}, nil
 }

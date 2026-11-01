@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 	"web-crawler/internal/answer"
+	"web-crawler/internal/auth"
 	"web-crawler/internal/cite"
+	"web-crawler/internal/llm"
 	"web-crawler/internal/retrieval"
 )
 
@@ -24,7 +26,8 @@ const sectionPrompt = `You write one section of a research report, using only th
 // new report, one when a section is rewritten or added - saving progress after
 // each, so the page can show it filling in.
 func (s *Service) build(ownerID, labID, artifactID int64, v Version) {
-	ctx, cancel := context.WithTimeout(s.ctx, s.cfg.Timeout)
+	// The owner's own endpoint writes it, when they have one.
+	ctx, cancel := context.WithTimeout(auth.WithUser(s.ctx, auth.User{ID: ownerID}), s.cfg.Timeout)
 	defer cancel()
 
 	started := time.Now()
@@ -95,7 +98,12 @@ func (s *Service) section(ctx context.Context, title string, sec Section, urls [
 
 	written, err := s.answers.Write(ctx, req, read, nil)
 	if err != nil {
-		return failed(sec, ctx, "the model could not write it"), nil
+		why := "the model could not write it"
+		if errors.Is(err, llm.ErrNoModel) {
+			why = llm.ErrNoModel.Error()
+		}
+
+		return failed(sec, ctx, why), nil
 	}
 
 	// Text that cites nothing would be the model's own: not in a report.

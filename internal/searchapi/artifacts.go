@@ -9,6 +9,7 @@ import (
 	"web-crawler/internal/artifacts"
 	"web-crawler/internal/auth"
 	"web-crawler/internal/labs"
+	"web-crawler/internal/llm"
 
 	"go.uber.org/zap"
 )
@@ -282,6 +283,8 @@ func (h *artifactsHandler) failure(err error) (int, string) {
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, artifacts.ErrUnavailable):
 		return http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, llm.ErrNoModel):
+		return http.StatusServiceUnavailable, llm.ErrNoModel.Error()
 	}
 
 	return labFailure(h.logger, err)

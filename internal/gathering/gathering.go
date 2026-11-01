@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"web-crawler/internal/auth"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/urlnorm"
@@ -203,7 +204,7 @@ func (s *Service) Start(ctx context.Context, ownerID, labID int64, request strin
 		return Gathering{}, fmt.Errorf("%w: a request is at most %d characters", labs.ErrInvalid, maxRequestRunes)
 	}
 
-	id, err := s.store.Start(ctx, labID, request, lab.Engines, s.chat.Model())
+	id, err := s.store.Start(ctx, labID, request, lab.Engines, llm.ModelOf(ctx, s.chat))
 	if err != nil {
 		return Gathering{}, err
 	}
@@ -277,7 +278,8 @@ type offer struct {
 }
 
 func (s *Service) run(id, ownerID int64, lab labs.Detail, request string) {
-	ctx, cancel := context.WithTimeout(s.ctx, s.cfg.Timeout)
+	// The owner's own endpoint gathers, when they have one.
+	ctx, cancel := context.WithTimeout(auth.WithUser(s.ctx, auth.User{ID: ownerID}), s.cfg.Timeout)
 	defer cancel()
 
 	g := &session{s: s, id: id, ownerID: ownerID, lab: lab, inLab: map[string]bool{}, offered: map[string]offer{}}
@@ -312,6 +314,8 @@ func (s *Service) run(id, ownerID int64, lab labs.Detail, request string) {
 		status, errText = StatusFailed, "interrupted by a shutdown"
 	case errors.Is(err, context.DeadlineExceeded):
 		status, errText = StatusFailed, "ran out of time"
+	case errors.Is(err, llm.ErrNoModel):
+		status, errText = StatusFailed, llm.ErrNoModel.Error()
 	default:
 		status, errText = StatusFailed, "the model could not be reached"
 		s.logger.Warnw("Gathering failed", "gathering", id, "error", err)

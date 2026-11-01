@@ -73,20 +73,20 @@ func (s *Service) Draft(ctx context.Context, ownerID, labID int64, request strin
 		return Outline{}, fmt.Errorf("drafting the outline: %w", err)
 	}
 
-	return s.parseOutline(resp.Text, request), nil
+	return s.parseOutline(resp.Text, request, llm.ModelOf(ctx, s.chat)), nil
 }
 
 // parseOutline keeps what is usable of the model's outline. With nothing
 // usable, the request itself is the one section: the user sees it and can
 // ask again.
-func (s *Service) parseOutline(text, request string) Outline {
+func (s *Service) parseOutline(text, request, model string) Outline {
 	var raw Outline
 
 	if start, end := strings.IndexByte(text, '{'), strings.LastIndexByte(text, '}'); start >= 0 && end > start {
 		_ = json.Unmarshal([]byte(text[start:end+1]), &raw)
 	}
 
-	out := Outline{Title: cut(oneLine(raw.Title), maxTitleRunes), Model: s.chat.Model()}
+	out := Outline{Title: cut(oneLine(raw.Title), maxTitleRunes), Model: model}
 
 	for _, p := range raw.Sections {
 		heading, focus := cut(oneLine(p.Heading), maxHeadingRunes), cut(oneLine(p.Focus), maxFocusRunes)

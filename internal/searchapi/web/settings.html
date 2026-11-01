@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · arachne</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem("theme"); } catch (_) {}
+  if (stored === "light" || stored === "dark") document.documentElement.setAttribute("data-theme", stored);
+})();
+</script>
+<link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="shell">
+
+<header class="site">
+  <a class="brand" href="/">arachne</a>
+  <span class="who" id="who"></span>
+  <a class="theme" href="/settings" aria-current="page">settings</a>
+  <button type="button" class="theme" id="logout">log out</button>
+  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <p class="eyebrow">@arachne</p>
+    <h1>Settings.</h1>
+  </section>
+
+  <section id="model">
+    <h2>Chat model</h2>
+    <p class="lede" id="modelNow">&hellip;</p>
+    <p class="note">Bring your own: an OpenAI- or Anthropic-compatible endpoint answers your questions, checks the claims,
+      plans and writes your reports and gathers for your labs. Your questions and the excerpts they read, from your
+      labs and uploads too, go to it. Pages are still reviewed by the server's model.</p>
+
+    <form id="modelForm" class="settings-form">
+      <div class="control">
+        <span class="control-label" id="l-provider">Provider</span>
+        <div class="segmented" data-name="provider" aria-labelledby="l-provider">
+          <button type="button" class="seg" data-value="openai-compatible" aria-pressed="true">OpenAI-compatible</button>
+          <button type="button" class="seg" data-value="openai" aria-pressed="false">OpenAI</button>
+          <button type="button" class="seg" data-value="anthropic" aria-pressed="false">Anthropic</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="baseURL">Base URL</label>
+        <input id="baseURL" type="url" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="modelName">Model</label>
+        <input id="modelName" type="text" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="apiKey">API key</label>
+        <input id="apiKey" type="password" autocomplete="off">
+      </div>
+      <label class="check" id="forgetKeyLine" hidden><input type="checkbox" id="forgetKey"> Forget the saved key</label>
+      <div class="buttons">
+        <button type="button" class="action" id="test">Test</button>
+        <button type="submit" class="action primary" id="save">Save</button>
+        <button type="button" class="action danger" id="remove" hidden>Use the server's model</button>
+      </div>
+      <p class="note" id="modelNote" aria-live="polite"></p>
+    </form>
+  </section>
+</main>
+
+<footer class="footer">
+  <p class="convert">arachne</p>
+  <nav class="contact" aria-label="Links">
+    <a href="https://github.com/lein3000zzz/project-arachne">GitHub</a>
+    <a href="https://lein3000.dev">lein3000.dev</a>
+  </nav>
+</footer>
+
+</div>
+
+<script src="/static/theme.js"></script>
+<script src="/static/common.js"></script>
+<script>
+const examples = {
+  "openai-compatible": ["https://openrouter.ai/api/v1", "qwen/qwen3-30b-a3b-instruct-2507"],
+  openai: ["https://api.openai.com/v1", "gpt-5-mini"],
+  anthropic: ["https://api.anthropic.com/v1", "claude-haiku-4-5"],
+};
+let own = null;
+
+function placeholders() {
+  const [url, model] = examples[segValue("provider")] || examples["openai-compatible"];
+  $("baseURL").placeholder = url;
+  $("modelName").placeholder = model;
+}
+
+document.querySelector('.segmented[data-name="provider"]').addEventListener("click", () => setTimeout(placeholders));
+
+function settings() {
+  const body = { provider: segValue("provider"), base_url: $("baseURL").value.trim(), model: $("modelName").value.trim() };
+  const key = $("apiKey").value.trim();
+  // No key typed keeps the saved one; ticking "forget" sends an empty one.
+  if (key) body.api_key = key;
+  else if ($("forgetKey").checked) body.api_key = "";
+  return body;
+}
+
+function say(text, error) {
+  $("modelNote").replaceChildren(error ? el("span", { class: "error" }, text) : text);
+}
+
+async function load() {
+  let data;
+  try {
+    data = await api("/api/me/model");
+  } catch (err) {
+    $("modelNow").textContent = err.message;
+    return;
+  }
+
+  own = data.own;
+  const server = data.server ? `the server's ${data.server.model}` : null;
+  $("modelNow").textContent = own ? `Yours: ${own.model} at ${host(own.base_url)}.` + (server ? ` Without it, ${server}.` : "")
+    : server ? `The server's: ${data.server.model}. Set your own below.`
+    : "None: the server runs no chat model. Set yours to get answers.";
+
+  if (!data.available) {
+    [...$("modelForm").elements].forEach((e) => { e.disabled = true; });
+    say("Bringing your own model is not available on this server.");
+    return;
+  }
+
+  if (own) {
+    setSeg("provider", own.provider);
+    $("baseURL").value = own.base_url;
+    $("modelName").value = own.model;
+  }
+  $("apiKey").value = "";
+  $("apiKey").placeholder = own && own.key_set ? `saved ${own.key_hint || ""}: leave empty to keep it`.replace("  ", " ") : "sk-…";
+  $("forgetKeyLine").hidden = !(own && own.key_set);
+  $("forgetKey").checked = false;
+  $("remove").hidden = !own;
+  placeholders();
+}
+
+function host(u) {
+  try { return new URL(u).host; } catch (_) { return u; }
+}
+
+$("test").addEventListener("click", async () => {
+  if (!$("modelForm").reportValidity()) return;
+  $("test").disabled = true;
+  say("Testing…");
+  try {
+    const r = await send("POST", "/api/me/model/test", settings());
+    say(`It answered "${r.reply}" in ${r.seconds.toFixed(1)} s.`);
+  } catch (err) {
+    say(err.message, true);
+  } finally {
+    $("test").disabled = false;
+  }
+});
+
+$("modelForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("save").disabled = true;
+  try {
+    const saved = await send("PUT", "/api/me/model", settings());
+    await load();
+    say(`Saved: your answers now come from ${saved.model}.`);
+  } catch (err) {
+    say(err.message, true);
+  } finally {
+    $("save").disabled = false;
+  }
+});
+
+$("remove").addEventListener("click", async () => {
+  if (!confirm("Forget your endpoint and its key, and use the server's model again?")) return;
+  try {
+    await send("DELETE", "/api/me/model");
+    $("baseURL").value = "";
+    $("modelName").value = "";
+    await load();
+    say("Back to the server's model.");
+  } catch (err) {
+    say(err.message, true);
+  }
+});
+
+load();
+</script>
+</body>
+</html>

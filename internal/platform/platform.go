@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"web-crawler/internal/auth"
 	"web-crawler/internal/database"
 	"web-crawler/internal/embedding"
+	"web-crawler/internal/endpoints"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/rerank"
 	"web-crawler/internal/review"
@@ -219,7 +221,7 @@ func NewAuthService(ctx context.Context, logger *zap.SugaredLogger, cfg appconfi
 func NewChatClient(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) llm.Client {
 	baseURL, err := sm.GetSecretStringFromConfig("CHAT_BASE_URL")
 	if err != nil || baseURL == "" {
-		logger.Warn("CHAT_BASE_URL is not in Vault; answering is disabled")
+		logger.Warn("The server runs no chat model (CHAT_BASE_URL is not in Vault): only users' own endpoints answer, and pages are not reviewed")
 		return nil
 	}
 
@@ -294,6 +296,42 @@ func NewReviewer(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.Sec
 		MaxTokens:    cfg.Review.MaxTokens,
 		Timeout:      cfg.Review.Timeout.Std(),
 	})
+}
+
+// NewEndpoints returns nil when users cannot bring their own chat models:
+// off in the config, or no ENDPOINT_KEY in Vault to seal their keys with.
+func NewEndpoints(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, pool *pgxpool.Pool) *endpoints.Service {
+	if !cfg.Endpoints.Enabled {
+		logger.Info("Users cannot bring their own chat models (endpoints.enabled)")
+		return nil
+	}
+
+	raw, err := sm.GetSecretStringFromConfig("ENDPOINT_KEY")
+	if err != nil || raw == "" {
+		logger.Warn("ENDPOINT_KEY is not in Vault: users cannot bring their own chat models")
+		return nil
+	}
+
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		logger.Warnw("ENDPOINT_KEY in Vault is not base64: users cannot bring their own chat models", "error", err)
+		return nil
+	}
+
+	service, err := endpoints.New(endpoints.NewPostgresStore(pool), key, endpoints.Config{
+		AllowPrivate: cfg.Endpoints.AllowPrivate,
+		AllowedHosts: cfg.Endpoints.AllowedHosts,
+		TestTimeout:  cfg.Endpoints.TestTimeout.Std(),
+		MaxRetries:   cfg.Chat.MaxRetries,
+	})
+	if err != nil {
+		logger.Warnw("Users cannot bring their own chat models", "error", err)
+		return nil
+	}
+
+	logger.Infow("Users may bring their own chat models", "allowedHosts", cfg.Endpoints.AllowedHosts, "allowPrivate", cfg.Endpoints.AllowPrivate)
+
+	return service
 }
 
 // NewVerifyClient returns the chat client answers are checked with - chat
