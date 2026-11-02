@@ -93,6 +93,22 @@ services:
       postgres:
         condition: service_healthy
 
+  # make reembed: the index for a new embedding model, from the chunks stored
+  # for the old one.
+  reembed:
+    build:
+      context: .
+      dockerfile: deployments/search.Dockerfile
+    entrypoint: ["./reembed"]
+    profiles: [tools]
+    env_file:
+      - main.env
+    volumes:
+      - ./configs:/root/configs:ro
+    depends_on:
+      milvus:
+        condition: service_healthy
+
   vault:
     image: hashicorp/vault
     environment:

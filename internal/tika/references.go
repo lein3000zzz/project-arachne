@@ -14,14 +14,14 @@ var (
 	// has nine arXiv identifiers and no URLs.
 	arxivID = regexp.MustCompile(`(?i)\barxiv:\s?(\d{4}\.\d{4,5})(?:v\d+)?`)
 	doi     = regexp.MustCompile(`\b10\.\d{4,9}/[^\s"<>]+`)
-	// The rest of a link a PDF broke at a line end - ".../master/ examples/rag/",
-	// "forum?id= H1gx1CNKPH": a piece with a slash, dot, digit or the like in
-	// it, which a word after a link has not.
 	// "[12] K. He, ..." or "12. K. He, ...": an entry of a numbered reference
 	// list, which starts with who wrote what.
 	numberedEntry = regexp.MustCompile(`^(?:\[\d{1,4}\]|\d{1,4}\.) `)
 	latexEscape   = regexp.MustCompile(`\\([&%$#_{}])`)
-	linkRest      = regexp.MustCompile(`^[ \n]([^\s<>()\[\]"]*[/.\-_=?&%#\d][^\s<>()\[\]"]*)`)
+	// The rest of a link a PDF broke at a line end - ".../master/ examples/rag/",
+	// "forum?id= H1gx1CNKPH": a piece with a slash, dot, digit or the like in
+	// it, which a word after a link has not.
+	linkRest = regexp.MustCompile(`^[ \n]([^\s<>()\[\]"]*[/.\-_=?&%#\d][^\s<>()\[\]"]*)`)
 )
 
 const (

@@ -101,7 +101,7 @@
 
   <section id="answerBox" hidden>
     <h2>Answer</h2>
-    <div id="answerText" class="answer"></div>
+    <div id="answerText" class="answer md"></div>
     <p id="claimInfo" class="claim-info" aria-live="polite" hidden></p>
     <p id="answerMeta" class="note answer-meta"></p>
     <p id="verifyMeta" class="note answer-meta"></p>
@@ -298,55 +298,35 @@ function renderRead(sources, withLabs) {
       withLabs ? el("span", { class: "tag" + (s.in_lab ? " lab" : "") }, s.in_lab ? "lab" : "shared") : null))));
 }
 
-// The answer is plain text: only [n] citations become links.
-function cited(text, count) {
-  const out = [];
-  let last = 0;
-  for (const m of text.matchAll(/\[(\d{1,3})\]/g)) {
-    const n = Number(m[1]);
-    if (n < 1 || n > count) continue;
-    out.push(text.slice(last, m.index));
-    out.push(el("a", { class: "cite", href: "#src-" + n, title: "Source " + n, onclick: () => flash(n) }, String(n)));
-    last = m.index + m[0].length;
-  }
-  out.push(text.slice(last));
-  return out;
-}
-
-function renderAnswer(text, count) {
-  $("answerText").replaceChildren(...cited(text, count));
+// The answer is the server's rendering of its Markdown: sanitised there, with
+// citation links and claim marks added after - the only HTML this page takes
+// from the server. Until the first rendering arrives, the text is shown as is.
+function showAnswer(html) {
+  $("answerText").innerHTML = html;
 }
 
 // ---- the check: each sentence that cites sources, against what it cites ----
 let checked = [];
 
-// The answer again, as the check splits it: each claim a span ending in a
-// mark, pending until its verdict comes.
-function renderClaims(parts, claims, count) {
-  checked = claims;
-  $("answerText").replaceChildren(...parts.map((part) => {
-    if (part.claim < 0) return cited(part.text, count);
-    const body = part.text.trimEnd();
-    return [
-      el("span", { class: "claim pending", id: "claim-" + part.claim },
-        ...cited(body, count),
-        el("button", { type: "button", class: "mark", "aria-label": "not checked yet", onclick: () => showClaim(part.claim) }, "·")),
-      part.text.slice(body.length),
-    ];
-  }).flat());
-  claims.forEach((c, i) => { if (c.verdict) markClaim(i, c); });
-}
-
 function markClaim(i, claim) {
   checked[i] = claim;
-  const span = $("claim-" + i);
-  if (!span) return;
-  span.className = "claim " + claim.verdict;
-  const mark = span.querySelector(".mark");
+  const mark = document.querySelector(`#answerText .mark[data-claim="0-${i}"]`);
+  if (!mark) return;
+  mark.className = "mark " + claim.verdict;
   mark.textContent = verdictMarks[claim.verdict] || "?";
   mark.setAttribute("aria-label", verdictNames[claim.verdict] || claim.verdict);
   mark.title = verdictNames[claim.verdict] || claim.verdict;
 }
+
+$("answerText").addEventListener("click", (e) => {
+  const mark = e.target.closest(".mark");
+  if (mark) {
+    showClaim(Number(mark.dataset.claim.split("-")[1]));
+    return;
+  }
+  const link = e.target.closest('a[href^="#src-"]');
+  if (link) flash(Number(link.getAttribute("href").slice(5)));
+});
 
 function showClaim(i) {
   const c = checked[i];
@@ -359,6 +339,7 @@ function showClaim(i) {
   // replaceChildren would print a null as "null".
   info.replaceChildren(...[
     el("span", { class: "verdict " + c.verdict }, (verdictMarks[c.verdict] || "") + " " + (verdictNames[c.verdict] || c.verdict)),
+    el("span", {}, c.text),
     c.quote ? el("q", {}, c.quote) : null,
     c.quote && c.cites.length ? " " + c.cites.map((n) => "[" + n + "]").join("") : null,
     c.note ? el("span", { class: "note" }, c.note) : null,
@@ -430,7 +411,7 @@ function searchAndAnswer(q) {
   if (stream) stream.close();
   const started = performance.now();
   const withLabs = ticked.size > 0;
-  let text = "", count = 0, first = null, checking = false, answerID = null;
+  let text = "", count = 0, first = null, checking = false, answerID = null, rendered = false;
 
   $("go").disabled = true;
   $("answerBox").hidden = true;
@@ -466,7 +447,12 @@ function searchAndAnswer(q) {
       badge("writing…", "busy");
     }
     text += JSON.parse(e.data).text;
-    renderAnswer(text, count);
+    if (!rendered) $("answerText").textContent = text;
+  });
+
+  stream.addEventListener("html", (e) => {
+    rendered = true;
+    showAnswer(JSON.parse(e.data).html);
   });
 
   stream.addEventListener("done", (e) => {
@@ -489,8 +475,9 @@ function searchAndAnswer(q) {
   });
 
   stream.addEventListener("claims", (e) => {
-    const { parts, claims } = JSON.parse(e.data);
-    renderClaims(parts, claims, count);
+    const { claims, html } = JSON.parse(e.data);
+    checked = claims;
+    showAnswer(html);
     $("verifyMeta").textContent = claims.length ? `checking ${claims.length} claims…` : "";
   });
 

@@ -88,3 +88,21 @@ func TestCodeIsNeverAClaim(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownIsLeftOutOfClaims(t *testing.T) {
+	answer := "## Memory\n\n- **Rust** checks borrows at compile time [1].\n> Zig leaves memory to the programmer [2].\n\n" +
+		"| Language | Memory |\n|---|---|\n| Rust | ownership and borrowing [1] |\n"
+
+	_, list := Split(answer, 2)
+
+	want := []string{"Rust checks borrows at compile time.", "Zig leaves memory to the programmer.", "Rust ownership and borrowing"}
+	if len(list) != len(want) {
+		t.Fatalf("claims = %+v", list)
+	}
+
+	for i, w := range want {
+		if list[i].Text != w {
+			t.Errorf("claim %d = %q, want %q", i, list[i].Text, w)
+		}
+	}
+}

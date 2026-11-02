@@ -152,26 +152,25 @@ section:last-of-type { border-bottom: 0; }
   @keyframes pulse { 50% { opacity: 0.25; } }
 }
 
-.answer { font-family: var(--mono); font-size: 0.98rem; line-height: 1.7; white-space: pre-wrap; max-width: 72ch; margin: 0 0 1rem; }
-.cite, .report-body a[href^="#ref-"] {
+.answer { font-family: var(--mono); font-size: 0.98rem; line-height: 1.7; max-width: 72ch; margin: 0 0 1rem; }
+.answer:empty { display: none; }
+.cite, .md a[href^="#ref-"], .md a[href^="#src-"] {
   display: inline-block; font-family: var(--nd); font-size: 0.68rem; line-height: 1.5; vertical-align: 0.12em;
   border: 1px solid var(--fg); border-radius: 999px; padding: 0 0.42rem; margin: 0 0.08rem;
   color: var(--fg); text-decoration: none;
 }
-.cite:hover, .report-body a[href^="#ref-"]:hover { background: var(--fg); color: var(--bg); }
+.cite:hover, .md a[href^="#ref-"]:hover, .md a[href^="#src-"]:hover { background: var(--fg); color: var(--bg); }
 .answer-meta { font-family: var(--mono); }
 
-/* A checked answer: a claim the cited excerpts do not bear out is underlined,
-   never removed; the mark after each sentence opens the verdict. */
-.claim.unsupported { text-decoration: underline wavy var(--bad); text-underline-offset: 0.25em; }
-.claim.partly { text-decoration: underline dotted var(--muted); text-underline-offset: 0.25em; }
+/* A checked answer or report: a mark after each claim, never a claim removed;
+   the mark opens the verdict. */
 .mark {
   font: inherit; font-size: 0.82em; vertical-align: 0.3em; line-height: 1; margin-left: 0.15em; padding: 0 0.2em;
   border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: none;
 }
 .mark:hover, .mark:focus-visible { color: var(--fg); outline: 1px solid var(--line); }
-.claim.supported .mark { color: var(--ok); }
-.claim.unsupported .mark { color: var(--bad); }
+.mark.supported { color: var(--ok); }
+.mark.unsupported { color: var(--bad); }
 .claim-info { font-family: var(--mono); font-size: 0.82rem; max-width: 72ch; margin: 0 0 0.8rem; display: grid; gap: 0.3rem; }
 .claim-info q { color: var(--fg); }
 .claim-info .verdict.supported { color: var(--ok); }
@@ -380,15 +379,18 @@ section:last-of-type { border-bottom: 0; }
 .report .control-label select { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); margin-left: 0.3rem; }
 .report-body { max-width: 72ch; line-height: 1.7; margin-top: 2rem; }
 .docs-main .report-body section.part { padding: 0; margin: 0 0 2.4rem; }
-.report-body h2 { font-size: 1.3rem; margin: 0 0 0.8rem; text-transform: none; letter-spacing: normal; color: var(--fg); }
-.report-body p, .report-body ul, .report-body ol, .report-body blockquote, .report-body table { margin: 0 0 1rem; }
-.report-body ul, .report-body ol { padding-left: 1.3rem; }
-.report-body blockquote { border-left: 2px solid var(--line); padding-left: 0.9rem; color: var(--muted); }
-.report-body table { border-collapse: collapse; font-size: 0.88rem; }
-.report-body th, .report-body td { border-bottom: 1px solid var(--line); padding: 0.35rem 0.8rem 0.35rem 0; text-align: left; }
-.report-body code { font-family: var(--mono); font-size: 0.88em; }
-.report-body pre { font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; background: var(--raised); border: 1px solid var(--line);
+.md h2, .md h3 { font-size: 1.3rem; margin: 0 0 0.8rem; text-transform: none; letter-spacing: normal; color: var(--fg); }
+.md p, .md ul, .md ol, .md blockquote, .md table { margin: 0 0 1rem; }
+.md ul, .md ol { padding-left: 1.3rem; }
+.md blockquote { border-left: 2px solid var(--line); padding-left: 0.9rem; color: var(--muted); }
+.md table { border-collapse: collapse; font-size: 0.88rem; }
+.md th, .md td { border-bottom: 1px solid var(--line); padding: 0.35rem 0.8rem 0.35rem 0; text-align: left; }
+.md code { font-family: var(--mono); font-size: 0.88em; }
+.md pre { font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; background: var(--raised); border: 1px solid var(--line);
   padding: 0.9rem 1rem; overflow-x: auto; margin: 0 0 1rem; }
+.md h3 { font-size: 1.1rem; }
+.md h1 { font-size: 1.4rem; margin: 0 0 0.8rem; max-width: none; }
+.md > :last-child { margin-bottom: 0; }
 .report-body .missing { border: 1px dashed var(--line); padding: 0.8rem 1rem; color: var(--muted); }
 .report-body .missing p { margin: 0 0 0.6rem; }
 .report-body .refs { list-style: decimal; padding-left: 1.6rem; font-size: 0.85rem; overflow-wrap: anywhere; }

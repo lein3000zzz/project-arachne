@@ -31,6 +31,9 @@ type Part struct {
 // What a citation taken out leaves: "battles ." for "battles [1].".
 var spaceBefore = regexp.MustCompile(`\s+([.,;:!?…])`)
 
+// Markdown a checker need not read: emphasis, and a table row's cells.
+var markup = strings.NewReplacer("**", "", "__", "", "|", " ")
+
 // Words a full stop follows without ending the sentence.
 var abbreviations = map[string]bool{
 	"e.g": true, "i.e": true, "etc": true, "vs": true, "cf": true, "al": true, "fig": true, "eq": true, "no": true,
@@ -58,8 +61,8 @@ func Split(answer string, sources int) ([]Part, []Claim) {
 			part := Part{Text: sentence, Claim: -1}
 
 			if cites := cite.In(sentence); len(cites) > 0 {
-				text := spaceBefore.ReplaceAllString(strings.Join(strings.Fields(cite.Strip(sentence)), " "), "$1")
-				text = strings.TrimSpace(strings.TrimLeft(text, "-*• "))
+				text := spaceBefore.ReplaceAllString(strings.Join(strings.Fields(markup.Replace(cite.Strip(sentence))), " "), "$1")
+				text = strings.TrimSpace(strings.TrimLeft(text, "-*•#> "))
 
 				if len(strings.FieldsFunc(text, notWord)) >= minClaimWords {
 					claim := Claim{Text: text}

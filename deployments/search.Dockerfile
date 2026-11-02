@@ -3,7 +3,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o search ./cmd/search && go build -o rank ./cmd/rank && go build -o user ./cmd/user
+RUN go build -o search ./cmd/search && go build -o rank ./cmd/rank && go build -o user ./cmd/user && go build -o reembed ./cmd/reembed
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates

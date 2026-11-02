@@ -23,7 +23,9 @@ chunker:
   min_document_runes: 80
 
 embedding:
-  # served over the OpenAI /v1/embeddings API; the endpoint itself is in Vault
+  # served over the OpenAI /v1/embeddings API; the endpoint itself is in Vault.
+  # Another model or dimensions means another collection, empty at first:
+  # `make reembed` fills it from the old one's chunks, without crawling again.
   model: qwen3-embedding:0.6b
   # 0 = the model's native size; a smaller value truncates (Matryoshka models only)
   dimensions: 0

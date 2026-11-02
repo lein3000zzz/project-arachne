@@ -325,3 +325,60 @@ func TestSearchRejectsBadQueries(t *testing.T) {
 		t.Errorf("empty text: %v", err)
 	}
 }
+
+func TestCollectionsAreListedReadAndDropped(t *testing.T) {
+	ctx := context.Background()
+	prefix := fmt.Sprintf("it%d", time.Now().UnixNano())
+	cfg := MilvusConfig{Address: milvusAddr()}
+
+	open := func(model string, dim int) *Milvus {
+		t.Helper()
+
+		m, err := NewMilvus(ctx, MilvusConfig{Address: milvusAddr(), Collection: CollectionName(prefix, model, dim), Dimension: dim})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() {
+			_ = DropCollection(context.Background(), cfg, m.Collection())
+			_ = m.Close(context.Background())
+		})
+
+		return m
+	}
+
+	old, _ := open("old", testDim), open("new", 3)
+
+	const a, b = "https://example.com/a", "https://example.com/b"
+
+	first, second := row(a, "aa01", "first part of a", 1, 0, 0, 0), row(a, "aa02", "second part of a", 0, 1, 0, 0)
+	first.Ordinal, second.Ordinal, second.IndexedAt = 0, 1, 42
+
+	if err := old.Replace(ctx, a, []Row{second, first}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := old.Replace(ctx, b, []Row{row(b, "bb01", "all of b", 0, 0, 1, 0)}); err != nil {
+		t.Fatal(err)
+	}
+
+	urls, err := old.URLs(ctx)
+	if err != nil || !slices.Equal(urls, []string{a, b}) {
+		t.Errorf("urls: %v, %v", urls, err)
+	}
+
+	chunks, err := old.Chunks(ctx, a)
+	if err != nil || len(chunks) != 2 || chunks[0].ID != "aa01" || chunks[1].Text != "second part of a" || chunks[1].IndexedAt != 42 ||
+		chunks[1].ContentHash != "h" || chunks[0].Vector != nil {
+		t.Errorf("chunks in order, without vectors: %+v, %v", chunks, err)
+	}
+
+	cols, err := Collections(ctx, cfg, prefix)
+	if err != nil || len(cols) != 2 || cols[0].Dimension != 3 || cols[1].Dimension != testDim {
+		t.Errorf("collections: %+v, %v", cols, err)
+	}
+
+	if err := old.Release(ctx); err != nil {
+		t.Errorf("release: %v", err)
+	}
+}

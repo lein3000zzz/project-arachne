@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"web-crawler/internal/answer"
 	"web-crawler/internal/auth"
 	"web-crawler/internal/llm"
+	"web-crawler/internal/markdown"
 	"web-crawler/internal/retrieval"
 
 	"go.uber.org/zap"
@@ -99,26 +101,42 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 	verify := h.verifies(r)
 	out := verifiedAnswer{Result: res, ID: h.keep(r, req, res, !verify)}
 
+	var claims []answer.Claim
+
 	if verify {
 		v, err := h.answerer.Verify(ctx, res, answer.VerifyEvents{})
 		if err != nil {
 			h.logger.Warnw("Verifying an answer failed", "error", err)
 		} else {
-			out.Verification = &v
+			out.Verification, claims = &v, v.Claims
 		}
 
 		h.recent.check(out.ID, v.Claims)
 	}
+
+	out.HTML = answerHTML(res.Answer, len(res.Sources), claims)
 
 	writeJSON(w, http.StatusOK, out)
 }
 
 type verifiedAnswer struct {
 	answer.Result
+	// The answer's Markdown rendered: citations linked, claims marked.
+	HTML string `json:"html"`
 	// What "add to lab" names it by, while it is kept.
 	ID           string               `json:"id,omitempty"`
 	Verification *answer.Verification `json:"verification,omitempty"`
 }
+
+// answerHTML renders an answer for the page, its citations linking to the
+// sources listed under it.
+func answerHTML(text string, sources int, claims []answer.Claim) string {
+	return markdown.Render(text, markdown.Options{CiteHref: "#src-%d", Sources: sources, Claims: claims})
+}
+
+// While an answer streams, its rendering is sent this often: Markdown reads
+// as it is meant to as it arrives, without a render per token.
+const htmlEvery = 150 * time.Millisecond
 
 func (h *answerHandler) keep(r *http.Request, req answer.Request, res answer.Result, checked bool) string {
 	user, _ := auth.UserFrom(r.Context())
@@ -132,9 +150,10 @@ func (h *answerHandler) verifies(r *http.Request) bool {
 }
 
 // serveStream sends server-sent events: the listed results and the sources
-// once, the answer as delta events while it is generated, then done - or error
-// at any point. A checked answer goes on: claims, how it splits into claims,
-// a claim event for each verdict, then verified.
+// once, the answer as delta events while it is generated - and html events,
+// its rendering so far - then done, or error at any point. A checked answer
+// goes on: claims, how it splits into claims, with the rendering carrying a
+// pending mark for each; a claim event for each verdict; then verified.
 func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 	if h.answerer == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "answering is not configured"})
@@ -185,10 +204,33 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 
 	// A write failing means the reader is gone; returning the error stops the
 	// model generating for nobody.
+	var (
+		written  strings.Builder
+		sources  int
+		rendered time.Time
+	)
+
 	res, err := h.answerer.Answer(ctx, req, answer.Events{
 		Results: func(found []answer.Found) error { return send("results", found) },
-		Sources: func(sources []answer.Source) error { return send("sources", sources) },
-		Delta:   func(text string) error { return send("delta", map[string]string{"text": text}) },
+		Sources: func(list []answer.Source) error {
+			sources = len(list)
+			return send("sources", list)
+		},
+		Delta: func(text string) error {
+			if err := send("delta", map[string]string{"text": text}); err != nil {
+				return err
+			}
+
+			written.WriteString(text)
+
+			if time.Since(rendered) < htmlEvery {
+				return nil
+			}
+
+			rendered = time.Now()
+
+			return send("html", map[string]string{"html": answerHTML(written.String(), sources, nil)})
+		},
 	})
 	if err != nil {
 		_, message := h.failure(req, err)
@@ -200,6 +242,10 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 	verify := h.verifies(r)
 	id := h.keep(r, req, res, !verify)
 
+	if err := send("html", map[string]string{"html": answerHTML(res.Answer, len(res.Sources), nil)}); err != nil {
+		return
+	}
+
 	if err := send("done", map[string]any{"cited": res.Cited, "scope": res.Scope, "weak": res.Weak, "model": res.Model, "usage": res.Usage,
 		"verifying": verify, "id": id}); err != nil || !verify {
 		return
@@ -207,7 +253,7 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 
 	v, err := h.answerer.Verify(ctx, res, answer.VerifyEvents{
 		Claims: func(parts []answer.Part, claims []answer.Claim) error {
-			return send("claims", map[string]any{"parts": parts, "claims": claims})
+			return send("claims", map[string]any{"parts": parts, "claims": claims, "html": answerHTML(res.Answer, len(res.Sources), claims)})
 		},
 		Claim: func(i int, c answer.Claim) error { return send("claim", map[string]any{"i": i, "claim": c}) },
 	})

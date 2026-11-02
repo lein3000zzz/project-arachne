@@ -116,7 +116,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	RERANK_BASE_URL="$(RERANK_BASE_URL)" RERANK_API_KEY="$(RERANK_API_KEY)" \
 	scripts/vault-bootstrap.sh
 
-.PHONY: help up dev run crawl search eval rank smoke user password token down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
+.PHONY: help up dev run crawl search eval rank reembed smoke user password token down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
 
 help:
 	@echo "make up        full stack in docker (crawler included)"
@@ -137,6 +137,7 @@ help:
 	@echo "make down      stop containers, keep data"
 	@echo "make reset     stop, delete volumes, bind mounts and $(ENV_FILE)"
 	@echo ""
+	@echo "make reembed  after embedding.model changes: rebuild the index from stored chunks (ARGS=-list, -dry-run, -drop ...)"
 	@echo "make build / test / vet / tidy"
 	@echo "make test-integration   tests against the running Milvus, Redis and Postgres"
 	@echo ""
@@ -211,6 +212,13 @@ smoke:
 # PageRank now, without waiting for the ranker service to notice a finished crawl.
 rank:
 	$(COMPOSE) --profile tools run --rm --build rank
+
+# After embedding.model changes: copies the stored chunks into the new model's
+# collection with new vectors, instead of crawling everything again. Pages it
+# has are left alone, so it can be stopped and run again.
+#   make reembed ARGS=-list | ARGS=-dry-run | ARGS='-from <collection>' | ARGS='-drop <collection>'
+reembed:
+	$(COMPOSE) --profile tools run --rm --build reembed $(ARGS)
 
 # make eval [DATASET=eval/sample.yml] [OUT=eval/results.json]; needs the search service up
 eval:

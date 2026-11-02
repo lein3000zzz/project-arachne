@@ -89,8 +89,12 @@ func TestAnswerJSON(t *testing.T) {
 		t.Errorf("request = %+v", answerer.got)
 	}
 
-	var res answer.Result
-	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || res.Answer != "Use channels\n[1]." || len(res.Sources) != 1 {
+	var res struct {
+		answer.Result
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || res.Answer != "Use channels\n[1]." || len(res.Sources) != 1 ||
+		!strings.Contains(res.HTML, `<a href="#src-1"`) {
 		t.Errorf("result %+v, %v", res, err)
 	}
 }
@@ -109,8 +113,14 @@ func TestAnswerStream(t *testing.T) {
 		events = append(events, strings.TrimPrefix(strings.SplitN(block, "\n", 2)[0], "event: "))
 	}
 
-	if strings.Join(events, ",") != "sources,delta,delta,delta,done" {
+	// The first delta is rendered at once, the next two fall inside htmlEvery,
+	// and the whole answer is rendered before done.
+	if strings.Join(events, ",") != "sources,delta,html,delta,delta,html,done" {
 		t.Errorf("events = %v\n%s", events, body)
+	}
+
+	if !strings.Contains(body, `\u003ca href=\"#src-1\"`) {
+		t.Errorf("the last rendering links the citation to its source:\n%s", body)
 	}
 
 	rec = serveAnswer(&fakeAnswerer{}, "/answer/stream?q=goroutines&results=10")
@@ -140,7 +150,7 @@ func eventNames(body string) string {
 
 func TestACheckedAnswerGoesOnAfterDone(t *testing.T) {
 	rec := serveAnswer(&fakeAnswerer{verifying: true}, "/answer/stream?q=goroutines")
-	if got := eventNames(rec.Body.String()); got != "sources,delta,delta,delta,done,claims,claim,verified" {
+	if got := eventNames(rec.Body.String()); got != "sources,delta,html,delta,delta,html,done,claims,claim,verified" {
 		t.Errorf("events = %s\n%s", got, rec.Body)
 	}
 
@@ -148,7 +158,7 @@ func TestACheckedAnswerGoesOnAfterDone(t *testing.T) {
 		t.Errorf("done says a check follows, claim carries the verdict:\n%s", rec.Body)
 	}
 
-	if got := eventNames(serveAnswer(&fakeAnswerer{verifying: true}, "/answer/stream?q=goroutines&verify=0").Body.String()); got != "sources,delta,delta,delta,done" {
+	if got := eventNames(serveAnswer(&fakeAnswerer{verifying: true}, "/answer/stream?q=goroutines&verify=0").Body.String()); got != "sources,delta,html,delta,delta,html,done" {
 		t.Errorf("verify=0: %s", got)
 	}
 

@@ -77,22 +77,26 @@ func NewEmbedder(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.Sec
 }
 
 func NewVectorStore(ctx context.Context, logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, dimension int) *vectorstore.Milvus {
-	addr, err := sm.GetSecretStringFromConfig("MILVUS_ADDR")
-	if err != nil {
-		logger.Fatal("MILVUS_ADDR is missing in Vault")
-	}
+	mc := MilvusConfig(logger, sm)
+	mc.Collection = vectorstore.CollectionName(cfg.VectorStore.CollectionPrefix, cfg.Embedding.Model, dimension)
+	mc.Dimension = dimension
 
-	store, err := vectorstore.NewMilvus(ctx, vectorstore.MilvusConfig{
-		Address:    addr,
-		Token:      optionalSecret(sm, "MILVUS_TOKEN"),
-		Collection: vectorstore.CollectionName(cfg.VectorStore.CollectionPrefix, cfg.Embedding.Model, dimension),
-		Dimension:  dimension,
-	})
+	store, err := vectorstore.NewMilvus(ctx, mc)
 	if err != nil {
 		logger.Fatal("Error initializing vector store:", err)
 	}
 
 	return store
+}
+
+// MilvusConfig is where Milvus is, from Vault: no collection chosen yet.
+func MilvusConfig(logger *zap.SugaredLogger, sm manager.SecretManager) vectorstore.MilvusConfig {
+	addr, err := sm.GetSecretStringFromConfig("MILVUS_ADDR")
+	if err != nil {
+		logger.Fatal("MILVUS_ADDR is missing in Vault")
+	}
+
+	return vectorstore.MilvusConfig{Address: addr, Token: optionalSecret(sm, "MILVUS_TOKEN")}
 }
 
 func optionalSecret(sm manager.SecretManager, key string) string {
