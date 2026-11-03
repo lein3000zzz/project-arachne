@@ -24,6 +24,7 @@ type fakeStore struct {
 	cleared  []string
 	rehashed string
 	tokens   map[string][]byte
+	limit    int
 }
 
 func newFakeStore() *fakeStore {
@@ -72,6 +73,11 @@ func (f *fakeStore) CreateSession(context.Context, []byte, int64, time.Duration,
 
 func (f *fakeStore) SaveToken(_ context.Context, _ int64, name string, tokenHash []byte) error {
 	f.tokens[name] = tokenHash
+	return nil
+}
+
+func (f *fakeStore) AddToken(_ context.Context, _ int64, name string, tokenHash []byte, limit int) error {
+	f.tokens[name], f.limit = tokenHash, limit
 	return nil
 }
 
@@ -240,6 +246,16 @@ func TestTokensAreStoredOnlyAsHashes(t *testing.T) {
 	}
 
 	if _, err := s.CreateToken(context.Background(), "lein", "bad name"); !errors.Is(err, ErrInvalidTokenName) {
+		t.Errorf("err = %v", err)
+	}
+
+	added, err := s.AddToken(context.Background(), 1, "claude-code")
+	sum = sha256.Sum256([]byte(added))
+	if err != nil || !bytes.Equal(store.tokens["claude-code"], sum[:]) || store.limit != MaxTokens {
+		t.Errorf("an added token: %v, limit %d", err, store.limit)
+	}
+
+	if _, err := s.AddToken(context.Background(), 1, "../x"); !errors.Is(err, ErrInvalidTokenName) {
 		t.Errorf("err = %v", err)
 	}
 }

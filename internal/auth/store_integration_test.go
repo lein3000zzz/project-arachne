@@ -5,6 +5,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 	"web-crawler/internal/database/dbtest"
@@ -220,5 +222,58 @@ func TestTokensRotateRevokeAndDieWithTheUser(t *testing.T) {
 
 	if err := s.RevokeToken(ctx, "lein", "make"); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("revoking twice: %v", err)
+	}
+}
+
+// Tokens made from the settings page: a name in use is refused, not replaced,
+// and an account holds at most MaxTokens.
+func TestTokensAddedByTheirOwnerAreListedAndCapped(t *testing.T) {
+	s, _ := newPostgresService(t)
+	ctx := context.Background()
+
+	user, err := s.CreateUser(ctx, "lein", "correct horse battery", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := s.AddToken(ctx, user.ID, "claude-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.AddToken(ctx, user.ID, "claude-code"); !errors.Is(err, ErrTokenExists) {
+		t.Errorf("a name in use: %v", err)
+	}
+
+	if u, err := s.AuthenticateToken(ctx, first); err != nil || u.ID != user.ID {
+		t.Fatalf("the first token stopped working: %+v, %v", u, err)
+	}
+
+	for i := 1; i < MaxTokens; i++ {
+		if _, err := s.AddToken(ctx, user.ID, fmt.Sprintf("agent-%d", i)); err != nil {
+			t.Fatal(i, err)
+		}
+	}
+
+	if _, err := s.AddToken(ctx, user.ID, "one-more"); !errors.Is(err, ErrTooManyTokens) {
+		t.Errorf("past the cap: %v", err)
+	}
+
+	tokens, err := s.Tokens(ctx, user.ID)
+	if err != nil || len(tokens) != MaxTokens || !slices.ContainsFunc(tokens, func(t Token) bool { return t.Name == "claude-code" && t.LastUsedAt != nil }) {
+		t.Errorf("listed %d tokens, %v: the used one should say when", len(tokens), err)
+	}
+
+	if err := s.RemoveToken(ctx, user.ID, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.AuthenticateToken(ctx, first); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("a removed token: %v", err)
+	}
+
+	other, _ := s.CreateUser(ctx, "someone", "correct horse battery", false)
+	if err := s.RemoveToken(ctx, other.ID, "agent-1"); !errors.Is(err, ErrTokenNotFound) {
+		t.Errorf("another account's token: %v", err)
 	}
 }

@@ -176,6 +176,12 @@ weblookup:
   timeout: 3m
   choose_tokens: 200
 
+mcp:
+  # an MCP server at /mcp for agents (Claude Code and the like), signed in
+  # with an API token each user makes on their settings page. It does what
+  # the pages do: search, ask, labs and their sources, reports.
+  enabled: true
+
 endpoints:
   # users may bring their own chat model on their settings page: an OpenAI- or
   # Anthropic-compatible endpoint, used for their answers, claim checks, lab

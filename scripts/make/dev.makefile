@@ -116,7 +116,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	RERANK_BASE_URL="$(RERANK_BASE_URL)" RERANK_API_KEY="$(RERANK_API_KEY)" \
 	scripts/vault-bootstrap.sh
 
-.PHONY: help up dev run crawl search eval rank reembed smoke user password token down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
+.PHONY: help up dev run crawl search eval rank reembed mcp smoke user password token down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
 
 help:
 	@echo "make up        full stack in docker (crawler included)"
@@ -138,6 +138,7 @@ help:
 	@echo "make reset     stop, delete volumes, bind mounts and $(ENV_FILE)"
 	@echo ""
 	@echo "make reembed  after embedding.model changes: rebuild the index from stored chunks (ARGS=-list, -dry-run, -drop ...)"
+	@echo "make mcp      install arachne-mcp (MCP over stdio, for agents that only start local commands) into $$(go env GOPATH)/bin"
 	@echo "make build / test / vet / tidy"
 	@echo "make test-integration   tests against the running Milvus, Redis and Postgres"
 	@echo ""
@@ -290,6 +291,11 @@ reset:
 	rm -rf deployments/opt output
 	rm -f $(ENV_FILE)
 	@echo "reset done. next: make up"
+
+# The MCP server itself is part of search, at /mcp; this is the local bridge
+# to it, for the user's machine, not an image.
+mcp:
+	$(GO) install ./cmd/arachne-mcp
 
 build:
 	$(GO) build ./...

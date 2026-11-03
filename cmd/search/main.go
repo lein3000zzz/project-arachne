@@ -143,7 +143,7 @@ func main() {
 		logger.Infow("Answering enabled", "serverModel", serverModel.Model, "ownEndpoints", own != nil)
 	}
 
-	services := searchapi.Services{Auth: accounts, Searcher: retriever, Answerer: answerer}
+	services := searchapi.Services{Auth: accounts, Tokens: accounts, Searcher: retriever, Answerer: answerer}
 	if own != nil {
 		services.Endpoints = own
 	}
@@ -225,6 +225,7 @@ func main() {
 	handler := searchapi.NewHandler(logger, services, searchapi.Config{
 		ServerModel:      serverModel,
 		WebLookupTimeout: cfg.WebLookup.Timeout.Std(),
+		MCP:              cfg.MCP.Enabled,
 		DefaultLimit:     cfg.Retrieval.DefaultLimit,
 		MaxLimit:         cfg.Retrieval.MaxLimit,
 		RequestTimeout:   cfg.Search.RequestTimeout.Std(),

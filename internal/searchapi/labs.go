@@ -300,7 +300,20 @@ func labURLs(ctx context.Context, service LabService, r *http.Request) ([]string
 
 	user, _ := auth.UserFrom(r.Context())
 
-	urls, err := service.PageURLs(ctx, user.ID, ids)
+	return labPages(ctx, service, user.ID, ids)
+}
+
+// labPages is the pages of the owner's labs; a lab without pages gives an
+// empty list, which searches nothing.
+func labPages(ctx context.Context, service LabService, owner int64, ids []int64) ([]string, error) {
+	switch {
+	case service == nil:
+		return nil, fmt.Errorf("%w: labs are not available", labs.ErrInvalid)
+	case len(ids) > maxLabsPerQuery:
+		return nil, fmt.Errorf("%w: at most %d labs at a time", labs.ErrInvalid, maxLabsPerQuery)
+	}
+
+	urls, err := service.PageURLs(ctx, owner, ids)
 	if err == nil && urls == nil {
 		urls = []string{}
 	}

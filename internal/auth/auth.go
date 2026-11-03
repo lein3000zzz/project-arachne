@@ -35,6 +35,13 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+// Token is an API token as its owner sees it: by name, never the token.
+type Token struct {
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
 type Config struct {
 	SessionTTL time.Duration
 	// Failed logins tolerated per username and per client address within
@@ -64,6 +71,9 @@ type Store interface {
 	DeleteSession(ctx context.Context, tokenHash []byte) error
 
 	SaveToken(ctx context.Context, userID int64, name string, tokenHash []byte) error
+	// AddToken fails with ErrTokenExists or, at limit tokens, ErrTooManyTokens.
+	AddToken(ctx context.Context, userID int64, name string, tokenHash []byte, limit int) error
+	ListTokens(ctx context.Context, userID int64) ([]Token, error)
 	DeleteToken(ctx context.Context, userID int64, name string) error
 	TokenUser(ctx context.Context, tokenHash []byte, touchAfter time.Duration) (User, error)
 
@@ -87,6 +97,8 @@ const (
 	tokenPrefix   = "arachne_"
 	maxUserAgent  = 256
 	maxTokenBytes = 128
+	// Per account: enough for every agent and machine to have its own.
+	MaxTokens = 20
 )
 
 var (
@@ -284,6 +296,31 @@ func (s *Service) RevokeToken(ctx context.Context, username, name string) error 
 	}
 
 	return s.store.DeleteToken(ctx, account.ID, name)
+}
+
+// AddToken returns a new API token of the user's, the only time it is ever
+// shown. Unlike CreateToken it refuses a name in use: replacing a token from
+// a page would cut off whatever uses it without a word.
+func (s *Service) AddToken(ctx context.Context, userID int64, name string) (string, error) {
+	if !tokenNamePattern.MatchString(name) {
+		return "", ErrInvalidTokenName
+	}
+
+	token := newToken(tokenPrefix)
+
+	if err := s.store.AddToken(ctx, userID, name, hashToken(token), MaxTokens); err != nil {
+		return "", err
+	}
+
+	return token, nil
+}
+
+func (s *Service) Tokens(ctx context.Context, userID int64) ([]Token, error) {
+	return s.store.ListTokens(ctx, userID)
+}
+
+func (s *Service) RemoveToken(ctx context.Context, userID int64, name string) error {
+	return s.store.DeleteToken(ctx, userID, name)
 }
 
 func (s *Service) startSession(ctx context.Context, user User, userAgent string) (Session, error) {

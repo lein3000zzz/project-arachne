@@ -334,7 +334,7 @@ func (s *Service) read(ctx context.Context, userID int64, found []Found, ev Even
 		changed := false
 
 		for i, id := range runIDs {
-			if id == "" || ended(reading[i].State) {
+			if id == "" || Ended(reading[i].State) {
 				continue
 			}
 
@@ -382,7 +382,7 @@ func (s *Service) read(ctx context.Context, userID int64, found []Found, ev Even
 
 func (s *Service) pending(runIDs []string, reading []Reading) bool {
 	for i, id := range runIDs {
-		if id != "" && !ended(reading[i].State) {
+		if id != "" && !Ended(reading[i].State) {
 			return true
 		}
 	}
@@ -390,7 +390,9 @@ func (s *Service) pending(runIDs []string, reading []Reading) bool {
 	return false
 }
 
-func ended(state string) bool {
+// Ended says whether a page picked has come as far as it will: read,
+// already known, or not to be had.
+func Ended(state string) bool {
 	switch runs.Status(state) {
 	case runs.StatusFinished, runs.StatusDropped, runs.StatusStalled:
 		return true

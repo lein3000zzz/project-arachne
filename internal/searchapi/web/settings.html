@@ -70,6 +70,41 @@
       <p class="note" id="modelNote" aria-live="polite"></p>
     </form>
   </section>
+
+  <section id="agents" hidden>
+    <h2>Agents</h2>
+    <p class="lede" id="agentsLede">Let an agent, such as Claude Code, search, ask, keep your labs and write your reports, over MCP.</p>
+    <p class="note">An agent signs in with a token of yours and acts as you: your labs, your model. Give each agent its own token,
+      so you can cut one off without the others. A token is shown once, when it is made.</p>
+
+    <form id="tokenForm" class="settings-form token-form">
+      <div class="field">
+        <label for="tokenName">Token name</label>
+        <input id="tokenName" type="text" placeholder="claude-code" autocomplete="off" required
+          pattern="[A-Za-z0-9._\-]{1,64}" title="1 to 64 letters, digits, '.', '_' or '-'">
+      </div>
+      <div class="buttons">
+        <button type="submit" class="action primary" id="tokenGo">Make a token</button>
+      </div>
+      <p class="note" id="tokenNote" aria-live="polite"></p>
+    </form>
+
+    <div class="token-new" id="tokenNew" hidden>
+      <p><strong>Copy it now:</strong> it is not shown again.</p>
+      <div class="copyable"><pre id="tokenValue"></pre><button type="button" class="action small" data-copy="tokenValue">Copy</button></div>
+      <div id="connect" hidden>
+        <p>Claude Code:</p>
+        <div class="copyable"><pre id="connectHTTP"></pre><button type="button" class="action small" data-copy="connectHTTP">Copy</button></div>
+        <p>Agents that only start local commands: install <code>arachne-mcp</code> (<code>make mcp</code>), then add</p>
+        <div class="copyable"><pre id="connectStdio"></pre><button type="button" class="action small" data-copy="connectStdio">Copy</button></div>
+      </div>
+    </div>
+
+    <table class="table">
+      <thead><tr><th>Name</th><th class="num">Made</th><th class="num">Last used</th><th></th></tr></thead>
+      <tbody id="tokens"></tbody>
+    </table>
+  </section>
 </main>
 
 <footer class="footer">
@@ -193,6 +228,82 @@ $("remove").addEventListener("click", async () => {
 });
 
 load();
+
+// ---- tokens for agents ----
+let mcpPath = "";
+
+function renderTokens(list, max) {
+  $("tokenGo").disabled = list.length >= max;
+  if (!list.length) {
+    $("tokens").replaceChildren(el("tr", {}, el("td", { colspan: "4", class: "note" }, "None yet.")));
+    return;
+  }
+  $("tokens").replaceChildren(...list.map((t) => {
+    const revoke = el("button", { type: "button", class: "action small danger" }, "Revoke");
+    revoke.addEventListener("click", async () => {
+      if (!confirm(`Revoke "${t.name}"? Whatever signs in with it stops working.`)) return;
+      try {
+        await send("DELETE", "/api/me/tokens/" + encodeURIComponent(t.name));
+        $("tokenNew").hidden = true;
+        await loadTokens();
+      } catch (err) {
+        $("tokenNote").replaceChildren(el("span", { class: "error" }, err.message));
+      }
+    });
+    return el("tr", {},
+      el("td", {}, t.name),
+      el("td", { class: "num", "data-label": "made" }, ago(t.created_at)),
+      el("td", { class: "num", "data-label": "last used" }, t.last_used_at ? ago(t.last_used_at) : "never"),
+      el("td", { class: "actions" }, el("div", { class: "buttons" }, revoke)));
+  }));
+}
+
+async function loadTokens() {
+  try {
+    const res = await call("/api/me/tokens");
+    if (res.status === 503) return;
+    const body = await res.json();
+    mcpPath = body.mcp;
+    $("agents").hidden = false;
+    if (!mcpPath) $("agentsLede").textContent = "Tokens let scripts and the make targets use the API as you.";
+    renderTokens(body.tokens, body.max);
+  } catch (_) {}
+}
+
+$("tokenForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("tokenName").value.trim();
+  $("tokenGo").disabled = true;
+  $("tokenNote").textContent = "";
+  try {
+    const made = await send("POST", "/api/me/tokens", { name });
+    const url = location.origin + mcpPath;
+    $("tokenValue").textContent = made.token;
+    $("connect").hidden = !mcpPath;
+    $("connectHTTP").textContent = `claude mcp add --transport http arachne ${url} --header "Authorization: Bearer ${made.token}"`;
+    $("connectStdio").textContent = JSON.stringify({ mcpServers: { arachne: {
+      command: "arachne-mcp", env: { ARACHNE_URL: location.origin, ARACHNE_TOKEN: made.token } } } }, null, 2);
+    $("tokenNew").hidden = false;
+    $("tokenName").value = "";
+  } catch (err) {
+    $("tokenNote").replaceChildren(el("span", { class: "error" }, err.message));
+  }
+  await loadTokens();
+});
+
+$("tokenNew").addEventListener("click", async (e) => {
+  const button = e.target.closest("[data-copy]");
+  if (!button) return;
+  try {
+    await navigator.clipboard.writeText($(button.dataset.copy).textContent);
+    button.textContent = "Copied";
+    setTimeout(() => { button.textContent = "Copy"; }, 1500);
+  } catch (_) {
+    button.textContent = "Select and copy";
+  }
+});
+
+loadTokens();
 </script>
 </body>
 </html>

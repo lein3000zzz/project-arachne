@@ -27,6 +27,7 @@ type Config struct {
 	Artifacts   Artifacts   `yaml:"artifacts"`
 	Endpoints   Endpoints   `yaml:"endpoints"`
 	WebLookup   WebLookup   `yaml:"weblookup"`
+	MCP         MCP         `yaml:"mcp"`
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
 	Gathering   Gathering   `yaml:"gathering"`
@@ -199,6 +200,12 @@ type WebLookup struct {
 	FreshFor     Duration `yaml:"fresh_for"`
 	Timeout      Duration `yaml:"timeout"`
 	ChooseTokens int      `yaml:"choose_tokens"`
+}
+
+// MCP is the server agents use at /mcp, signed in with their user's API
+// tokens; arachne-mcp brings it to agents that only start local commands.
+type MCP struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // Documents is reading the documents a lab adds - PDFs, Office files, EPUB,
@@ -408,6 +415,7 @@ func Default() Config {
 			Timeout:      Duration(3 * time.Minute),
 			ChooseTokens: 200,
 		},
+		MCP: MCP{Enabled: true},
 		Endpoints: Endpoints{
 			Enabled:     true,
 			TestTimeout: Duration(30 * time.Second),

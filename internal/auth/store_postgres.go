@@ -168,6 +168,45 @@ func (s *PostgresStore) SaveToken(ctx context.Context, userID int64, name string
 	return err
 }
 
+func (s *PostgresStore) AddToken(ctx context.Context, userID int64, name string, tokenHash []byte, limit int) error {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO api_tokens (token_hash, user_id, name)
+		SELECT $1, $2, $3 WHERE (SELECT count(*) FROM api_tokens WHERE user_id = $2) < $4
+		ON CONFLICT (user_id, name) DO NOTHING`,
+		tokenHash, userID, name, limit)
+	if err != nil || tag.RowsAffected() == 1 {
+		return err
+	}
+
+	var exists bool
+
+	err = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM api_tokens WHERE user_id = $1 AND name = $2)`, userID, name).Scan(&exists)
+
+	switch {
+	case err != nil:
+		return err
+	case exists:
+		return ErrTokenExists
+	}
+
+	return ErrTooManyTokens
+}
+
+func (s *PostgresStore) ListTokens(ctx context.Context, userID int64) ([]Token, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT name, created_at, last_used_at FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC, name`, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Token, error) {
+		var t Token
+		err := row.Scan(&t.Name, &t.CreatedAt, &t.LastUsedAt)
+
+		return t, err
+	})
+}
+
 func (s *PostgresStore) DeleteToken(ctx context.Context, userID int64, name string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM api_tokens WHERE user_id = $1 AND name = $2`, userID, name)
 	if err == nil && tag.RowsAffected() == 0 {

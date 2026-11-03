@@ -119,7 +119,9 @@ func sessionCookieOf(rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 func TestEverythingButSigningInNeedsAUser(t *testing.T) {
-	handler := newTestHandler(Services{}, testConfig())
+	cfg := testConfig()
+	cfg.MCP = true
+	handler := newTestHandler(Services{}, cfg)
 
 	for _, target := range []string{
 		"GET /search?q=x", "GET /answer?q=x", "GET /answer/stream?q=x",
@@ -127,6 +129,7 @@ func TestEverythingButSigningInNeedsAUser(t *testing.T) {
 		"GET /api/labs", "POST /api/labs", "POST /api/labs/plan", "GET /api/labs/1", "DELETE /api/labs/1",
 		"GET /api/labs/1/pages", "POST /api/labs/1/sources", "POST /api/labs/1/sources/2/refresh", "DELETE /api/labs/1/sources/2",
 		"PUT /api/labs/1/engines", "GET /api/engines", "POST /api/labs/1/gather", "GET /api/labs/1/gathering",
+		"GET /answer/web/stream?q=x", "GET /api/me/tokens", "POST /api/me/tokens", "DELETE /api/me/tokens/make", "POST /mcp",
 	} {
 		method, path, _ := strings.Cut(target, " ")
 
@@ -138,7 +141,13 @@ func TestEverythingButSigningInNeedsAUser(t *testing.T) {
 		bad := httptest.NewRequest(method, path, strings.NewReader("{}"))
 		bad.Header.Set("Authorization", "Bearer arachne_guessed")
 
-		if rec := do(handler, bad); rec.Code != http.StatusUnauthorized {
+		// Tokens are a browser's to manage: any token is turned away first.
+		want := http.StatusUnauthorized
+		if strings.HasPrefix(path, "/api/me/tokens") {
+			want = http.StatusForbidden
+		}
+
+		if rec := do(handler, bad); rec.Code != want {
 			t.Errorf("%s with a wrong token: %d", target, rec.Code)
 		}
 	}

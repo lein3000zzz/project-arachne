@@ -18,6 +18,8 @@ var (
 	ErrUserExists         = errors.New("that username is taken")
 	ErrUserNotFound       = errors.New("no such user")
 	ErrTokenNotFound      = errors.New("no such token")
+	ErrTokenExists        = errors.New("a token of that name exists: revoke it first, or pick another name")
+	ErrTooManyTokens      = fmt.Errorf("at most %d tokens per account: revoke one first", MaxTokens)
 	ErrMalformedHash      = errors.New("malformed password hash")
 )
 

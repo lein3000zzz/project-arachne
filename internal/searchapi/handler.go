@@ -37,6 +37,8 @@ type Config struct {
 	ServerModel ServerModel
 	// How long a look on the web may take before the answer starts.
 	WebLookupTimeout time.Duration
+	// Serve the MCP server at /mcp, for agents signed in with API tokens.
+	MCP bool
 }
 
 type Response struct {
@@ -63,6 +65,7 @@ type Services struct {
 	Artifacts ArtifactService
 	Endpoints EndpointService
 	WebLookup WebLookup
+	Tokens    TokenService
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -128,6 +131,18 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("POST /api/me/model/test", signIn.api(endpointsAPI.test))
 	mux.Handle("GET /settings", signIn.page(serveSettings))
 
+	tokensAPI := &tokensHandler{logger: logger, service: services.Tokens}
+	mux.Handle("GET /api/me/tokens", signIn.browser(tokensAPI.list))
+	mux.Handle("POST /api/me/tokens", signIn.browser(tokensAPI.add))
+	mux.Handle("DELETE /api/me/tokens/{name}", signIn.browser(tokensAPI.remove))
+
+	if cfg.MCP {
+		tokensAPI.mcp = mcpPath
+		mux.Handle(mcpPath, newMCPHandler(signIn, &mcpTools{
+			logger: logger, cfg: cfg, searcher: searcher, answers: answers, labs: labsAPI, gather: gatherAPI, artifacts: artifactsAPI,
+		}))
+	}
+
 	uploadsAPI := &uploadsHandler{logger: logger, files: services.Uploads}
 	mux.Handle("GET /uploads/{id}", signIn.page(uploadsAPI.serve))
 	mux.Handle("POST /api/labs/{id}/sources/{source}/refresh", signIn.api(labsAPI.refresh))
@@ -153,19 +168,10 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 		started := time.Now()
 
 		results, err := searcher.Search(ctx, req)
+		if err != nil {
+			status, message := searchFailure(logger, req, err)
+			writeJSON(w, status, errorResponse{Error: message})
 
-		switch {
-		case err == nil:
-		case errors.Is(err, retrieval.ErrEmptyQuery), errors.Is(err, retrieval.ErrInvalidRequest), errors.Is(err, retrieval.ErrUnknownMode),
-			errors.Is(err, retrieval.ErrNoReranker):
-			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-			return
-		case errors.Is(err, context.DeadlineExceeded):
-			writeJSON(w, http.StatusGatewayTimeout, errorResponse{Error: "search timed out"})
-			return
-		default:
-			logger.Errorw("Search failed", "query", req.Query, "mode", req.Mode, "error", err)
-			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "search failed"})
 			return
 		}
 
@@ -197,6 +203,20 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 		w.Header().Set("Referrer-Policy", "same-origin")
 		protected.ServeHTTP(w, r)
 	})
+}
+
+func searchFailure(logger *zap.SugaredLogger, req retrieval.Request, err error) (int, string) {
+	switch {
+	case errors.Is(err, retrieval.ErrEmptyQuery), errors.Is(err, retrieval.ErrInvalidRequest), errors.Is(err, retrieval.ErrUnknownMode),
+		errors.Is(err, retrieval.ErrNoReranker):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, context.DeadlineExceeded):
+		return http.StatusGatewayTimeout, "search timed out"
+	}
+
+	logger.Errorw("Search failed", "query", req.Query, "mode", req.Mode, "error", err)
+
+	return http.StatusInternalServerError, "search failed"
 }
 
 func parseRequest(r *http.Request, cfg Config) (retrieval.Request, error) {
