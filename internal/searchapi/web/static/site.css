@@ -325,6 +325,17 @@ section:last-of-type { border-bottom: 0; }
 .read .host { color: var(--muted); font-family: var(--mono); font-size: 0.75rem; margin-left: 0.4rem; }
 .read li.flash { background: var(--accent-soft); }
 .tag.source { border-color: var(--fg); color: var(--fg); }
+.tag.web { border-color: var(--pod); color: var(--fg); }
+
+.web-offer { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: center; margin: 0.8rem 0 0; font-size: 0.82rem; }
+.web-found { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.5rem; max-width: 72ch; }
+.web-found li { display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 0.4rem; font-size: 0.82rem; }
+.web-found .n { font-family: var(--nd); color: var(--muted); }
+.web-found a { overflow-wrap: anywhere; }
+.web-found .host { color: var(--muted); font-family: var(--mono); font-size: 0.75rem; margin-left: 0.4rem; }
+.web-found .reading { display: block; font-family: var(--mono); font-size: 0.75rem; margin-top: 0.15rem; }
+.web-found .reading .note { display: block; margin: 0.1rem 0 0; }
+.web-found li.skipped, .web-found li.skipped a { color: var(--muted); }
 
 .pages .page-summary { color: var(--muted); font-family: var(--nd); font-size: 0.76rem; margin: 0.2rem 0 0 2.6rem; }
 .pages li.set-aside a { color: var(--muted); }

@@ -19,6 +19,7 @@ import (
 	"web-crawler/internal/runs"
 	"web-crawler/internal/searchapi"
 	"web-crawler/internal/uploads"
+	"web-crawler/internal/weblookup"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -175,11 +176,29 @@ func main() {
 	}).KeepsUploads(uploadStore)
 	services.Labs, services.Uploads = labService, uploadStore
 
-	// Pages a gathering finds are crawled, so it needs crawling as well as the
-	// engines and the model; a nil search makes it report itself unavailable.
-	var search gathering.Search
+	// Gathering and looking on the web crawl what they find, so they need
+	// crawling as well as the engines; left nil, they say they are unavailable.
+	// Interfaces, not pointers: a nil pointer inside one is not nil.
+	var (
+		search     gathering.Search
+		lookSearch weblookup.Search
+		lookRuns   weblookup.Runs
+	)
+
 	if web := platform.NewWebSearch(logger, cfg, sm); web != nil && labRuns != nil {
-		search = web
+		search, lookSearch, lookRuns = web, web, labRuns
+	}
+
+	if cfg.WebLookup.Enabled && lookSearch != nil {
+		services.WebLookup = weblookup.New(lookSearch, lookRuns, weblookup.NewPostgresPages(db), chat, weblookup.Config{
+			Engines:      cfg.WebSearch.DefaultEngines,
+			Results:      cfg.WebLookup.Results,
+			Read:         cfg.WebLookup.Read,
+			FreshFor:     cfg.WebLookup.FreshFor.Std(),
+			Timeout:      cfg.WebLookup.Timeout.Std(),
+			ChooseTokens: cfg.WebLookup.ChooseTokens,
+			Poll:         time.Second,
+		})
 	}
 
 	gatherer := gathering.NewService(logger, gathering.NewPostgresStore(db), labService, search, chat, gathering.Config{
@@ -204,11 +223,12 @@ func main() {
 	services.Artifacts = artifactService
 
 	handler := searchapi.NewHandler(logger, services, searchapi.Config{
-		ServerModel:    serverModel,
-		DefaultLimit:   cfg.Retrieval.DefaultLimit,
-		MaxLimit:       cfg.Retrieval.MaxLimit,
-		RequestTimeout: cfg.Search.RequestTimeout.Std(),
-		AnswerTimeout:  cfg.Chat.RequestTimeout.Std(),
+		ServerModel:      serverModel,
+		WebLookupTimeout: cfg.WebLookup.Timeout.Std(),
+		DefaultLimit:     cfg.Retrieval.DefaultLimit,
+		MaxLimit:         cfg.Retrieval.MaxLimit,
+		RequestTimeout:   cfg.Search.RequestTimeout.Std(),
+		AnswerTimeout:    cfg.Chat.RequestTimeout.Std(),
 	})
 
 	server := &http.Server{

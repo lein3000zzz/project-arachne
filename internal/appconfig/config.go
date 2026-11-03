@@ -26,6 +26,7 @@ type Config struct {
 	Verify      Verify      `yaml:"verify"`
 	Artifacts   Artifacts   `yaml:"artifacts"`
 	Endpoints   Endpoints   `yaml:"endpoints"`
+	WebLookup   WebLookup   `yaml:"weblookup"`
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
 	Gathering   Gathering   `yaml:"gathering"`
@@ -184,6 +185,20 @@ type Endpoints struct {
 	// may be used with: a model server on the host, say.
 	AllowedHosts []string `yaml:"allowed_hosts"`
 	TestTimeout  Duration `yaml:"test_timeout"`
+}
+
+// WebLookup is "Look on the web" on the Look up page: the question searched
+// on the web, the results worth reading picked by the model, and those pages
+// crawled into the shared base before the answer reads them.
+type WebLookup struct {
+	Enabled bool `yaml:"enabled"`
+	// Results shown to the model, and pages it may pick.
+	Results int `yaml:"results"`
+	Read    int `yaml:"read"`
+	// A page fetched this recently is read from the index, not fetched again.
+	FreshFor     Duration `yaml:"fresh_for"`
+	Timeout      Duration `yaml:"timeout"`
+	ChooseTokens int      `yaml:"choose_tokens"`
 }
 
 // Documents is reading the documents a lab adds - PDFs, Office files, EPUB,
@@ -385,6 +400,14 @@ func Default() Config {
 			MaxTokens: 100,
 			Timeout:   Duration(3 * time.Minute),
 		},
+		WebLookup: WebLookup{
+			Enabled:      true,
+			Results:      8,
+			Read:         4,
+			FreshFor:     Duration(7 * 24 * time.Hour),
+			Timeout:      Duration(3 * time.Minute),
+			ChooseTokens: 200,
+		},
 		Endpoints: Endpoints{
 			Enabled:     true,
 			TestTimeout: Duration(30 * time.Second),
@@ -506,6 +529,9 @@ func (c *Config) Validate() error {
 		{"verify.max_claims", c.Verify.MaxClaims},
 		{"verify.max_tokens", c.Verify.MaxTokens},
 		{"artifacts.max_sections", c.Artifacts.MaxSections},
+		{"weblookup.results", c.WebLookup.Results},
+		{"weblookup.read", c.WebLookup.Read},
+		{"weblookup.choose_tokens", c.WebLookup.ChooseTokens},
 		{"artifacts.section_tokens", c.Artifacts.SectionTokens},
 		{"artifacts.outline_tokens", c.Artifacts.OutlineTokens},
 		{"gathering.searches", c.Gathering.Searches},
@@ -550,6 +576,8 @@ func (c *Config) Validate() error {
 		{"verify.timeout", c.Verify.Timeout},
 		{"artifacts.timeout", c.Artifacts.Timeout},
 		{"endpoints.test_timeout", c.Endpoints.TestTimeout},
+		{"weblookup.fresh_for", c.WebLookup.FreshFor},
+		{"weblookup.timeout", c.WebLookup.Timeout},
 		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
 		{"gathering.timeout", c.Gathering.Timeout},
 		{"documents.timeout", c.Documents.Timeout},

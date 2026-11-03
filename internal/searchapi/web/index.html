@@ -97,6 +97,13 @@
       <span class="badge-dot" aria-hidden="true">&#9679;</span>
       <span class="badge-text"></span>
     </div>
+    <div class="web-offer" id="webOffer" hidden></div>
+  </section>
+
+  <section id="webBox" hidden>
+    <h2>From the web</h2>
+    <p id="webMeta" class="note answer-meta" aria-live="polite"></p>
+    <ol class="web-found" id="webFound"></ol>
   </section>
 
   <section id="answerBox" hidden>
@@ -189,7 +196,7 @@
 const RESULTS = 10;
 let stream = null;
 let labs = [];
-let engines = { available: [], default: [] };
+let engines = { available: [], default: [], look_up: false };
 let current = "search";
 const ticked = new Set();
 
@@ -289,13 +296,66 @@ function renderResults(list) {
       signals(r)))));
 }
 
-function renderRead(sources, withLabs) {
+// Pages read from the web reach the answer as lab pages do, so the page, not
+// the server, tells them apart.
+const whence = (s, fromWeb) => (fromWeb.has(s.url) ? "web" : s.in_lab ? "lab" : "shared");
+
+function renderRead(sources, tagged, fromWeb) {
   $("read").replaceChildren(...sources.map((s) => el("li", { id: "src-" + s.n },
     el("span", { class: "n" }, "[" + s.n + "]"),
     el("span", {},
       el("a", { href: pageHref(s.url), target: "_blank", rel: "noopener noreferrer" }, s.title || (isUpload(s.url) ? "your file" : s.url)),
       el("span", { class: "host" }, isUpload(s.url) ? "your file" : s.host || ""),
-      withLabs ? el("span", { class: "tag" + (s.in_lab ? " lab" : "") }, s.in_lab ? "lab" : "shared") : null))));
+      tagged ? el("span", { class: "tag " + whence(s, fromWeb) }, whence(s, fromWeb)) : null))));
+}
+
+function sourceCounts(sources, fromWeb) {
+  const n = { web: 0, lab: 0, shared: 0 };
+  for (const s of sources) n[whence(s, fromWeb)]++;
+  return [["web", "from the web"], ["lab", "from your labs"], ["shared", "shared"]]
+    .filter(([k]) => n[k]).map(([k, name]) => `${n[k]} ${name}`).join(", ");
+}
+
+// ---- looking on the web: what the search found, and how far each page picked has come ----
+const ended = (state) => ["known", "failed", "finished", "dropped", "stalled"].includes(state);
+const readingNames = { known: ["✓", "finished", "in the index"], failed: ["✕", "dropped", "not started"] };
+
+function hostOf(url) {
+  try { return new URL(url).hostname; } catch (_) { return ""; }
+}
+
+function readingState(r) {
+  if (!r) return el("span", { class: "state queued" }, el("span", { class: "state-glyph", "aria-hidden": "true" }, "○"), "picked");
+  if (!readingNames[r.state]) return stateOf(r.state);
+  const [glyph, look, name] = readingNames[r.state];
+  return el("span", { class: "state " + look }, el("span", { class: "state-glyph", "aria-hidden": "true" }, glyph), name);
+}
+
+function renderWeb(found, reading) {
+  const by = new Map(reading.map((r) => [r.url, r]));
+  $("webFound").replaceChildren(...found.map((f, i) => {
+    const r = by.get(f.url);
+    return el("li", { class: f.read ? "picked" : "skipped" },
+      el("span", { class: "n" }, String(i + 1).padStart(2, "0")),
+      el("span", {},
+        el("a", { href: f.url, target: "_blank", rel: "noopener noreferrer" }, f.title || f.url),
+        el("span", { class: "host" }, hostOf(f.url)),
+        f.read ? el("span", { class: "reading" }, readingState(r),
+          r && r.indexed ? ` · ${r.indexed} indexed` : null,
+          r && r.rejected ? " · set aside on review" : null,
+          r && r.note ? el("span", { class: "note" }, r.note) : null) : null));
+  }));
+}
+
+// Offered once an answer is in, when the server can look: plainly when the
+// index held nothing clearly relevant.
+function offerWeb(q, weak) {
+  const box = $("webOffer");
+  box.hidden = !engines.look_up;
+  if (box.hidden) return;
+  const button = el("button", { type: "button", class: "action small" + (weak ? " primary" : "") }, weak ? "Look on the web" : "Look on the web too");
+  button.addEventListener("click", () => searchAndAnswer(q, true));
+  box.replaceChildren(...[weak ? el("span", { class: "note" }, "Nothing clearly relevant in the index.") : null, button].filter(Boolean));
 }
 
 // The answer is the server's rendering of its Markdown: sanitised there, with
@@ -406,12 +466,13 @@ function params(q) {
   return p;
 }
 
-// ---- search with an answer: one stream, results first ----
-function searchAndAnswer(q) {
+// ---- search with an answer: one stream, results first - after the web, when it is looked on ----
+function searchAndAnswer(q, web) {
   if (stream) stream.close();
   const started = performance.now();
   const withLabs = ticked.size > 0;
-  let text = "", count = 0, first = null, checking = false, answerID = null, rendered = false;
+  let text = "", count = 0, first = null, checking = false, answerID = null, rendered = false, weak = false;
+  let sources = [], fromWeb = new Set(), found = [], searched = "";
 
   $("go").disabled = true;
   $("answerBox").hidden = true;
@@ -423,21 +484,53 @@ function searchAndAnswer(q) {
   offerSave(null);
   checked = [];
   $("read").replaceChildren();
-  badge("looking up…", "busy");
+  $("webOffer").hidden = true;
+  $("webBox").hidden = true;
+  $("webFound").replaceChildren();
+  $("webMeta").textContent = "";
+  badge(web ? "searching the web…" : "looking up…", "busy");
 
   const p = params(q);
   p.set("results", String(RESULTS));
   if (withLabs) p.set("labs", [...ticked].join(","));
-  stream = new EventSource("/answer/stream?" + p);
+  stream = new EventSource((web ? "/answer/web/stream?" : "/answer/stream?") + p);
+
+  stream.addEventListener("searched", (e) => {
+    const s = JSON.parse(e.data);
+    found = s.results || [];
+    const picked = found.filter((f) => f.read).length;
+    const failed = Object.keys(s.failed || {});
+    searched = `searched “${s.query}” · ${found.length} results · ${picked} picked` + (failed.length ? ` · ${failed.join(", ")} failed` : "");
+    $("webMeta").textContent = searched;
+    $("webBox").hidden = false;
+    renderWeb(found, []);
+    if (picked) badge(`reading ${picked} pages from the web…`, "busy");
+  });
+
+  stream.addEventListener("reading", (e) => {
+    const reading = JSON.parse(e.data) || [];
+    renderWeb(found, reading);
+    badge(`reading the web · ${reading.filter((r) => ended(r.state)).length}/${reading.length}`, "busy");
+  });
+
+  stream.addEventListener("looked", (e) => {
+    const { pages, error } = JSON.parse(e.data);
+    fromWeb = new Set(pages || []);
+    $("webBox").hidden = false;
+    $("webMeta").textContent = [searched, error || (fromWeb.size ? `${fromWeb.size} pages read` : "nothing could be read"),
+      fromWeb.size ? "" : "answering from the index"].filter(Boolean).join(" · ");
+    badge("looking up…", "busy");
+  });
 
   stream.addEventListener("results", (e) => renderResults(JSON.parse(e.data) || []));
 
   stream.addEventListener("sources", (e) => {
     const list = JSON.parse(e.data) || [];
+    sources = list;
     count = list.length;
     if (!count) return;
     $("answerBox").hidden = false;
-    renderRead(list, withLabs);
+    renderRead(list, withLabs || fromWeb.size > 0, fromWeb);
     badge(`${count} sources · reading…`, "busy");
   });
 
@@ -460,15 +553,17 @@ function searchAndAnswer(q) {
     const total = ((performance.now() - started) / 1000).toFixed(1);
     const wait = first ? ((first - started) / 1000).toFixed(1) : "–";
     $("answerMeta").textContent = (done.weak ? "nothing clearly relevant found · " : "") +
-      `${scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited · ` +
+      `${fromWeb.size ? sourceCounts(sources, fromWeb) : scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited · ` +
       `${done.usage.output_tokens} tokens · first word ${wait} s · ${total} s`;
     $("go").disabled = false;
     checking = done.verifying;
     answerID = done.id;
+    weak = done.weak;
     if (!checking) {
       stream.close();
       badge(`${done.model} · ${total} s`);
       offerSave(answerID, q);
+      if (!web) offerWeb(q, weak);
       return;
     }
     badge("checking claims…", "busy");
@@ -497,6 +592,7 @@ function searchAndAnswer(q) {
     $("verifyMeta").textContent = summarize(v.seconds) + ` · ${v.model}`;
     badge(`checked · ${((performance.now() - started) / 1000).toFixed(1)} s`);
     offerSave(answerID, q);
+    if (!web) offerWeb(q, weak);
   });
 
   stream.addEventListener("error", (e) => {
@@ -512,6 +608,8 @@ function searchAndAnswer(q) {
       badge("the check broke off: " + message, "failed");
     } else {
       badge(text ? "the answer broke off: " + message : "no answer: " + message, "failed");
+      // The server said why: the web may hold what the index does not.
+      if (!text && !web && e.data) offerWeb(q, true);
     }
     $("go").disabled = false;
   });
@@ -522,6 +620,8 @@ async function searchOnly(q) {
   if (stream) stream.close();
   $("go").disabled = true;
   $("answerBox").hidden = true;
+  $("webBox").hidden = true;
+  $("webOffer").hidden = true;
   badge("looking up…", "busy");
   try {
     const p = params(q);

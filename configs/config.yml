@@ -161,6 +161,21 @@ verify:
   max_tokens: 100
   timeout: 3m
 
+weblookup:
+  # "Look on the web" on the Look up page, for when the index holds too
+  # little: the question is searched with websearch.default_engines, the model
+  # picks the results worth reading, and those pages are crawled, reviewed and
+  # indexed into the shared base before the answer reads them. Needs SearXNG
+  # and crawling. PDFs among them are not read: documents are lab sources.
+  enabled: true
+  results: 8
+  read: 4
+  # a page fetched this recently is read from the index, not fetched again
+  fresh_for: 168h
+  # crawls not done by then are left, and the answer reads what is indexed
+  timeout: 3m
+  choose_tokens: 200
+
 endpoints:
   # users may bring their own chat model on their settings page: an OpenAI- or
   # Anthropic-compatible endpoint, used for their answers, claim checks, lab

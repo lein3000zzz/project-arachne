@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"web-crawler/internal/llm"
 	"web-crawler/internal/markdown"
 	"web-crawler/internal/retrieval"
+	"web-crawler/internal/weblookup"
 
 	"go.uber.org/zap"
 )
@@ -25,6 +27,12 @@ type answerHandler struct {
 	timeout    time.Duration
 	maxResults int
 	recent     *recentAnswers
+	web        WebLookup
+	webTimeout time.Duration
+}
+
+type WebLookup interface {
+	Look(ctx context.Context, userID int64, question string, events weblookup.Events) ([]string, error)
 }
 
 func (h *answerHandler) request(r *http.Request) (answer.Request, error) {
@@ -155,6 +163,70 @@ func (h *answerHandler) verifies(r *http.Request) bool {
 // goes on: claims, how it splits into claims, with the rendering carrying a
 // pending mark for each; a claim event for each verdict; then verified.
 func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
+	h.stream(w, r, h.timeout, nil)
+}
+
+// serveWebStream looks on the web for the question first - searched, then
+// reading events while the pages picked are crawled, then looked with the
+// pages read - and answers from those pages, with the labs ticked, before the
+// rest of the index. When the web gives nothing, looked says why and the index
+// answers as it would have.
+func (h *answerHandler) serveWebStream(w http.ResponseWriter, r *http.Request) {
+	if h.web == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: weblookup.ErrUnavailable.Error()})
+		return
+	}
+
+	h.stream(w, r, h.timeout+h.webTimeout, func(ctx context.Context, req *answer.Request, send func(string, any) error) error {
+		user, _ := auth.UserFrom(ctx)
+
+		pages, err := h.web.Look(ctx, user.ID, req.Query, weblookup.Events{
+			Searched: func(query string, found []weblookup.Found, failed map[string]string) error {
+				return send("searched", map[string]any{"query": query, "results": found, "failed": failed})
+			},
+			Reading: func(reading []weblookup.Reading) error { return send("reading", reading) },
+		})
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+
+			return send("looked", map[string]any{"pages": []string{}, "error": h.webFailure(err)})
+		}
+
+		for _, p := range pages {
+			if !slices.Contains(req.LabURLs, p) {
+				req.LabURLs = append(req.LabURLs, p)
+			}
+		}
+
+		req.Fresh = len(pages) > 0
+
+		// Before the sources: the page tags these as from the web, not a lab.
+		return send("looked", map[string]any{"pages": pages})
+	})
+}
+
+// webFailure says why looking on the web did not work.
+func (h *answerHandler) webFailure(err error) string {
+	switch {
+	case errors.Is(err, weblookup.ErrUnavailable), errors.Is(err, weblookup.ErrNoEngines), errors.Is(err, weblookup.ErrNothingFound),
+		errors.Is(err, weblookup.ErrBusy):
+		return err.Error()
+	case errors.Is(err, context.DeadlineExceeded):
+		return "looking on the web took too long"
+	}
+
+	h.logger.Warnw("Looking on the web failed", "error", err)
+
+	return "the web could not be searched"
+}
+
+// stream answers over server-sent events; before, when given, runs once the
+// stream is open - looking on the web - and may change the request. Its error
+// ends the stream: the reader is gone.
+func (h *answerHandler) stream(w http.ResponseWriter, r *http.Request, timeout time.Duration,
+	before func(ctx context.Context, req *answer.Request, send func(string, any) error) error) {
 	if h.answerer == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "answering is not configured"})
 		return
@@ -172,7 +244,7 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := h.context(r)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	if req.LabURLs, err = labURLs(ctx, h.labs, r); err != nil {
@@ -200,6 +272,12 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 
 		return nil
+	}
+
+	if before != nil {
+		if err := before(ctx, &req, send); err != nil {
+			return
+		}
 	}
 
 	// A write failing means the reader is gone; returning the error stops the
@@ -247,7 +325,7 @@ func (h *answerHandler) serveStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := send("done", map[string]any{"cited": res.Cited, "scope": res.Scope, "weak": res.Weak, "model": res.Model, "usage": res.Usage,
-		"verifying": verify, "id": id}); err != nil || !verify {
+		"verifying": verify, "id": id, "web": before != nil}); err != nil || !verify {
 		return
 	}
 

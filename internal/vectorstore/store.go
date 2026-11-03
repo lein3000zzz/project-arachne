@@ -39,6 +39,9 @@ type Filter struct {
 	// list matches nothing: a lab without pages is not the whole index. Nil
 	// searches everything but uploaded files.
 	URLs []string
+	// Sees chunks written moments ago, waiting for them if need be. Otherwise
+	// a search may miss the last seconds of writes.
+	Strong bool
 }
 
 // Searcher returns chunks best first. Dense scores are cosine similarities, text

@@ -47,6 +47,10 @@ func (m *Milvus) search(ctx context.Context, vector entity.Vector, field string,
 		opt = opt.WithAnnParam(annParam)
 	}
 
+	if filter.Strong {
+		opt = opt.WithConsistencyLevel(entity.ClStrong)
+	}
+
 	// Template parameters, never string building: the host comes from the request,
 	// the URLs from whatever pages were crawled.
 	var conditions []string

@@ -56,7 +56,7 @@ func TestGatheringEndpoints(t *testing.T) {
 	}
 
 	if rec := serveGather(g, http.MethodGet, "/api/engines", ""); rec.Code != http.StatusOK ||
-		rec.Body.String() != `{"available":["bing","brave"],"default":["brave"]}`+"\n" {
+		rec.Body.String() != `{"available":["bing","brave"],"default":["brave"],"look_up":false}`+"\n" {
 		t.Errorf("engines: %d %s", rec.Code, rec.Body)
 	}
 
@@ -80,7 +80,7 @@ func TestGatheringEndpoints(t *testing.T) {
 
 func TestWithoutWebSearch(t *testing.T) {
 	if rec := serveGather(nil, http.MethodGet, "/api/engines", ""); rec.Code != http.StatusOK ||
-		rec.Body.String() != `{"available":[],"default":[]}`+"\n" {
+		rec.Body.String() != `{"available":[],"default":[],"look_up":false}`+"\n" {
 		t.Errorf("engines: %d %s", rec.Code, rec.Body)
 	}
 

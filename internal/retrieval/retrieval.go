@@ -39,6 +39,8 @@ type Request struct {
 	PageRankWeight *float64
 	SiteRankWeight *float64
 	Rerank         *bool
+	// The pages were indexed moments ago: see vectorstore.Filter.Strong.
+	Strong bool
 }
 
 // Signal is a page's place in one ranked list: its rank among pages, from 1, and
@@ -135,7 +137,7 @@ func (r *Retriever) Search(ctx context.Context, req Request) ([]Result, error) {
 		return nil, ErrNoReranker
 	}
 
-	filter := vectorstore.Filter{Host: strings.ToLower(strings.TrimSpace(req.Host)), URLs: req.URLs}
+	filter := vectorstore.Filter{Host: strings.ToLower(strings.TrimSpace(req.Host)), URLs: req.URLs, Strong: req.Strong}
 
 	var dense, bm25 []page
 

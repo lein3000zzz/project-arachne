@@ -24,6 +24,14 @@ type gatherHandler struct {
 	logger  *zap.SugaredLogger
 	service Gatherer
 	labs    *labsHandler
+	// Whether a question may be looked up on the web, with these engines.
+	lookUp bool
+}
+
+type enginesResponse struct {
+	Available []string `json:"available"`
+	Default   []string `json:"default"`
+	LookUp    bool     `json:"look_up"`
 }
 
 type gatherRequest struct {
@@ -32,7 +40,7 @@ type gatherRequest struct {
 
 // engines lists what a lab may search; none at all when web search is off.
 func (h *gatherHandler) engines(w http.ResponseWriter, r *http.Request) {
-	none := map[string][]string{"available": {}, "default": {}}
+	none := enginesResponse{Available: []string{}, Default: []string{}}
 
 	if h.service == nil {
 		writeJSON(w, http.StatusOK, none)
@@ -50,7 +58,7 @@ func (h *gatherHandler) engines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string][]string{"available": available, "default": defaults})
+	writeJSON(w, http.StatusOK, enginesResponse{Available: available, Default: defaults, LookUp: h.lookUp && len(available) > 0})
 }
 
 func (h *gatherHandler) start(w http.ResponseWriter, r *http.Request) {

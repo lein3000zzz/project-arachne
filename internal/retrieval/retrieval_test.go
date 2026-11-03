@@ -169,7 +169,7 @@ func TestSearchPrefixesOnlyTheEmbeddedQuery(t *testing.T) {
 	embedder := &fakeEmbedder{}
 
 	if _, err := newRetriever(t, store, embedder).Search(context.Background(),
-		Request{Query: "  goroutines  ", Limit: 5, Host: " Go.Dev ", URLs: []string{"https://go.dev/doc/"}, Mode: ModeHybrid}); err != nil {
+		Request{Query: "  goroutines  ", Limit: 5, Host: " Go.Dev ", URLs: []string{"https://go.dev/doc/"}, Mode: ModeHybrid, Strong: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,8 +182,8 @@ func TestSearchPrefixesOnlyTheEmbeddedQuery(t *testing.T) {
 	}
 
 	for _, f := range store.filters {
-		if f.Host != "go.dev" || len(f.URLs) != 1 || f.URLs[0] != "https://go.dev/doc/" {
-			t.Errorf("filter %+v, want host go.dev and the one URL", f)
+		if f.Host != "go.dev" || len(f.URLs) != 1 || f.URLs[0] != "https://go.dev/doc/" || !f.Strong {
+			t.Errorf("filter %+v, want host go.dev, the one URL, strong", f)
 		}
 	}
 }

@@ -35,6 +35,8 @@ type Config struct {
 	AnswerTimeout  time.Duration
 	// Shown on the settings page beside a user's own endpoint.
 	ServerModel ServerModel
+	// How long a look on the web may take before the answer starts.
+	WebLookupTimeout time.Duration
 }
 
 type Response struct {
@@ -60,6 +62,7 @@ type Services struct {
 	Uploads   UploadStore
 	Artifacts ArtifactService
 	Endpoints EndpointService
+	WebLookup WebLookup
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -77,9 +80,10 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	recent := newRecentAnswers(recentAnswersKept, recentAnswersFor)
 
 	answers := &answerHandler{logger: logger, answerer: services.Answerer, labs: services.Labs, timeout: cfg.AnswerTimeout, maxResults: cfg.MaxLimit,
-		recent: recent}
+		recent: recent, web: services.WebLookup, webTimeout: cfg.WebLookupTimeout}
 	mux.Handle("GET /answer", signIn.api(answers.serveJSON))
 	mux.Handle("GET /answer/stream", signIn.api(answers.serveStream))
+	mux.Handle("GET /answer/web/stream", signIn.api(answers.serveWebStream))
 
 	runsAPI := &runsHandler{logger: logger, service: services.Runs}
 	mux.Handle("POST /api/runs", signIn.api(runsAPI.submit))
@@ -94,7 +98,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("DELETE /api/labs/{id}", signIn.api(labsAPI.delete))
 	mux.Handle("PUT /api/labs/{id}/engines", signIn.api(labsAPI.setEngines))
 
-	gatherAPI := &gatherHandler{logger: logger, service: services.Gatherer, labs: labsAPI}
+	gatherAPI := &gatherHandler{logger: logger, service: services.Gatherer, labs: labsAPI, lookUp: services.WebLookup != nil}
 	mux.Handle("GET /api/engines", signIn.api(gatherAPI.engines))
 	mux.Handle("POST /api/labs/{id}/gather", signIn.api(gatherAPI.start))
 	mux.Handle("GET /api/labs/{id}/gathering", signIn.api(gatherAPI.latest))

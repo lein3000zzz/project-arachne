@@ -58,7 +58,10 @@ type Request struct {
 	Host  string
 	// Non-nil: the pages of the labs to answer from, searched first.
 	LabURLs []string
-	Mode    retrieval.Mode
+	// Some of LabURLs were indexed moments ago - looked up on the web - and
+	// their search waits until it sees them.
+	Fresh bool
+	Mode  retrieval.Mode
 	// Passed to retrieval; nil takes its defaults.
 	PageRankWeight *float64
 	SiteRankWeight *float64
@@ -217,6 +220,7 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 		results, err := s.search.Search(ctx, retrieval.Request{
 			Query: req.Query, Host: req.Host, URLs: urls, Mode: req.Mode, Limit: limit,
 			PageRankWeight: req.PageRankWeight, SiteRankWeight: req.SiteRankWeight, Rerank: req.Rerank,
+			Strong: req.Fresh && urls != nil,
 		})
 
 		return quotable(results), err

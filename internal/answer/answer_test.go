@@ -216,6 +216,23 @@ func TestLabsThatHoldEnoughAreNotWidened(t *testing.T) {
 	}
 }
 
+// Pages read from the web moments ago are waited for; the shared base, with
+// nothing new in it, is not.
+func TestFreshPagesAreSearchedStrongly(t *testing.T) {
+	search := &scopedSearch{lab: []retrieval.Result{reranked("w1", 3), reranked("w2", 1)}, shared: []retrieval.Result{reranked("s1", 5)}}
+
+	if _, err := labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
+		Request{Query: "q", LabURLs: []string{"w1", "w2"}, Fresh: true}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, req := range search.requests {
+		if req.Strong != (req.URLs != nil) {
+			t.Errorf("search of %v strong: %v", req.URLs, req.Strong)
+		}
+	}
+}
+
 func searchedBoth(requests []retrieval.Request, labURLs int) bool {
 	var lab, shared int
 
