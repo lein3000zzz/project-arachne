@@ -27,18 +27,21 @@ type Lab struct {
 	Pages int `json:"pages"`
 	// Of those, turned down on review before indexing.
 	SetAside int `json:"set_aside"`
-	// The external search engines gathering may use for this lab.
+	// The external search engines research may use for this lab.
 	Engines []string `json:"engines"`
 }
 
 const (
 	KindLink = "link"
-	// Found by the model searching the web while gathering.
+	// Found by the model searching the web while gathering, before research
+	// replaced it.
 	KindSearch = "search"
 	// Taken from what one of the lab's documents links to or cites.
 	KindReference = "reference"
 	// A file the user uploaded; its address is package uploads'.
 	KindUpload = "upload"
+	// A work research found and chose to read.
+	KindResearch = "research"
 )
 
 type Source struct {

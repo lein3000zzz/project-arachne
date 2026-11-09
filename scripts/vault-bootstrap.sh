@@ -26,6 +26,7 @@ CHAT_BASE_URL="${CHAT_BASE_URL:-}"
 CHAT_API_KEY="${CHAT_API_KEY:-}"
 RERANK_BASE_URL="${RERANK_BASE_URL:-}"
 RERANK_API_KEY="${RERANK_API_KEY:-}"
+OPENALEX_API_KEY="${OPENALEX_API_KEY:-}"
 WEBSEARCH_BASE_URL="${WEBSEARCH_BASE_URL:-}"
 EMBEDDING_BASE_URL_OVERRIDE="${EMBEDDING_BASE_URL:-}"
 EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
@@ -241,6 +242,10 @@ case "$RERANKER" in
 esac
 if [ -n "$RERANK_API_KEY" ]; then
   vault_auth kv put kv/main/rerank_key RERANK_API_KEY="$RERANK_API_KEY" >/dev/null
+fi
+# Kept once given: a later bootstrap without it leaves it in place.
+if [ -n "$OPENALEX_API_KEY" ]; then
+  vault_auth kv put kv/main/openalex_key OPENALEX_API_KEY="$OPENALEX_API_KEY" >/dev/null
 fi
 # Seals the API keys users save for their own chat models. Made once and never
 # replaced: a new one would leave every saved key unreadable.

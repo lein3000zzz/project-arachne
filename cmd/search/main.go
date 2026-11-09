@@ -10,11 +10,11 @@ import (
 	"web-crawler/internal/answer"
 	"web-crawler/internal/artifacts"
 	"web-crawler/internal/endpoints"
-	"web-crawler/internal/gathering"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/pages"
 	"web-crawler/internal/platform"
+	"web-crawler/internal/research"
 	"web-crawler/internal/retrieval"
 	"web-crawler/internal/runs"
 	"web-crawler/internal/searchapi"
@@ -176,17 +176,28 @@ func main() {
 	}).KeepsUploads(uploadStore)
 	services.Labs, services.Uploads = labService, uploadStore
 
-	// Gathering and looking on the web crawl what they find, so they need
-	// crawling as well as the engines; left nil, they say they are unavailable.
-	// Interfaces, not pointers: a nil pointer inside one is not nil.
+	// Looking on the web crawls what it finds, so it needs crawling as well as
+	// the engines; research can map a topic without crawling, and reads
+	// nothing then. Left nil, they say they are unavailable. Interfaces, not
+	// pointers: a nil pointer inside one is not nil.
 	var (
-		search     gathering.Search
-		lookSearch weblookup.Search
-		lookRuns   weblookup.Runs
+		lookSearch     weblookup.Search
+		lookRuns       weblookup.Runs
+		researchSearch research.Search
+		scholar        research.Scholar
 	)
 
-	if web := platform.NewWebSearch(logger, cfg, sm); web != nil && labRuns != nil {
-		search, lookSearch, lookRuns = web, web, labRuns
+	web := platform.NewWebSearch(logger, cfg, sm)
+	if web != nil {
+		researchSearch, services.Engines = web, web
+	}
+
+	if web != nil && labRuns != nil {
+		lookSearch, lookRuns = web, labRuns
+	}
+
+	if client := platform.NewOpenAlex(logger, cfg, sm); client != nil {
+		scholar = client
 	}
 
 	if cfg.WebLookup.Enabled && lookSearch != nil {
@@ -201,16 +212,25 @@ func main() {
 		})
 	}
 
-	gatherer := gathering.NewService(logger, gathering.NewPostgresStore(db), labService, search, chat, gathering.Config{
-		Searches:       cfg.Gathering.Searches,
-		Sources:        cfg.Gathering.Sources,
-		Results:        cfg.Gathering.Results,
-		MaxTokens:      cfg.Gathering.MaxTokens,
-		Timeout:        cfg.Gathering.Timeout.Std(),
-		DefaultEngines: cfg.WebSearch.DefaultEngines,
+	researchService := research.NewService(logger, research.NewPostgresStore(db), labService, researchSearch, scholar, chat, research.Config{
+		Budget:        research.Budget{Found: cfg.Research.Found, Read: cfg.Research.Read},
+		MaxBudget:     research.Budget{Found: cfg.Research.MaxFound, Read: cfg.Research.MaxRead},
+		Rounds:        cfg.Research.Rounds,
+		JudgeBatch:    cfg.Research.JudgeBatch,
+		SearchResults: cfg.Research.SearchResults,
+		PaperResults:  cfg.Research.PaperResults,
+		PerWork:       cfg.Research.PerWork,
+		MaxTokens:     cfg.Research.MaxTokens,
+		RoundWait:     cfg.Research.RoundWait.Std(),
+		Timeout:       cfg.Research.Timeout.Std(),
+		Poll:          5 * time.Second,
+		Documents:     cfg.Documents.Enabled,
 	})
-	gatherer.Recover(context.Background())
-	services.Gatherer = gatherer
+	researchService.Recover(context.Background())
+
+	if cfg.Research.Enabled {
+		services.Research = researchService
+	}
 
 	artifactService := artifacts.NewService(logger, artifacts.NewPostgresStore(db), labService, reportAnswers, reportChat, artifacts.Config{
 		MaxSections:   cfg.Artifacts.MaxSections,
@@ -226,6 +246,7 @@ func main() {
 		ServerModel:      serverModel,
 		WebLookupTimeout: cfg.WebLookup.Timeout.Std(),
 		MCP:              cfg.MCP.Enabled,
+		DefaultEngines:   cfg.WebSearch.DefaultEngines,
 		DefaultLimit:     cfg.Retrieval.DefaultLimit,
 		MaxLimit:         cfg.Retrieval.MaxLimit,
 		RequestTimeout:   cfg.Search.RequestTimeout.Std(),
@@ -258,12 +279,12 @@ func main() {
 		logger.Warnw("Search server did not drain in time", "error", err)
 	}
 
-	if err := gatherer.Shutdown(shutdownCtx); err != nil {
-		logger.Warnw("Gatherings did not stop in time", "error", err)
-	}
-
 	if err := artifactService.Shutdown(shutdownCtx); err != nil {
 		logger.Warnw("Artifact builds did not stop in time", "error", err)
+	}
+
+	if err := researchService.Shutdown(shutdownCtx); err != nil {
+		logger.Warnw("Research did not stop in time", "error", err)
 	}
 
 	db.Close()

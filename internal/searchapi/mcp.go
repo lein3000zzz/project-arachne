@@ -13,11 +13,10 @@ import (
 	"web-crawler/internal/answer"
 	"web-crawler/internal/artifacts"
 	"web-crawler/internal/auth"
-	"web-crawler/internal/gathering"
 	"web-crawler/internal/labs"
+	"web-crawler/internal/research"
 	"web-crawler/internal/retrieval"
 	"web-crawler/internal/weblookup"
-	"web-crawler/internal/websearch"
 
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,7 +27,8 @@ const mcpPath = "/mcp"
 
 const mcpInstructions = `arachne answers questions from web pages it has crawled, reviewed and indexed, citing each claim by its source; a claim the cited source does not bear out is marked, never hidden.
 A lab is a topic with its sources: pages and sites the user (or you) added by address, crawled into the index. Answers and searches can be narrowed to labs, and reports are written from a lab's pages alone.
-You steer, you never write what a lab knows: add sources by URL, ask, gather, request reports. Long work (crawling sources, gathering, reports) runs in the background: check on it with get_lab or read_report.`
+Researching a lab maps what exists on its topic - papers and web works found by search and by following citations, each judged, the kept ones read into the lab - and estimates how much is still unfound.
+You steer, you never write what a lab knows: add sources by URL, ask, research, request reports. Long work (crawling sources, research, reports) runs in the background: check on it with get_lab, read_map or read_report.`
 
 // mcpTools are the same services as the pages, as tools for agents that sign
 // in with an API token. The token's user is the one acting: the labs, the
@@ -39,7 +39,7 @@ type mcpTools struct {
 	searcher  Searcher
 	answers   *answerHandler
 	labs      *labsHandler
-	gather    *gatherHandler
+	research  *researchHandler
 	artifacts *artifactsHandler
 }
 
@@ -137,7 +137,7 @@ func (t *mcpTools) register(s *mcp.Server) {
 		Description: "List the user's labs: topics with their sources and how many pages are indexed."},
 		t.listLabs)
 	addTool(s, &mcp.Tool{Name: "get_lab", Annotations: readOnly("Show a lab"),
-		Description: "Show a lab: its sources and how far each one's crawl has come, its latest gathering, and its reports."},
+		Description: "Show a lab: its sources and how far each one's crawl has come, its latest research and how complete its map looks, and its reports."},
 		t.getLab)
 	addTool(s, &mcp.Tool{Name: "create_lab", Annotations: changes("Create a lab", true),
 		Description: "Create a lab on a topic, optionally with sources to crawl (pages or sites, by URL). Crawling and indexing run in the background: check with get_lab."},
@@ -145,9 +145,12 @@ func (t *mcpTools) register(s *mcp.Server) {
 	addTool(s, &mcp.Tool{Name: "add_sources", Annotations: changes("Add sources to a lab", true),
 		Description: "Add pages or sites, by URL, to a lab as sources. Each is crawled, reviewed and indexed in the background: check with get_lab."},
 		t.addSources)
-	addTool(s, &mcp.Tool{Name: "gather", Annotations: changes("Gather sources", true),
-		Description: "Have the model search the web for sources the lab lacks and add the ones worth reading, optionally steered by a request. Runs in the background (a minute or more): get_lab shows the gathering and what it added."},
-		t.startGathering)
+	addTool(s, &mcp.Tool{Name: "research", Annotations: changes("Research a lab's topic", true),
+		Description: "Map what exists on a lab's topic: rounds of web and OpenAlex search and of following what kept works cite and what cites them; the model judges each work by what it shows, niche or famous, and the kept ones are read into the lab. Runs in the background, often tens of minutes, and stops when new rounds find little new. Check with get_lab; read the map with read_map."},
+		t.startResearch)
+	addTextTool(s, &mcp.Tool{Name: "read_map", Annotations: readOnly("Read a lab's map"),
+		Description: "Read a lab's research map as Markdown: its subtopics, the works kept in each with how they were found and whether they are read, how complete the map looks, and optionally what was dropped and why."},
+		t.readMap)
 	addTool(s, &mcp.Tool{Name: "draft_report", Annotations: readOnly("Draft a report outline"),
 		Description: "Draft the outline of a report on a lab: a title and sections, each with what it is to cover. Nothing is written yet; pass the outline, changed as you like, to write_report."},
 		t.draftReport)
@@ -594,13 +597,35 @@ type sourceView struct {
 	Note  string `json:"note,omitempty"`
 }
 
-type gatheringView struct {
+type researchView struct {
 	Status  string `json:"status"`
-	Request string `json:"request,omitempty"`
-	Summary string `json:"summary,omitempty"`
+	Stopped string `json:"stopped,omitempty"`
 	Error   string `json:"error,omitempty"`
-	// Sources it added, by URL.
-	Added []string `json:"added,omitempty"`
+	Rounds  int    `json:"rounds"`
+	Works   int    `json:"works"`
+	Kept    int    `json:"kept"`
+	Pending int    `json:"not_yet_judged"`
+	Read    int    `json:"read"`
+	InIndex int    `json:"in_index"`
+	// The estimated share of the kept works that exist that are found: rough,
+	// and likely optimistic.
+	Coverage *float64 `json:"coverage,omitempty"`
+}
+
+func researchOf(m research.Map) *researchView {
+	if m.Run == nil {
+		return nil
+	}
+
+	c := m.Coverage
+	v := &researchView{Status: m.Run.Status, Stopped: m.Run.Stopped, Error: m.Run.Error, Rounds: len(m.Run.Rounds), Works: c.Works, Kept: c.Kept,
+		Pending: c.Pending, Read: c.Read, InIndex: c.In}
+
+	if c.Estimate != nil {
+		v.Coverage = &c.Estimate.Share
+	}
+
+	return v
 }
 
 type reportView struct {
@@ -622,10 +647,10 @@ func reportOf(a artifacts.Artifact) reportView {
 }
 
 type labView struct {
-	Lab       labSummary     `json:"lab"`
-	Sources   []sourceView   `json:"sources"`
-	Gathering *gatheringView `json:"gathering,omitempty"`
-	Reports   []reportView   `json:"reports"`
+	Lab      labSummary    `json:"lab"`
+	Sources  []sourceView  `json:"sources"`
+	Research *researchView `json:"research,omitempty"`
+	Reports  []reportView  `json:"reports"`
 }
 
 func (t *mcpTools) getLab(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in labInput) (labView, error) {
@@ -644,8 +669,8 @@ func (t *mcpTools) getLab(ctx context.Context, user auth.User, _ *mcp.CallToolRe
 	return t.viewOf(ctx, user, detail)
 }
 
-// viewOf is a lab with its latest gathering and its reports, those that can
-// be had: the lab is what was asked for.
+// viewOf is a lab with its research and its reports, those that can be had:
+// the lab is what was asked for.
 func (t *mcpTools) viewOf(ctx context.Context, user auth.User, detail labs.Detail) (labView, error) {
 	view := labView{Lab: summaryOf(detail.Lab), Sources: make([]sourceView, len(detail.Sources)), Reports: []reportView{}}
 
@@ -656,21 +681,13 @@ func (t *mcpTools) viewOf(ctx context.Context, user auth.User, detail labs.Detai
 		}
 	}
 
-	if t.gather.service != nil {
-		g, err := t.gather.service.Latest(ctx, user.ID, detail.ID)
-
-		switch {
-		case err == nil:
-			view.Gathering = &gatheringView{Status: g.Status, Request: g.Request, Summary: g.Summary, Error: g.Error}
-
-			for _, step := range g.Steps {
-				if step.URL != "" {
-					view.Gathering.Added = append(view.Gathering.Added, step.URL)
-				}
-			}
-		case !errors.Is(err, gathering.ErrNotFound):
-			t.logger.Warnw("Reading a lab's gathering failed", "lab", detail.ID, "error", err)
+	if t.research.service != nil {
+		m, err := t.research.service.Map(ctx, user.ID, detail.ID)
+		if err != nil {
+			t.logger.Warnw("Reading a lab's research failed", "lab", detail.ID, "error", err)
 		}
+
+		view.Research = researchOf(m)
 	}
 
 	if t.artifacts.service != nil {
@@ -689,7 +706,7 @@ func (t *mcpTools) viewOf(ctx context.Context, user auth.User, detail labs.Detai
 
 type createLabInput struct {
 	Name  string   `json:"name" jsonschema:"a short name, unique among the user's labs"`
-	Topic string   `json:"topic" jsonschema:"what the lab is about, in a sentence: gathering and reports go by it"`
+	Topic string   `json:"topic" jsonschema:"what the lab is about, in a sentence: research and reports go by it"`
 	URLs  []string `json:"urls,omitempty" jsonschema:"pages or sites to crawl as its first sources"`
 }
 
@@ -741,33 +758,66 @@ func sourceRequests(urls []string) []labs.SourceRequest {
 	return out
 }
 
-type gatherInput struct {
+type researchInput struct {
 	Lab     int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
-	Request string `json:"request,omitempty" jsonschema:"what to look for, when not the lab's topic as a whole"`
+	Request string `json:"request,omitempty" jsonschema:"what to look for, when not the lab's topic as a whole: newer work, another community, benchmarks"`
+	Found   *int   `json:"found,omitempty" jsonschema:"how many works to judge at most; the server's default when absent"`
+	Read    *int   `json:"read,omitempty" jsonschema:"how many kept works to read into the lab at most, 0 to map without reading; the server's default when absent"`
 }
 
-func (t *mcpTools) startGathering(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in gatherInput) (gatheringView, error) {
-	if t.gather.service == nil {
-		return gatheringView{}, errors.New("web search is not available")
+type runView struct {
+	ID     int64           `json:"id"`
+	Status string          `json:"status"`
+	Budget research.Budget `json:"budget"`
+}
+
+func (t *mcpTools) startResearch(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in researchInput) (runView, error) {
+	if t.research.service == nil {
+		return runView{}, errors.New("research is not available")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
 	defer cancel()
 
-	g, err := t.gather.service.Start(ctx, user.ID, in.Lab, in.Request)
+	run, err := t.research.service.Start(ctx, user.ID, in.Lab, research.Ask{Request: in.Request, Found: in.Found, Read: in.Read})
 	if err != nil {
-		return gatheringView{}, t.labFailed(err)
+		return runView{}, t.labFailed(err)
 	}
 
-	return gatheringView{Status: g.Status, Request: g.Request}, nil
+	return runView{ID: run.ID, Status: run.Status, Budget: run.Budget}, nil
+}
+
+type readMapInput struct {
+	Lab     int64 `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Dropped bool  `json:"dropped,omitempty" jsonschema:"also list the works dropped, with why"`
+}
+
+func (t *mcpTools) readMap(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in readMapInput) (string, error) {
+	if t.research.service == nil || t.labs.service == nil {
+		return "", errors.New("research is not available")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
+	defer cancel()
+
+	lab, err := t.labs.service.Get(ctx, user.ID, in.Lab)
+	if err != nil {
+		return "", t.labFailed(err)
+	}
+
+	m, err := t.research.service.Map(ctx, user.ID, in.Lab)
+	if err != nil {
+		return "", t.labFailed(err)
+	}
+
+	return mapText(lab.Name, m, in.Dropped), nil
 }
 
 // labFailed is what the agent is told of a lab request that failed: what the
 // pages would say, never the error itself.
 func (t *mcpTools) labFailed(err error) error {
 	switch {
-	case errors.Is(err, gathering.ErrRunning), errors.Is(err, gathering.ErrNoEngines), errors.Is(err, gathering.ErrNotFound),
-		errors.Is(err, gathering.ErrUnavailable), errors.Is(err, websearch.ErrUnavailable):
+	case errors.Is(err, research.ErrRunning), errors.Is(err, research.ErrNoChannels), errors.Is(err, research.ErrUnavailable):
 		return err
 	}
 

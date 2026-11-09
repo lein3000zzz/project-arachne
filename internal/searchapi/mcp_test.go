@@ -13,6 +13,7 @@ import (
 	"web-crawler/internal/artifacts"
 	"web-crawler/internal/auth"
 	"web-crawler/internal/labs"
+	"web-crawler/internal/research"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -174,12 +175,13 @@ func TestMCPToolsAreListedWithHints(t *testing.T) {
 			t.Errorf("%s has no hints or description", tool.Name)
 		}
 
-		if tool.Annotations != nil && tool.Annotations.ReadOnlyHint && !slices.Contains([]string{"search", "list_labs", "get_lab", "draft_report", "read_report"}, tool.Name) {
+		if tool.Annotations != nil && tool.Annotations.ReadOnlyHint && !slices.Contains([]string{"search", "list_labs", "get_lab", "draft_report", "read_report", "read_map"}, tool.Name) {
 			t.Errorf("%s claims to change nothing", tool.Name)
 		}
 	}
 
-	want := []string{"add_sources", "ask", "create_lab", "draft_report", "gather", "get_lab", "list_labs", "read_report", "save_answer", "search", "write_report"}
+	want := []string{"add_sources", "ask", "create_lab", "draft_report", "get_lab", "list_labs", "read_map", "read_report", "research", "save_answer", "search",
+		"write_report"}
 	if slices.Sort(names); !slices.Equal(names, want) {
 		t.Errorf("tools %v", names)
 	}
@@ -257,15 +259,15 @@ func TestMCPAskReadsTheWebFirst(t *testing.T) {
 }
 
 func TestMCPLabsAndReports(t *testing.T) {
-	labService, reports, gatherer := &fakeLabs{}, &fakeArtifacts{}, &fakeGatherer{}
+	labService, reports, researcher := &fakeLabs{}, &fakeArtifacts{}, &fakeResearch{run: &research.Run{ID: 4, Status: research.StatusDone, Stopped: research.StopSaturated}}
 
-	session, _, err := connect(t, mcpServer(t, Services{Labs: labService, Artifacts: reports, Gatherer: gatherer}), testToken)
+	session, _, err := connect(t, mcpServer(t, Services{Labs: labService, Artifacts: reports, Research: researcher}), testToken)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	res, text := call(t, session, "get_lab", map[string]any{"lab": 4}, false)
-	if res.IsError || !strings.Contains(text, `"reports":[{"id":9`) || !strings.Contains(text, `"gathering":{"status":"done"`) {
+	if res.IsError || !strings.Contains(text, `"reports":[{"id":9`) || !strings.Contains(text, `"status":"done","stopped":"saturated","works":1}`) {
 		t.Errorf("get_lab: %s", text)
 	}
 
@@ -274,8 +276,14 @@ func TestMCPLabsAndReports(t *testing.T) {
 		t.Errorf("add_sources: %s", text)
 	}
 
-	if res, text = call(t, session, "gather", map[string]any{"lab": 4, "request": "the memory model"}, false); res.IsError || gatherer.request != "the memory model" {
-		t.Errorf("gather: %s", text)
+	if res, text = call(t, session, "research", map[string]any{"lab": 4, "request": "the memory model", "found": 50}, false); res.IsError ||
+		researcher.request != "the memory model" || *researcher.ask.Found != 50 || researcher.ask.Read != nil || !strings.Contains(text, `"budget":{"found":50`) {
+		t.Errorf("research: %s", text)
+	}
+
+	if res, text = call(t, session, "read_map", map[string]any{"lab": 4}, false); res.IsError || !strings.Contains(text, "## 1. Blocks: 1 kept") ||
+		!strings.Contains(text, "[ResNet](<https://arxiv.org/abs/1512.03385>)") || !strings.Contains(text, "stopped: new rounds found little new") {
+		t.Errorf("read_map:\n%s", text)
 	}
 
 	// No sections: the outline is drafted, then written.

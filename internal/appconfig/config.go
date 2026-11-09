@@ -30,7 +30,7 @@ type Config struct {
 	MCP         MCP         `yaml:"mcp"`
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
-	Gathering   Gathering   `yaml:"gathering"`
+	Research    Research    `yaml:"research"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
@@ -220,7 +220,7 @@ type Documents struct {
 	Timeout  Duration `yaml:"timeout"`
 }
 
-// WebSearch is the SearXNG instance labs gather from; its address is in Vault.
+// WebSearch is the SearXNG instance labs research with; its address is in Vault.
 type WebSearch struct {
 	// What a new lab may search unless its creator chooses; names the instance
 	// does not offer are dropped.
@@ -228,14 +228,35 @@ type WebSearch struct {
 	RequestTimeout Duration `yaml:"request_timeout"`
 }
 
-// Gathering is the model searching the web for a lab.
-type Gathering struct {
-	Searches int `yaml:"searches"`
-	Sources  int `yaml:"sources"`
-	// Results shown to the model per search.
-	Results   int      `yaml:"results"`
-	MaxTokens int      `yaml:"max_tokens"`
-	Timeout   Duration `yaml:"timeout"`
+// Research maps what exists on a lab's topic: rounds of finding works by web
+// search, OpenAlex and citations, judging each, and reading the kept ones.
+type Research struct {
+	Enabled bool `yaml:"enabled"`
+	// Works judged and read per run when the user does not say, and at most.
+	Found    int `yaml:"found"`
+	Read     int `yaml:"read"`
+	MaxFound int `yaml:"max_found"`
+	MaxRead  int `yaml:"max_read"`
+	Rounds   int `yaml:"rounds"`
+	// Works the model judges at once.
+	JudgeBatch int `yaml:"judge_batch"`
+	// Results taken per web query and per OpenAlex query, and references or
+	// citing works taken per work followed.
+	SearchResults int      `yaml:"search_results"`
+	PaperResults  int      `yaml:"paper_results"`
+	PerWork       int      `yaml:"per_work"`
+	MaxTokens     int      `yaml:"max_tokens"`
+	RoundWait     Duration `yaml:"round_wait"`
+	Timeout       Duration `yaml:"timeout"`
+	OpenAlex      OpenAlex `yaml:"openalex"`
+}
+
+// OpenAlex is the open index of scholarly works; its key, when there is one,
+// is OPENALEX_API_KEY in Vault.
+type OpenAlex struct {
+	Enabled        bool     `yaml:"enabled"`
+	BaseURL        string   `yaml:"base_url"`
+	RequestTimeout Duration `yaml:"request_timeout"`
 }
 
 type Labs struct {
@@ -435,15 +456,24 @@ func Default() Config {
 			DefaultEngines: []string{"brave", "google cse", "bing", "wikipedia"},
 			RequestTimeout: Duration(15 * time.Second),
 		},
-		Gathering: Gathering{
-			Searches:  4,
-			Sources:   8,
-			Results:   6,
-			MaxTokens: 300,
-			Timeout:   Duration(10 * time.Minute),
+		Research: Research{
+			Enabled:       true,
+			Found:         300,
+			Read:          50,
+			MaxFound:      2000,
+			MaxRead:       300,
+			Rounds:        4,
+			JudgeBatch:    10,
+			SearchResults: 10,
+			PaperResults:  25,
+			PerWork:       30,
+			MaxTokens:     800,
+			RoundWait:     Duration(8 * time.Minute),
+			Timeout:       Duration(3 * time.Hour),
+			OpenAlex:      OpenAlex{Enabled: true, BaseURL: "https://api.openalex.org", RequestTimeout: Duration(20 * time.Second)},
 		},
 		Labs: Labs{
-			MaxSources: 20,
+			MaxSources: 500,
 			MinSources: 2,
 		},
 		Auth: Auth{
@@ -542,10 +572,16 @@ func (c *Config) Validate() error {
 		{"weblookup.choose_tokens", c.WebLookup.ChooseTokens},
 		{"artifacts.section_tokens", c.Artifacts.SectionTokens},
 		{"artifacts.outline_tokens", c.Artifacts.OutlineTokens},
-		{"gathering.searches", c.Gathering.Searches},
-		{"gathering.sources", c.Gathering.Sources},
-		{"gathering.results", c.Gathering.Results},
-		{"gathering.max_tokens", c.Gathering.MaxTokens},
+		{"research.found", c.Research.Found},
+		{"research.read", c.Research.Read},
+		{"research.max_found", c.Research.MaxFound},
+		{"research.max_read", c.Research.MaxRead},
+		{"research.rounds", c.Research.Rounds},
+		{"research.judge_batch", c.Research.JudgeBatch},
+		{"research.search_results", c.Research.SearchResults},
+		{"research.paper_results", c.Research.PaperResults},
+		{"research.per_work", c.Research.PerWork},
+		{"research.max_tokens", c.Research.MaxTokens},
 		{"documents.max_runes", c.Documents.MaxRunes},
 	}
 
@@ -587,7 +623,9 @@ func (c *Config) Validate() error {
 		{"weblookup.fresh_for", c.WebLookup.FreshFor},
 		{"weblookup.timeout", c.WebLookup.Timeout},
 		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
-		{"gathering.timeout", c.Gathering.Timeout},
+		{"research.round_wait", c.Research.RoundWait},
+		{"research.timeout", c.Research.Timeout},
+		{"research.openalex.request_timeout", c.Research.OpenAlex.RequestTimeout},
 		{"documents.timeout", c.Documents.Timeout},
 	}
 
@@ -595,6 +633,10 @@ func (c *Config) Validate() error {
 		if field.value <= 0 {
 			return fmt.Errorf("%w: %s must be > 0, got %s", ErrInvalidConfig, field.name, field.value.Std())
 		}
+	}
+
+	if c.Research.Found > c.Research.MaxFound || c.Research.Read > c.Research.MaxRead {
+		return fmt.Errorf("%w: research.found and research.read must not exceed research.max_found and research.max_read", ErrInvalidConfig)
 	}
 
 	if c.Crawler.UserAgent == "" || strings.ContainsFunc(c.Crawler.UserAgent, unicode.IsControl) {

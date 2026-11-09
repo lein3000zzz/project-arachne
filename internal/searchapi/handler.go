@@ -39,6 +39,8 @@ type Config struct {
 	WebLookupTimeout time.Duration
 	// Serve the MCP server at /mcp, for agents signed in with API tokens.
 	MCP bool
+	// The engines new labs start with.
+	DefaultEngines []string
 }
 
 type Response struct {
@@ -60,12 +62,13 @@ type Services struct {
 	Answerer  Answerer
 	Runs      RunService
 	Labs      LabService
-	Gatherer  Gatherer
+	Engines   EngineLister
 	Uploads   UploadStore
 	Artifacts ArtifactService
 	Endpoints EndpointService
 	WebLookup WebLookup
 	Tokens    TokenService
+	Research  ResearchService
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -101,10 +104,12 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("DELETE /api/labs/{id}", signIn.api(labsAPI.delete))
 	mux.Handle("PUT /api/labs/{id}/engines", signIn.api(labsAPI.setEngines))
 
-	gatherAPI := &gatherHandler{logger: logger, service: services.Gatherer, labs: labsAPI, lookUp: services.WebLookup != nil}
-	mux.Handle("GET /api/engines", signIn.api(gatherAPI.engines))
-	mux.Handle("POST /api/labs/{id}/gather", signIn.api(gatherAPI.start))
-	mux.Handle("GET /api/labs/{id}/gathering", signIn.api(gatherAPI.latest))
+	enginesAPI := &enginesHandler{logger: logger, lister: services.Engines, defaults: cfg.DefaultEngines, lookUp: services.WebLookup != nil}
+	mux.Handle("GET /api/engines", signIn.api(enginesAPI.engines))
+
+	researchAPI := &researchHandler{logger: logger, service: services.Research, labs: labsAPI}
+	mux.Handle("POST /api/labs/{id}/research", signIn.api(researchAPI.start))
+	mux.Handle("GET /api/labs/{id}/research", signIn.api(researchAPI.researchMap))
 	mux.Handle("GET /api/labs/{id}/pages", signIn.api(labsAPI.pages))
 	mux.Handle("POST /api/labs/{id}/sources", signIn.api(labsAPI.addSources))
 	mux.Handle("GET /api/labs/{id}/references", signIn.api(labsAPI.references))
@@ -139,7 +144,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	if cfg.MCP {
 		tokensAPI.mcp = mcpPath
 		mux.Handle(mcpPath, newMCPHandler(signIn, &mcpTools{
-			logger: logger, cfg: cfg, searcher: searcher, answers: answers, labs: labsAPI, gather: gatherAPI, artifacts: artifactsAPI,
+			logger: logger, cfg: cfg, searcher: searcher, answers: answers, labs: labsAPI, research: researchAPI, artifacts: artifactsAPI,
 		}))
 	}
 

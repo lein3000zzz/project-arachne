@@ -35,6 +35,8 @@ type Runs interface {
 }
 
 var (
+	// Wrapped in ErrInvalid: a request that adds too many is a bad request.
+	ErrFull             = errors.New("the lab is full")
 	ErrCrawlingDisabled = errors.New("crawling is disabled (crawl_api.enabled), so labs cannot gather sources")
 	ErrUploadsDisabled  = errors.New("uploading is not available: it needs crawling (crawl_api.enabled)")
 )
@@ -73,13 +75,10 @@ const (
 	maxEngineRunes = 40
 )
 
-// Found is a page the model found by searching and chose for a lab.
-type Found struct {
-	URL         string
-	Query       string
-	Engines     []string
-	Reason      string
-	GatheringID int64
+// Researched is a work research found and chose to read, and why.
+type Researched struct {
+	URL    string
+	Reason string
 }
 
 type SourceRequest struct {
@@ -173,21 +172,21 @@ func (s *Service) SetEngines(ctx context.Context, ownerID, labID int64, engines 
 	return s.store.SetEngines(ctx, ownerID, labID, engines)
 }
 
-// AddFound adds a page found by searching as a source of its own - that page
-// alone, its links not followed - and starts crawling it.
-func (s *Service) AddFound(ctx context.Context, ownerID, labID int64, f Found) (Source, error) {
+// AddResearched adds a work research chose as a source of one page and
+// starts crawling it.
+func (s *Service) AddResearched(ctx context.Context, ownerID, labID int64, r Researched) (Source, error) {
 	existing, err := s.store.Sources(ctx, ownerID, labID)
 	if err != nil {
 		return Source{}, err
 	}
 
-	prepared, err := s.prepare([]SourceRequest{{URL: f.URL, Scope: ScopePage}}, existing)
+	prepared, err := s.prepare([]SourceRequest{{URL: r.URL, Scope: ScopePage}}, existing)
 	if err != nil {
 		return Source{}, err
 	}
 
 	src := prepared[0]
-	src.Kind, src.Query, src.Engines, src.Reason, src.GatheringID = KindSearch, f.Query, f.Engines, f.Reason, f.GatheringID
+	src.Kind, src.Reason = KindResearch, r.Reason
 
 	added, err := s.store.AddSource(ctx, ownerID, labID, src)
 	if err != nil {
@@ -456,7 +455,7 @@ func (s *Service) prepare(sources []SourceRequest, existing []Source) ([]Source,
 	}
 
 	if len(existing)+len(sources) > s.limits.MaxSources {
-		return nil, fmt.Errorf("%w: a lab has at most %d sources", ErrInvalid, s.limits.MaxSources)
+		return nil, fmt.Errorf("%w: %w: a lab has at most %d sources", ErrInvalid, ErrFull, s.limits.MaxSources)
 	}
 
 	seen := make(map[string]bool, len(existing)+len(sources))

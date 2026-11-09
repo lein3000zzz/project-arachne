@@ -341,16 +341,26 @@ section:last-of-type { border-bottom: 0; }
 .pages li.set-aside a { color: var(--muted); }
 
 /* A gathering as it happened: searches, what each showed, what was taken. */
-.gathering { margin-top: 1.6rem; max-width: 72ch; }
-.steps { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: 1.1rem; }
-.step p { margin: 0 0 0.4rem; font-size: 0.85rem; }
-.found { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; font-size: 0.82rem; }
-.found li { display: grid; grid-template-columns: 1.2rem minmax(0, 1fr); color: var(--muted); }
-.found li a { color: var(--muted); }
-.found li.taken, .found li.taken a { color: var(--fg); }
-.found .mark { font-family: var(--mono); }
-.found .host { font-family: var(--mono); font-size: 0.72rem; margin-left: 0.4rem; }
-.gathering .summary { border-left: 2px solid var(--fg); padding-left: 0.9rem; margin-top: 1.2rem; }
+.research-budget { display: flex; flex-wrap: wrap; gap: 0.6rem 1.4rem; font-size: 0.82rem; color: var(--muted); align-items: center; }
+.research-budget input { width: 5.5rem; font: inherit; color: var(--fg); background: transparent; border: 0; border-bottom: 1px solid var(--line);
+  padding: 0.15rem 0.2rem; margin: 0 0.3rem; }
+.research-run { margin-top: 1.6rem; max-width: 72ch; }
+.research-run p { margin: 0 0 0.4rem; }
+.research-run .state { white-space: normal; }
+.rounds { list-style: none; margin: 0.8rem 0 0; padding: 0; display: grid; gap: 0.6rem; font-size: 0.82rem; }
+.rounds .note { margin: 0.15rem 0 0; }
+.research-map { margin-top: 1.6rem; max-width: 78ch; display: grid; gap: 0.6rem; }
+.research-map > p { margin: 0; }
+.research-map .estimate { font-size: 0.9rem; }
+.map-group { border-top: 1px solid var(--line); padding-top: 0.6rem; }
+.map-group summary { cursor: pointer; font-size: 0.88rem; }
+.map-group > .note { margin: 0.4rem 0 0; }
+.works { list-style: none; margin: 0.6rem 0 0.4rem; padding: 0; display: grid; gap: 0.75rem; font-size: 0.82rem; }
+.works a { overflow-wrap: anywhere; }
+.work-meta { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); margin-top: 0.1rem; }
+.works .note { margin: 0.1rem 0 0; font-size: 0.75rem; }
+.work-reason { font-size: 0.78rem; margin-top: 0.1rem; }
+.works li.drop, .works li.drop a, .works li.pending a { color: var(--muted); }
 .check { display: inline-flex; gap: 0.5rem; align-items: center; font-size: 0.82rem; cursor: pointer; }
 .web-choice { display: grid; gap: 0.7rem; margin: 0.4rem 0 1.2rem; }
 .web-choice .ticks { margin: 0; }

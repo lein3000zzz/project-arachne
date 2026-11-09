@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"web-crawler/internal/appconfig"
@@ -15,6 +16,7 @@ import (
 	"web-crawler/internal/embedding"
 	"web-crawler/internal/endpoints"
 	"web-crawler/internal/llm"
+	"web-crawler/internal/openalex"
 	"web-crawler/internal/rerank"
 	"web-crawler/internal/review"
 	"web-crawler/internal/tika"
@@ -272,6 +274,21 @@ func NewWebSearch(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.Se
 	}
 
 	return websearch.New(base, cfg.WebSearch.RequestTimeout.Std())
+}
+
+// NewOpenAlex returns nil when research may not use OpenAlex. Without a key
+// it works, on a tenth of the daily budget.
+func NewOpenAlex(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager) *openalex.Client {
+	if !cfg.Research.Enabled || !cfg.Research.OpenAlex.Enabled {
+		return nil
+	}
+
+	key := optionalSecret(sm, "OPENALEX_API_KEY")
+	if key == "" {
+		logger.Warn("OPENALEX_API_KEY is not in Vault: research uses OpenAlex keyless, with a tenth of the daily budget")
+	}
+
+	return openalex.New(cfg.Research.OpenAlex.BaseURL, key, &http.Client{Timeout: cfg.Research.OpenAlex.RequestTimeout.Std()})
 }
 
 // NewReviewer returns nil when reviewing is off or no chat endpoint is

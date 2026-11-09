@@ -731,16 +731,16 @@ function renderPlan(plan) {
     plan.topic ? el("p", { class: "note" }, plan.topic) : null,
     plan.sources.length
       ? el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope))))
-      : el("p", { class: "note" }, engines.available.length ? "No links: add files, or let the model search the web for sources." : "No links: add files, or the lab starts empty."),
+      : el("p", { class: "note" }, engines.available.length ? "No links: add files, or research the topic to find its sources." : "No links: add files, or the lab starts empty."),
     el("div", { class: "upload" },
       el("label", { class: "action small file-pick" }, "Add files",
         el("input", { type: "file", multiple: true, onchange: (e) => { addPlanFiles(plan, e.target.files); e.target.value = ""; } })),
       el("span", { class: "note" }, "PDF, Word, EPUB, scans…, up to 32 MiB each; only your labs see them."),
       el("ul", { class: "file-list", id: "planFiles" })),
-    // Without links, searching is how the lab gets anything, so it starts ticked.
+    // Without links, research is how the lab gets anything, so it starts ticked.
     engines.available.length ? el("div", { class: "web-choice" },
       el("label", { class: "check" }, el("input", { type: "checkbox", id: "planWeb", checked: plan.sources.length === 0 }),
-        "Search the web for this lab"),
+        "Research this topic: find, judge and read what exists on it"),
       el("div", { class: "ticks" }, el("span", { class: "control-label" }, "Engines"),
         ...engines.available.map((e) => el("label", { class: "tick" },
           el("input", { type: "checkbox", class: "planEngine", value: e, checked: engines.default.includes(e) }), e)))) : null,
@@ -773,10 +773,10 @@ async function build(plan, button) {
     }
   }
 
-  // The lab exists either way; a gathering that cannot start says why on its page.
-  const gather = $("planWeb") && $("planWeb").checked;
-  if (gather) await send("POST", `/api/labs/${lab.id}/gather`, {}).catch(() => {});
-  location.assign("/labs/" + lab.id + (gather ? "#web" : "#sources"));
+  // The lab exists either way; research that cannot start says why on its page.
+  const research = $("planWeb") && $("planWeb").checked;
+  if (research) await send("POST", `/api/labs/${lab.id}/research`, {}).catch(() => {});
+  location.assign("/labs/" + lab.id + (research ? "#research" : "#sources"));
 }
 
 $("planForm").addEventListener("submit", async (e) => {

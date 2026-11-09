@@ -185,7 +185,7 @@ mcp:
 endpoints:
   # users may bring their own chat model on their settings page: an OpenAI- or
   # Anthropic-compatible endpoint, used for their answers, claim checks, lab
-  # plans, reports and gatherings. Without one, the server's model (chat.*)
+  # plans, reports and research. Without one, the server's model (chat.*)
   # answers. Keys are sealed with ENDPOINT_KEY from Vault. Page review stays
   # on the server's model: it serves the shared base.
   enabled: true
@@ -214,8 +214,8 @@ artifacts:
 documents:
   # read the documents labs add - PDFs, Office files, EPUB, scans (OCR, Russian
   # and English) - with Apache Tika. Only a lab's own source is read: a link
-  # given, a file uploaded, a reference taken, or a page the model chose while
-  # gathering. Off, Tika does not start (make reads this), such documents stay
+  # given, a file uploaded, a reference taken, or a work research read. Off,
+  # Tika does not start (make reads this), such documents stay
   # unread and only text files can be uploaded. Tika: 0.3 GB idle, at most
   # 1.5 GB; its address is in Vault (DOCUMENTS_BASE_URL).
   enabled: true
@@ -231,17 +231,40 @@ websearch:
   default_engines: [brave, google cse, bing, wikipedia]
   request_timeout: 15s
 
-gathering:
-  # the model searching the web for a lab: searches and pages added per run
-  searches: 4
-  sources: 8
-  # results shown to the model per search
-  results: 6
-  max_tokens: 300
-  timeout: 10m
+research:
+  # "Research this topic" on a lab: rounds of finding works on the topic -
+  # web search with the lab's engines, OpenAlex for papers, the works a kept
+  # one cites and the works citing it - the model judging each from its
+  # title and snippet, and the kept ones read into the lab. A run stops when
+  # new rounds find little new (saturated), or at its budget, rounds or time.
+  enabled: true
+  # works judged and read per run, unless the user says; and at most
+  found: 300
+  read: 50
+  max_found: 2000
+  max_read: 300
+  rounds: 4
+  judge_batch: 10
+  search_results: 10
+  paper_results: 25
+  # references and citing works taken per work followed
+  per_work: 30
+  max_tokens: 800
+  # a round waits this long for its works to be read: what they cite feeds
+  # the next round
+  round_wait: 8m
+  timeout: 3h
+  openalex:
+    # papers, their references and the works citing them. Free key in Vault
+    # (make up OPENALEX_API_KEY=...): $1 of calls a day, about 10,000
+    # citation lookups or 1,000 searches; keyless gets a tenth
+    enabled: true
+    base_url: https://api.openalex.org
+    request_timeout: 20s
 
 labs:
-  max_sources: 20
+  # research reads its works into the lab as sources
+  max_sources: 500
   # an answer from labs with fewer good sources in them fills the rest of
   # chat.context_chunks from the shared base
   min_sources: 2

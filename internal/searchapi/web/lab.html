@@ -33,7 +33,7 @@
     <p class="lab-name" id="labName"></p>
     <a href="#overview">Overview</a>
     <a href="#sources">Sources</a>
-    <a href="#web">Web</a>
+    <a href="#research" id="researchNav">Research</a>
     <a href="#references" id="refNav" hidden>References</a>
     <a href="#artifacts">Artifacts</a>
     <a href="#pages">Pages</a>
@@ -72,18 +72,26 @@
       </div>
     </section>
 
-    <section id="web" hidden>
-      <h2>Web</h2>
+    <section id="research" hidden>
+      <h2>Research</h2>
+      <p class="note">Finds what exists on the topic: web search with the engines ticked here, OpenAlex for papers, the works
+        the kept ones cite and the works citing them. The model judges each by what it shows, niche or famous, and the kept
+        ones are read into the lab. Dropped works stay listed, with why.</p>
       <div class="ticks" id="engineTicks"></div>
-      <form id="gatherForm" class="ask">
+      <form id="researchForm" class="ask">
         <div class="field">
-          <label for="gatherText">Gather from the web</label>
-          <textarea id="gatherText" placeholder="optional: what to look for - benchmarks, the memory model, Russian sources…"></textarea>
+          <label for="researchText">Research this topic</label>
+          <textarea id="researchText" placeholder="optional: what to look for - newer work, another community, benchmarks, Russian sources…"></textarea>
         </div>
-        <button class="action primary" id="gatherGo">Gather</button>
+        <div class="research-budget">
+          <label>judge up to <input type="number" id="researchFound" min="1" inputmode="numeric"> works</label>
+          <label>read up to <input type="number" id="researchRead" min="0" inputmode="numeric"></label>
+        </div>
+        <button class="action primary" id="researchGo">Research</button>
       </form>
-      <p class="note" id="gatherNote" aria-live="polite"></p>
-      <div id="gathering"></div>
+      <p class="note" id="researchNote" aria-live="polite"></p>
+      <div id="researchRun"></div>
+      <div id="researchMap"></div>
     </section>
 
     <section id="artifacts">
@@ -149,13 +157,14 @@ function sourceRow(src) {
   const status = run ? stateOf(run.status) : el("span", { class: "note" }, "not crawled");
   const act = (label, onclick) => el("button", { type: "button", class: "action small", onclick }, label);
 
-  const tag = { search: "found", reference: "cited", upload: "file" }[src.kind] || src.scope;
+  const tag = { search: "found", reference: "cited", upload: "file", research: "research" }[src.kind] || src.scope;
   const upload = src.kind === "upload";
   return el("tr", {},
     el("td", { class: "url" }, el("a", { href: pageHref(src.url), target: "_blank", rel: "noopener noreferrer" }, upload ? src.filename : src.url),
       el("span", { class: "tag" }, tag),
       src.kind === "search" ? el("div", { class: "note" }, `“${src.query}”` + (src.reason ? " — " + src.reason : "")) : null,
-      src.kind === "reference" ? el("div", { class: "note" }, `in ${host(src.cited_by)}: ${src.citation}`) : null),
+      src.kind === "reference" ? el("div", { class: "note" }, `in ${host(src.cited_by)}: ${src.citation}`) : null,
+      src.kind === "research" && src.reason ? el("div", { class: "note" }, src.reason) : null),
     el("td", { "data-label": "status" }, status),
     el("td", { class: "num", "data-label": "pages" }, String(src.pages)),
     el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–",
@@ -227,8 +236,8 @@ async function load() {
 
   renderEngines(lab.engines);
 
-  const [gathering, building] = await Promise.all([loadGathering(), loadArtifacts()]);
-  if (gathering || building || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
+  const [researching, building] = await Promise.all([loadResearch(), loadArtifacts()]);
+  if (researching || building || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
   loadPages();
   loadReferences();
 }
@@ -463,11 +472,13 @@ $("refAdd").addEventListener("click", async () => {
   load();
 });
 
-// ---- the web: which engines, and gathering ----
+// ---- research: what exists on the topic, found, judged and read ----
 let engines = { available: [], default: [] };
+// Which lists are open survives the redraws while a run goes on.
+const openGroups = new Set(["sub-first"]);
 
 function renderEngines(ticked) {
-  $("web").hidden = engines.available.length === 0;
+  $("engineTicks").hidden = engines.available.length === 0;
   $("engineTicks").replaceChildren(el("span", { class: "control-label" }, "Engines"),
     ...engines.available.map((e) => el("label", { class: "tick" },
       el("input", { type: "checkbox", value: e, checked: ticked.includes(e), onchange: saveEngines }), e)));
@@ -477,9 +488,9 @@ async function saveEngines() {
   const chosen = [...document.querySelectorAll("#engineTicks input:checked")].map((box) => box.value);
   try {
     await send("PUT", `${base}/engines`, { engines: chosen });
-    $("gatherNote").textContent = chosen.length ? "" : "No engines: the lab will not search the web.";
+    $("researchNote").textContent = chosen.length ? "" : "No engines: research searches OpenAlex alone.";
   } catch (err) {
-    $("gatherNote").replaceChildren(el("span", { class: "error" }, err.message));
+    $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
   }
 }
 
@@ -488,64 +499,157 @@ function host(u) {
   try { return new URL(u).hostname; } catch (_) { return u; }
 }
 
-// The gathering as it happened: each search with what it showed the model,
-// which of those it took and why, and what it was refused.
-function renderGathering(g) {
-  const added = new Map(g.steps.filter((s) => s.kind === "add").map((s) => [s.url, s.reason]));
-  const searches = g.steps.filter((s) => s.kind === "search").length;
-  const status = g.status === "running" ? `gathering… started ${ago(g.started_at)}`
-    : g.status === "done" ? `gathered ${ago(g.finished_at)} · ${searches} searches · ${added.size} pages added`
-    : `stopped: ${g.error}`;
+const stopNames = {
+  saturated: "new rounds found little new", budget: "the judging budget was spent: research again to go on",
+  rounds: "the rounds ran out", time: "out of time", interrupted: "interrupted",
+};
+const channelNames = { search: "search", reference: "references", citing: "citing works", seed: "the lab's sources" };
+const readNames = { in: "in the index", reading: "being read", set_aside: "set aside on review", failed: "not read" };
+const shownPerList = 200;
 
-  const steps = g.steps.filter((s) => s.kind !== "add").map((s) => {
-    if (s.kind === "search") {
-      const failed = Object.entries(s.failed || {}).map(([engine, why]) => `${engine}: ${why}`).join(", ");
-      return el("li", { class: "step" },
-        el("p", {}, "searched ", el("b", {}, "“" + s.query + "”"), failed ? el("span", { class: "note" }, " — no answer from " + failed) : null),
-        el("ul", { class: "found" }, (s.results || []).map((r) => el("li", { class: added.has(r.url) ? "taken" : r.in_lab ? "had" : null },
-          el("span", { class: "mark", "aria-hidden": "true" }, added.has(r.url) ? "+" : r.in_lab ? "=" : "·"),
-          el("span", {}, el("a", { href: r.url, target: "_blank", rel: "noopener noreferrer" }, r.title || r.url),
-            el("span", { class: "host" }, host(r.url)),
-            added.has(r.url) && added.get(r.url) ? el("div", { class: "note" }, added.get(r.url)) : null,
-            r.in_lab && !added.has(r.url) ? el("div", { class: "note" }, "already in the lab") : null)))));
-    }
-    if (s.kind === "refused") return el("li", { class: "step note" }, `refused ${s.url}: ${s.reason}`);
-    return null;
+function renderRun(run) {
+  if (!run) {
+    $("researchRun").replaceChildren(el("p", { class: "note" }, "Not researched yet."));
+    $("researchGo").disabled = false;
+    return;
+  }
+  const running = run.status === "running";
+  const status = running ? `researching… round ${Math.max(run.rounds.length, 1)} · started ${ago(run.started_at)}`
+    : run.status === "failed" ? `stopped: ${run.error}`
+    : `researched ${ago(run.finished_at)} · ${stopNames[run.stopped] || run.stopped}`;
+  const rounds = run.rounds.map((r) => {
+    const found = ["search", "reference", "citing"].filter((c) => (r.found || {})[c]).map((c) => `${r.found[c]} by ${channelNames[c]}`).join(", ");
+    const failed = Object.entries(r.failed || {}).map(([what, why]) => `${what}: ${why}`).join("; ");
+    return el("li", {},
+      el("b", {}, `round ${r.n}`),
+      el("span", {}, ` found ${found || "nothing new"} · judged ${r.judged} · kept ${r.kept} · read ${r.read}`),
+      r.queries && r.queries.length ? el("div", { class: "note" }, "searched " + r.queries.map((q) => "“" + q + "”").join(", ")) : null,
+      failed ? el("div", { class: "note" }, failed) : null);
   });
-
-  $("gathering").replaceChildren(el("div", { class: "gathering" },
-    el("p", { class: "eyebrow" }, `${g.model} · ${g.engines.join(", ")}`),
-    el("p", {}, el("span", { class: "state " + (g.status === "running" ? "running" : g.status === "failed" ? "dropped" : "finished") },
-      el("span", { class: "state-glyph", "aria-hidden": "true" }, g.status === "running" ? "●" : g.status === "failed" ? "✕" : "✓"), status)),
-    g.request ? el("p", { class: "note" }, "asked: " + g.request) : null,
-    el("ol", { class: "steps" }, steps),
-    g.summary ? el("p", { class: "summary" }, g.summary) : null));
-
-  $("gatherGo").disabled = g.status === "running";
+  $("researchRun").replaceChildren(el("div", { class: "research-run" },
+    el("p", { class: "eyebrow" }, `${run.model} · judge up to ${run.budget.found} · read up to ${run.budget.read}`),
+    el("p", {}, el("span", { class: "state " + (running ? "running" : run.status === "failed" ? "dropped" : "finished") },
+      el("span", { class: "state-glyph", "aria-hidden": "true" }, running ? "●" : run.status === "failed" ? "✕" : "✓"), status)),
+    run.request ? el("p", { class: "note" }, "asked: " + run.request) : null,
+    el("ol", { class: "rounds" }, rounds)));
+  $("researchGo").disabled = running;
 }
 
-async function loadGathering() {
+// How a work was found: a few of its queries, and the works it was found
+// through - what cites it, what it cites.
+function howFound(w, titles) {
+  const queries = [], citedBy = [], cites = [];
+  let seed = false;
+  for (const f of w.finds) {
+    if (f.channel === "seed") seed = true;
+    if (f.channel === "search" && !queries.includes(f.query)) queries.push(f.query);
+    if (f.channel === "reference" && !citedBy.includes(f.via)) citedBy.push(f.via);
+    if (f.channel === "citing" && !cites.includes(f.via)) cites.push(f.via);
+  }
+  const few = (list, show) => list.slice(0, 2).map(show).join(", ") + (list.length > 2 ? ` and ${list.length - 2} more` : "");
+  const title = (id) => "“" + (titles.get(id) || "a work") + "”";
+  return [
+    seed ? "a source of the lab" : null,
+    queries.length ? "searched " + few(queries, (q) => "“" + q + "”") : null,
+    citedBy.length ? "cited by " + few(citedBy, title) : null,
+    cites.length ? "cites " + few(cites, title) : null,
+  ].filter(Boolean).join(" · ");
+}
+
+function workItem(w, titles) {
+  const meta = [w.kind, w.year, w.site, w.cited_by ? `cited ${w.cited_by.toLocaleString()} times` : null].filter(Boolean).join(" · ");
+  return el("li", { class: "work " + (w.read ? "read-" + w.read : w.verdict) },
+    el("div", {},
+      el("a", { href: pageHref(w.url), target: "_blank", rel: "noopener noreferrer" }, w.title || w.url),
+      w.read ? el("span", { class: "tag" + (w.read === "in" ? " lab" : "") }, readNames[w.read] || w.read) : null),
+    el("div", { class: "work-meta" }, meta),
+    el("div", { class: "note" }, howFound(w, titles)),
+    w.reason ? el("div", { class: "work-reason" }, w.reason) : null);
+}
+
+function group(key, heading, works, titles, opts = {}) {
+  if (!works.length && !opts.always) return null;
+  const list = works.slice(0, shownPerList).map((w) => workItem(w, titles));
+  if (works.length > shownPerList) list.push(el("li", { class: "note" }, `and ${works.length - shownPerList} more`));
+  const box = el("details", { class: "map-group", open: openGroups.has(key) },
+    el("summary", {}, heading),
+    opts.focus ? el("p", { class: "note" }, opts.focus) : null,
+    el("ol", { class: "works" }, list));
+  box.addEventListener("toggle", () => { box.open ? openGroups.add(key) : openGroups.delete(key); });
+  return box;
+}
+
+function renderMap(m) {
+  const c = m.coverage;
+  if (!c.works) {
+    $("researchMap").replaceChildren();
+    return;
+  }
+  const titles = new Map(m.works.map((w) => [w.id, w.title || w.url]));
+  const e = c.estimate;
+  const estimate = e
+    ? el("p", { class: "estimate" }, `Search and citations together found ${e.found} of an estimated ${e.total} kept works: about ${Math.round(e.share * 100)}%. `,
+      el("span", { class: "note" }, "A rough estimate, and likely optimistic: well-known works are found both ways."))
+    : el("p", { class: "note" }, "Too few works found both by search and by citations to estimate what is still unfound.");
+
+  const inSub = new Set(m.subtopics.map((s) => s.id));
+  const kept = m.works.filter((w) => w.verdict === "keep");
+  const subGroups = m.subtopics.map((sub, i) => {
+    const mine = kept.filter((w) => w.subtopic_id === sub.id);
+    const sc = c.subtopics[i];
+    const share = sc && sc.estimate ? ` · about ${Math.round(sc.estimate.share * 100)}% found` : "";
+    return group(i === 0 ? "sub-first" : "sub-" + sub.id, `${sub.name} · ${sc ? sc.kept : mine.length} kept · ${sc ? sc.in : 0} in the index${share}`,
+      mine, titles, { focus: sub.focus, always: true });
+  });
+
+  $("researchMap").replaceChildren(el("div", { class: "research-map" },
+    el("p", { class: "note" }, `${c.works} works found · ${c.kept} kept · ${c.maybe} maybe · ${c.dropped} dropped · ${c.pending} not yet judged · ` +
+      `${c.read} read, ${c.in} in the index` + (c.set_aside ? `, ${c.set_aside} set aside on review` : "")),
+    estimate,
+    ...subGroups,
+    group("loose", `In no subtopic · ${kept.filter((w) => !inSub.has(w.subtopic_id)).length}`, kept.filter((w) => !inSub.has(w.subtopic_id)), titles),
+    group("maybe", `Maybe · ${c.maybe}`, m.works.filter((w) => w.verdict === "maybe"), titles),
+    group("pending", `Not yet judged · ${c.pending}`, m.works.filter((w) => w.verdict === "pending"), titles),
+    group("dropped", `Dropped · ${c.dropped}`, m.works.filter((w) => w.verdict === "drop"), titles)));
+}
+
+async function loadResearch() {
   try {
-    const g = await api(`${base}/gathering`);
-    renderGathering(g);
-    return g.status === "running";
+    const res = await call(`${base}/research`);
+    if (res.status === 503) {
+      $("research").hidden = $("researchNav").hidden = true;
+      return false;
+    }
+    const m = await res.json();
+    if (!res.ok) throw new Error(m.error || res.statusText);
+    $("research").hidden = $("researchNav").hidden = false;
+    $("researchFound").placeholder = String(m.budget.found);
+    $("researchFound").max = String(m.max_budget.found);
+    $("researchRead").placeholder = String(m.budget.read);
+    $("researchRead").max = String(m.max_budget.read);
+    renderRun(m.run);
+    renderMap(m);
+    return Boolean(m.run && m.run.status === "running");
   } catch (err) {
-    if (err.message !== "the lab has not gathered yet") $("gatherNote").textContent = err.message;
+    $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
     return false;
   }
 }
 
-$("gatherForm").addEventListener("submit", async (e) => {
+$("researchForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  $("gatherGo").disabled = true;
-  $("gatherNote").textContent = "";
+  $("researchGo").disabled = true;
+  $("researchNote").textContent = "";
+  const body = { request: $("researchText").value.trim() };
+  if ($("researchFound").value !== "") body.found = Number($("researchFound").value);
+  if ($("researchRead").value !== "") body.read = Number($("researchRead").value);
   try {
-    await send("POST", `${base}/gather`, { request: $("gatherText").value.trim() });
-    $("gatherText").value = "";
+    await send("POST", `${base}/research`, body);
+    $("researchText").value = "";
     load();
   } catch (err) {
-    $("gatherNote").replaceChildren(el("span", { class: "error" }, err.message));
-    $("gatherGo").disabled = false;
+    $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
+    $("researchGo").disabled = false;
   }
 });
 

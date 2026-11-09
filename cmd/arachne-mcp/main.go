@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -83,7 +84,7 @@ func run(ctx context.Context, base, token string, local mcp.Transport) error {
 			params := &mcp.CallToolParams{Name: req.Params.Name, Arguments: req.Params.Arguments}
 
 			if token := req.Params.GetProgressToken(); relay.add(token, req.Session) {
-				defer relay.remove(token)
+				defer relay.release(token)
 
 				params.SetProgressToken(token)
 			}
@@ -102,8 +103,12 @@ type progressRelay struct {
 	waiting map[any]*mcp.ServerSession
 }
 
+// The client may handle a call's last notifications after its result: a
+// token is kept this long after its call, so they still reach the agent.
+const progressGrace = 5 * time.Second
+
 // add reports whether progress on token can be relayed: a token is a string
-// or a number, and once in use it stays its call's until that ends.
+// or a number, and stays its call's until a while after that ends.
 func (p *progressRelay) add(token any, session *mcp.ServerSession) bool {
 	switch token.(type) {
 	case string, float64, int64, int:
@@ -123,11 +128,13 @@ func (p *progressRelay) add(token any, session *mcp.ServerSession) bool {
 	return true
 }
 
-func (p *progressRelay) remove(token any) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (p *progressRelay) release(token any) {
+	time.AfterFunc(progressGrace, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
 
-	delete(p.waiting, token)
+		delete(p.waiting, token)
+	})
 }
 
 func (p *progressRelay) forward(ctx context.Context, req *mcp.ProgressNotificationClientRequest) {

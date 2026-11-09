@@ -186,21 +186,20 @@ func TestEnginesAndSourcesFoundBySearch(t *testing.T) {
 		t.Errorf("a comma would split into two engines at SearXNG: %v", err)
 	}
 
-	src, err := service.AddFound(ctx, lein, lab.ID, Found{URL: "go.dev/blog/pipelines", Query: "go pipelines", Engines: []string{"brave"}, Reason: "the official post"})
-	if err != nil || src.Kind != KindSearch || src.Scope != ScopePage || src.Query != "go pipelines" || src.Reason != "the official post" ||
-		src.Engines[0] != "brave" || src.URL != "https://go.dev/blog/pipelines" {
-		t.Fatalf("found source: %+v, %v", src, err)
+	src, err := service.AddResearched(ctx, lein, lab.ID, Researched{URL: "go.dev/blog/pipelines", Reason: "the official post"})
+	if err != nil || src.Kind != KindResearch || src.Scope != ScopePage || src.Reason != "the official post" || src.URL != "https://go.dev/blog/pipelines" {
+		t.Fatalf("researched source: %+v, %v", src, err)
 	}
 
 	if last := producer.runs[len(producer.runs)-1]; last.MaxLinks != 1 || last.MaxDepth != 1 || last.UseCacheFlag {
-		t.Errorf("a found page is crawled alone: %+v", last)
+		t.Errorf("a researched work is crawled alone: %+v", last)
 	}
 
-	if _, err := service.AddFound(ctx, lein, lab.ID, Found{URL: "https://go.dev/blog/pipelines"}); !errors.Is(err, ErrSourceExists) {
-		t.Errorf("found twice: %v", err)
+	if _, err := service.AddResearched(ctx, lein, lab.ID, Researched{URL: "https://go.dev/blog/pipelines"}); !errors.Is(err, ErrSourceExists) {
+		t.Errorf("read twice: %v", err)
 	}
 
-	if _, err := service.AddFound(ctx, other, lab.ID, Found{URL: "https://evil.example/"}); !errors.Is(err, ErrNotFound) {
+	if _, err := service.AddResearched(ctx, other, lab.ID, Researched{URL: "https://evil.example/"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("into another user's lab: %v", err)
 	}
 }

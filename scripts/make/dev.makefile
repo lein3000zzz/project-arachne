@@ -50,6 +50,8 @@ export MODEL_CPUSET := 0-$(shell expr $(MODEL_CPUS) - 1)
 # $(ENV_FILE); giving RERANK_BASE_URL alone means external.
 RERANK_BASE_URL ?=
 RERANK_API_KEY  ?=
+# Research's OpenAlex key, kept in Vault once given.
+OPENALEX_API_KEY ?=
 RERANKER ?= $(if $(RERANK_BASE_URL),external,$(or $(shell sed -n 's/^RERANKER=//p' $(ENV_FILE) 2>/dev/null),local))
 RERANKER_SERVICE := $(if $(filter local,$(RERANKER)),reranker)
 
@@ -114,6 +116,7 @@ BOOTSTRAP := ENV_FILE=$(ENV_FILE) COMPOSE="$(COMPOSE)" \
 	MILVUS_TOKEN="$(MILVUS_TOKEN)" \
 	CHAT_BASE_URL="$(CHAT_BASE_URL)" CHAT_API_KEY="$(CHAT_API_KEY)" \
 	RERANK_BASE_URL="$(RERANK_BASE_URL)" RERANK_API_KEY="$(RERANK_API_KEY)" \
+	OPENALEX_API_KEY="$(OPENALEX_API_KEY)" \
 	scripts/vault-bootstrap.sh
 
 .PHONY: help up dev run crawl search eval rank reembed mcp smoke user password token down reset restart logs ps env vault-bootstrap models stop-other-embedders build test test-integration vet tidy
@@ -160,6 +163,8 @@ help:
 	@echo "         make up RERANKER=local    bundled llama.cpp (bge-reranker-v2-m3), on CPU"
 	@echo "         make up RERANK_BASE_URL=... [RERANK_API_KEY=...]   external"
 	@echo "         make up RERANKER=off      search without reranking"
+	@echo ""
+	@echo "research:  make up OPENALEX_API_KEY=...   free key from openalex.org: 10x the keyless daily budget"
 	@echo ""
 	@echo "UI: kafka-ui http://localhost:8080  jaeger http://localhost:16686"
 	@echo "    postgres localhost:5432          vault  http://localhost:8200"
