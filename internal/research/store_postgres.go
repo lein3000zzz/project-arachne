@@ -37,6 +37,11 @@ func (s *PostgresStore) StartRun(ctx context.Context, labID int64, request strin
 }
 
 func (s *PostgresStore) SaveRounds(ctx context.Context, id int64, rounds []Round) error {
+	// A run that ended before its first round has none: an empty list, never null.
+	if rounds == nil {
+		rounds = []Round{}
+	}
+
 	raw, err := json.Marshal(rounds)
 	if err != nil {
 		return err
@@ -68,9 +73,16 @@ func scanRun(row pgx.CollectableRow) (Run, error) {
 		return Run{}, err
 	}
 
-	r.Rounds = []Round{}
+	if err := json.Unmarshal(rounds, &r.Rounds); err != nil {
+		return Run{}, err
+	}
 
-	return r, json.Unmarshal(rounds, &r.Rounds)
+	// Runs saved as null before that was fixed.
+	if r.Rounds == nil {
+		r.Rounds = []Round{}
+	}
+
+	return r, nil
 }
 
 func (s *PostgresStore) Run(ctx context.Context, id int64) (Run, error) {
@@ -225,6 +237,9 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 		           WHEN (run.finished_at IS NULL OR run.docs_queued > run.docs_indexed + run.docs_failed + run.docs_rejected)
 		                AND run.submitted_at > now() - interval '1 hour' THEN 'reading'
 		           WHEN run.docs_indexed > 0 THEN 'in'
+		           WHEN run.docs_failed > 0 THEN 'failed'
+		           WHEN rev.ok = 0 AND rev.refused > 0 THEN 'blocked'
+		           WHEN rev.ok > 0 THEN 'empty'
 		           ELSE 'failed'
 		       END,
 		       coalesce((SELECT json_agg(json_build_object('channel', f.channel, 'query', f.query, 'via', coalesce(f.via_work, 0), 'round', f.round)
@@ -235,7 +250,8 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 			SELECT r.submitted_at, r.finished_at, r.docs_queued, r.docs_indexed, r.docs_failed, r.docs_rejected
 			FROM runs r WHERE r.source_id = w.source_id ORDER BY r.submitted_at DESC LIMIT 1) run ON true
 		LEFT JOIN LATERAL (
-			SELECT coalesce(bool_or(pr.decision = 'index'), false) AS indexed, coalesce(bool_or(pr.decision = 'skip'), false) AS skipped
+			SELECT coalesce(bool_or(pr.decision = 'index'), false) AS indexed, coalesce(bool_or(pr.decision = 'skip'), false) AS skipped,
+			       count(*) FILTER (WHERE p.status BETWEEN 200 AND 299) AS ok, count(*) FILTER (WHERE p.status >= 400) AS refused
 			FROM source_pages sp JOIN pages p ON p.id = sp.page_id LEFT JOIN page_reviews pr ON pr.url = p.url
 			WHERE sp.source_id = w.source_id) rev ON true
 		WHERE w.lab_id = $1

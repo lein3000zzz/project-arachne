@@ -504,7 +504,10 @@ const stopNames = {
   rounds: "the rounds ran out", time: "out of time", interrupted: "interrupted",
 };
 const channelNames = { search: "search", reference: "references", citing: "citing works", seed: "the lab's sources" };
-const readNames = { in: "in the index", reading: "being read", set_aside: "set aside on review", failed: "not read" };
+const readNames = {
+  in: "in the index", reading: "being read", set_aside: "set aside on review", failed: "could not be fetched",
+  blocked: "blocked by the site", empty: "no text without a browser",
+};
 const shownPerList = 200;
 
 function renderRun(run) {
@@ -514,15 +517,16 @@ function renderRun(run) {
     return;
   }
   const running = run.status === "running";
-  const status = running ? `researching… round ${Math.max(run.rounds.length, 1)} · started ${ago(run.started_at)}`
+  const status = running ? `researching… round ${Math.max((run.rounds || []).length, 1)} · started ${ago(run.started_at)}`
     : run.status === "failed" ? `stopped: ${run.error}`
     : `researched ${ago(run.finished_at)} · ${stopNames[run.stopped] || run.stopped}`;
-  const rounds = run.rounds.map((r) => {
+  const rounds = (run.rounds || []).map((r) => {
     const found = ["search", "reference", "citing"].filter((c) => (r.found || {})[c]).map((c) => `${r.found[c]} by ${channelNames[c]}`).join(", ");
     const failed = Object.entries(r.failed || {}).map(([what, why]) => `${what}: ${why}`).join("; ");
     return el("li", {},
       el("b", {}, `round ${r.n}`),
-      el("span", {}, ` found ${found || "nothing new"} · judged ${r.judged} · kept ${r.kept} · read ${r.read}`),
+      el("span", {}, ` found ${found || "nothing new"} · judged ${r.judged} · kept ${r.kept} · read ${r.read}` +
+        (r.unread ? ` (${r.unread} kept out by their sites, budget given back)` : "")),
       r.queries && r.queries.length ? el("div", { class: "note" }, "searched " + r.queries.map((q) => "“" + q + "”").join(", ")) : null,
       failed ? el("div", { class: "note" }, failed) : null);
   });
@@ -604,7 +608,8 @@ function renderMap(m) {
 
   $("researchMap").replaceChildren(el("div", { class: "research-map" },
     el("p", { class: "note" }, `${c.works} works found · ${c.kept} kept · ${c.maybe} maybe · ${c.dropped} dropped · ${c.pending} not yet judged · ` +
-      `${c.read} read, ${c.in} in the index` + (c.set_aside ? `, ${c.set_aside} set aside on review` : "")),
+      `${c.read} read, ${c.in} in the index` + (c.set_aside ? `, ${c.set_aside} set aside on review` : "") +
+      (c.kept_out ? `, ${c.kept_out} kept out by their sites` : "")),
     estimate,
     ...subGroups,
     group("loose", `In no subtopic · ${kept.filter((w) => !inSub.has(w.subtopic_id)).length}`, kept.filter((w) => !inSub.has(w.subtopic_id)), titles),

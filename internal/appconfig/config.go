@@ -77,6 +77,9 @@ type Indexer struct {
 	Workers        int      `yaml:"workers"`
 	QueueSize      int      `yaml:"queue_size"`
 	EnqueueTimeout Duration `yaml:"enqueue_timeout"`
+	// Text indexed per page, in characters; documents are cut by
+	// documents.max_runes before they get here.
+	MaxRunes int `yaml:"max_runes"`
 }
 
 type Retrieval struct {
@@ -218,6 +221,8 @@ type Documents struct {
 	// chunks to embed.
 	MaxRunes int      `yaml:"max_runes"`
 	Timeout  Duration `yaml:"timeout"`
+	// Documents read at once; the crawl workers past them wait their turn.
+	Concurrent int `yaml:"concurrent"`
 }
 
 // WebSearch is the SearXNG instance labs research with; its address is in Vault.
@@ -383,6 +388,7 @@ func Default() Config {
 			Workers:        4,
 			QueueSize:      64,
 			EnqueueTimeout: Duration(5 * time.Second),
+			MaxRunes:       150000,
 		},
 		Retrieval: Retrieval{
 			Candidates:   100,
@@ -449,8 +455,9 @@ func Default() Config {
 			Verify:        true,
 		},
 		Documents: Documents{
-			MaxRunes: 150000,
-			Timeout:  Duration(5 * time.Minute),
+			MaxRunes:   150000,
+			Timeout:    Duration(5 * time.Minute),
+			Concurrent: 2,
 		},
 		WebSearch: WebSearch{
 			DefaultEngines: []string{"brave", "google cse", "bing", "wikipedia"},
@@ -543,6 +550,8 @@ func (c *Config) Validate() error {
 		{"embedding.batch_size", c.Embedding.BatchSize},
 		{"indexer.workers", c.Indexer.Workers},
 		{"indexer.queue_size", c.Indexer.QueueSize},
+		{"indexer.max_runes", c.Indexer.MaxRunes},
+		{"documents.concurrent", c.Documents.Concurrent},
 		{"queue.channel_buffer", c.Queue.ChannelBuffer},
 		{"retrieval.candidates", c.Retrieval.Candidates},
 		{"retrieval.rrf_k", c.Retrieval.RRFK},

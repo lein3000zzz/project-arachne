@@ -307,3 +307,32 @@ func TestScrapedLinksAreReadFromTheDecodedDocument(t *testing.T) {
 		}
 	}
 }
+
+// A huge body is read in part, so one page cannot take the crawler's memory.
+func TestHugeBodiesAreReadInPart(t *testing.T) {
+	p := newTestParser(t)
+
+	parseLimit, jsonLimit := maxParseBytes, maxJSONBytes
+	maxParseBytes, maxJSONBytes = 256<<10, 128<<10
+	t.Cleanup(func() { maxParseBytes, maxJSONBytes = parseLimit, jsonLimit })
+
+	page := "<html><body><p>" + strings.Repeat("words of a long page ", 20000) + `</p><a href="/tail">tail</a></body></html>`
+
+	res := parse(t, p, page, "https://example.com/", "text/html")
+	if len(res.Warnings) == 0 || !strings.Contains(res.Warnings[0].Message, "only the first") {
+		t.Errorf("warnings %+v", res.Warnings)
+	}
+
+	if _, ok := kindOf(res, "https://example.com/tail"); ok {
+		t.Error("a link past the cut was read")
+	}
+
+	if res.Content == "" || len(res.Content) > maxParseBytes {
+		t.Errorf("content of %d bytes", len(res.Content))
+	}
+
+	big := `{"items": [` + strings.Repeat(`{"url": "https://example.com/x"},`, 5000) + `{}]}`
+	if res := parse(t, p, big, "https://example.com/", "application/json"); len(res.Links) != 0 || res.Warnings[0].Stage != stageJSON {
+		t.Errorf("big JSON: %d links, %+v", len(res.Links), res.Warnings)
+	}
+}

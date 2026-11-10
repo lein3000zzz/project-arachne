@@ -108,14 +108,28 @@ func (repo *CrawlerRepo) crawlWorker(tcChan <-chan *config.Task, saverChan chan<
 	}
 }
 
+// A task started this often without being done took the crawler down every
+// time - a page that blows up a parser - and Kafka would hand it back forever,
+// with every task behind it waiting. It is given up and the run goes on.
+const maxTaskAttempts = 3
+
 // handleTask completes a task only once its work is fully done, including queueing
 // every link it found: completion counts it down and acks it, and an acked task is
 // never redelivered.
 func (repo *CrawlerRepo) handleTask(task *config.Task, saverChan chan<- *data.PageData) {
 	task.EnsureID()
 
-	if repo.alreadyHandled(task) {
+	state, known := repo.taskState(task)
+
+	switch {
+	case known && (state.Done || !state.RunActive):
 		task.Ack()
+		return
+	case known && state.Attempts > maxTaskAttempts:
+		repo.logger.Errorw("A page took the crawler down on every attempt; it is skipped", "url", task.URL, "runID", task.Run.ID,
+			"attempts", state.Attempts-1)
+		repo.completeTask(task)
+
 		return
 	}
 
@@ -132,20 +146,21 @@ func (repo *CrawlerRepo) handleTask(task *config.Task, saverChan chan<- *data.Pa
 	repo.completeTask(task)
 }
 
-// alreadyHandled skips redelivered tasks that were already completed, and tasks of
-// runs that finished or lost their slot. On a Redis error it processes anyway:
-// every step after this is idempotent.
-func (repo *CrawlerRepo) alreadyHandled(task *config.Task) bool {
+// taskState says whether a redelivered task was already completed, whether its
+// run finished or lost its slot, and how often it was started. On a Redis
+// error known is false and the task is processed anyway: every step after
+// this is idempotent.
+func (repo *CrawlerRepo) taskState(task *config.Task) (state runstates.TaskState, known bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	state, err := repo.runStateManager.TaskState(ctx, task.Run.ID, task.ID, repo.settings.RunState.SlotLease.Std())
 	if err != nil {
 		repo.logger.Warnw("Failed to read task state, processing anyway", "url", task.URL, "error", err)
-		return false
+		return runstates.TaskState{}, false
 	}
 
-	return state.Done || !state.RunActive
+	return state, true
 }
 
 func (repo *CrawlerRepo) processTask(task *config.Task, saverChan chan<- *data.PageData) error {
@@ -433,6 +448,32 @@ func pageIdentity(requested string, fetchRes *networker.FetchResult) (pageURL, a
 
 // linkBase is where the document really came from, whatever it is stored under:
 // relative links resolve against it.
+// cutRunes keeps at most limit runes, ending at a paragraph break when one is
+// near the end. It walks the string rather than converting it: the text it
+// cuts may be megabytes.
+func cutRunes(text string, limit int) string {
+	if limit <= 0 {
+		return text
+	}
+
+	n := 0
+
+	for i := range text {
+		if n == limit {
+			kept := text[:i]
+			if j := strings.LastIndex(kept, "\n\n"); j > len(kept)*3/4 {
+				kept = kept[:j]
+			}
+
+			return kept
+		}
+
+		n++
+	}
+
+	return text
+}
+
 func linkBase(requested string, fetchRes *networker.FetchResult) string {
 	if fetchRes.FinalURL == "" {
 		return requested
@@ -445,7 +486,7 @@ func (repo *CrawlerRepo) submitDocument(ctx context.Context, pageURL, runID stri
 	doc := &documents.Document{
 		URL:         pageURL,
 		Title:       parsed.Title,
-		Content:     parsed.Content,
+		Content:     cutRunes(parsed.Content, repo.settings.Indexer.MaxRunes),
 		ContentType: fetchRes.ContentType,
 		RunID:       runID,
 		FetchedAt:   time.Now(),

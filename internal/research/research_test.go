@@ -27,6 +27,8 @@ type memStore struct {
 	links     []Link
 	refs      map[int64][]Reference
 	startErr  error
+	// How reading a site's works goes; read works of other sites are in.
+	readAs map[string]string
 }
 
 func newMemStore() *memStore {
@@ -153,6 +155,9 @@ func (m *memStore) Works(context.Context, int64) ([]Work, error) {
 
 		if w.SourceID != 0 {
 			out[i].Read = ReadIn
+			if state, ok := m.readAs[siteOf(w.URL)]; ok {
+				out[i].Read = state
+			}
 		}
 	}
 
@@ -518,6 +523,69 @@ func TestReadingStopsWhenTheLabIsFull(t *testing.T) {
 
 	if len(lab.read) != 2 || !strings.Contains(run.Rounds[0].Failed["reading"], "full") {
 		t.Errorf("read %v, round %+v", lab.read, run.Rounds[0])
+	}
+}
+
+// A site that keeps crawlers out gets one try, its read is given back, and
+// it is not tried again; a site that gave its pages gets more.
+func TestASiteThatRefusesIsTriedOnceAndItsReadRefunded(t *testing.T) {
+	store := newMemStore()
+	store.readAs = map[string]string{"medium.com": ReadBlocked}
+
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "Zig", Engines: []string{"brave"}}}}
+
+	var results []websearch.Result
+	for _, u := range []string{"https://a.medium.com/x", "https://b.medium.com/y", "https://medium.com/z",
+		"https://go.dev/doc/1", "https://go.dev/doc/2", "https://go.dev/doc/3", "https://go.dev/doc/4"} {
+		results = append(results, websearch.Result{URL: u, Title: "Page " + u})
+	}
+
+	chat := &model{plan: `{"subtopics": [{"name": "A", "focus": "a", "queries": ["zig"]}, {"name": "B", "focus": "b"}]}`, queries: `{}`}
+	s := NewService(zap.NewNop().Sugar(), store, lab, &fakeSearch{results: map[string][]websearch.Result{"zig": results}}, nil, chat, testConfig())
+
+	run, _ := s.Start(context.Background(), 1, 3, Ask{Read: ptr(10)})
+	run = waitDone(t, store, run.ID)
+
+	medium := 0
+	for _, u := range lab.read {
+		if siteOf(u) == "medium.com" {
+			medium++
+		}
+	}
+
+	if medium != 1 || len(lab.read) != 1+maxReadsPerSite {
+		t.Errorf("read %v: one try of medium.com, then go.dev up to its share", lab.read)
+	}
+
+	if run.Rounds[0].Read != 2 || run.Rounds[0].Unread != 1 {
+		t.Errorf("round 1 %+v: one read of each site, the refused one given back", run.Rounds[0])
+	}
+}
+
+func TestPapersAreReadFromTheirOpenCopyFirst(t *testing.T) {
+	cfg := testConfig()
+	cfg.Documents = false
+
+	s := NewService(zap.NewNop().Sugar(), nil, nil, nil, nil, nil, cfg)
+
+	w := s.paper(openalex.Work{ID: "W1", DOI: "10.1145/1", Title: "T", LandingURL: "https://dl.acm.org/doi/10.1145/1",
+		OALandingURL: "https://arxiv.org/abs/2401.00001", PDFURL: "https://arxiv.org/pdf/2401.00001"})
+	if w.URL != "https://arxiv.org/abs/2401.00001" {
+		t.Errorf("without PDFs: %s", w.URL)
+	}
+
+	cfg.Documents = true
+	if w := NewService(zap.NewNop().Sugar(), nil, nil, nil, nil, nil, cfg).paper(openalex.Work{ID: "W1", LandingURL: "https://dl.acm.org/x",
+		PDFURL: "https://arxiv.org/pdf/2401.00001"}); w.URL != "https://arxiv.org/pdf/2401.00001" {
+		t.Errorf("with PDFs: %s", w.URL)
+	}
+
+	if w := s.paper(openalex.Work{ID: "W2", LandingURL: "https://dl.acm.org/x"}); w.URL != "https://dl.acm.org/x" {
+		t.Errorf("no open copy: %s", w.URL)
+	}
+
+	if got := siteOf("https://levelup.medium.com/a"); got != "medium.com" {
+		t.Errorf("siteOf: %s", got)
 	}
 }
 

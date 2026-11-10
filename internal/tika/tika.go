@@ -23,23 +23,34 @@ import (
 var (
 	ErrUnavailable = errors.New("the document reader is unavailable")
 	ErrNoText      = errors.New("the document has no readable text")
+	ErrTooLong     = fmt.Errorf("the document's text is over %d MiB: too long to read", maxReplyBytes>>20)
 )
 
 type Client struct {
 	base     string
 	http     *http.Client
 	maxRunes int
+	// One per document read at once: its reply is held, and copied as it is
+	// cleaned, while the crawl workers that wait hold only their own files.
+	slots chan struct{}
 }
 
-func New(baseURL string, timeout time.Duration, maxRunes int) *Client {
+// New reads at most concurrent documents at once.
+func New(baseURL string, timeout time.Duration, maxRunes, concurrent int) *Client {
 	return &Client{
 		base:     strings.TrimRight(baseURL, "/"),
 		http:     &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		maxRunes: maxRunes,
+		slots:    make(chan struct{}, max(concurrent, 1)),
 	}
 }
 
-const errorBodyLimit = 512
+const (
+	errorBodyLimit = 512
+	// The whole text is read for its references, so this bounds it: a reply
+	// past it is no document anyone reads in full.
+	maxReplyBytes = 64 << 20
+)
 
 type Document struct {
 	Title string
@@ -50,6 +61,13 @@ type Document struct {
 }
 
 func (c *Client) Read(ctx context.Context, body []byte, contentType string) (Document, error) {
+	select {
+	case c.slots <- struct{}{}:
+		defer func() { <-c.slots }()
+	case <-ctx.Done():
+		return Document{}, ctx.Err()
+	}
+
 	// One request gives text and metadata together: asking twice would OCR a
 	// scan twice.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.base+"/rmeta/markdown", bytes.NewReader(body))
@@ -76,8 +94,14 @@ func (c *Client) Read(ctx context.Context, body []byte, contentType string) (Doc
 
 	// One entry per document: the first is the file itself, the rest are files
 	// embedded in it - an EPUB's cover image - whose text is not the document's.
+	reply := &io.LimitedReader{R: resp.Body, N: maxReplyBytes + 1}
+
 	var entries []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+	if err := json.NewDecoder(reply).Decode(&entries); err != nil {
+		if reply.N <= 0 {
+			return Document{}, ErrTooLong
+		}
+
 		return Document{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 
@@ -138,19 +162,29 @@ func clean(text string) string {
 }
 
 // cut keeps at most limit runes, ending at the last paragraph break if there
-// is one in the final quarter.
+// is one in the final quarter. It walks the text rather than converting it:
+// a book's text is megabytes.
 func cut(text string, limit int) string {
-	runes := []rune(text)
-	if limit <= 0 || len(runes) <= limit {
+	if limit <= 0 {
 		return text
 	}
 
-	kept := string(runes[:limit])
-	if i := strings.LastIndex(kept, "\n\n"); i > len(kept)*3/4 {
-		kept = kept[:i]
+	n := 0
+
+	for i := range text {
+		if n == limit {
+			kept := text[:i]
+			if j := strings.LastIndex(kept, "\n\n"); j > len(kept)*3/4 {
+				kept = kept[:j]
+			}
+
+			return strings.TrimSpace(kept)
+		}
+
+		n++
 	}
 
-	return strings.TrimSpace(kept)
+	return text
 }
 
 const maxTitleRunes = 200

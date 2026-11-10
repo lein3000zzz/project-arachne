@@ -3,8 +3,11 @@ package webcrawler
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
+	"web-crawler/internal/appconfig"
 	"web-crawler/internal/documents"
 	"web-crawler/internal/networker"
 	"web-crawler/internal/parser"
@@ -101,5 +104,31 @@ func TestSubmitDocumentSkipsEmptyContent(t *testing.T) {
 
 	if len(sink.docs) != 0 {
 		t.Errorf("a page with no text must not reach the sink, got %d", len(sink.docs))
+	}
+}
+
+func TestSubmitDocumentCutsLongText(t *testing.T) {
+	sink := &recordingSink{}
+
+	settings := appconfig.Default()
+	settings.Indexer.MaxRunes = 100
+
+	repo := &CrawlerRepo{logger: zap.NewNop().Sugar(), documents: sink, settings: settings}
+
+	text := strings.Repeat("ж", 80) + "\n\n" + strings.Repeat("ы", 500)
+
+	repo.submitDocument(context.Background(), "https://example.com/", "run",
+		&networker.FetchResult{Status: http.StatusOK}, &parser.ParseResult{Content: text})
+
+	if got := sink.docs[0].Content; got != strings.Repeat("ж", 80) {
+		t.Errorf("kept %d runes, want the 80 before the paragraph break", utf8.RuneCountInString(got))
+	}
+
+	if got := cutRunes(strings.Repeat("ы", 500), 100); utf8.RuneCountInString(got) != 100 {
+		t.Errorf("with no break near the end: %d runes", utf8.RuneCountInString(got))
+	}
+
+	if got := cutRunes("short", 100); got != "short" {
+		t.Errorf("short text: %q", got)
 	}
 }

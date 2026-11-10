@@ -14,6 +14,7 @@ const (
 	activeTasksKeyPrefix  = "run:active_tasks:"
 	currentLinksKeyPrefix = "run:current_links:"
 	tasksKeyPrefix        = "run:tasks:"
+	attemptsKeyPrefix     = "run:attempts:"
 )
 
 // Lease times are read from Redis's clock (TIME), not the node's, so clock skew
@@ -83,7 +84,10 @@ end
 
 local done = redis.call('HGET', KEYS[2], ARGV[2]) == 'done'
 
-return {active and 1 or 0, done and 1 or 0}
+local attempts = redis.call('HINCRBY', KEYS[3], ARGV[2], 1)
+redis.call('EXPIRE', KEYS[3], ARGV[4])
+
+return {active and 1 or 0, done and 1 or 0, attempts}
 `)
 
 var completeTaskScript = redis.NewScript(nowMillis + `
@@ -182,14 +186,14 @@ func (m *RedisRunStateManager) UnadmitTask(ctx context.Context, runID, taskID st
 }
 
 func (m *RedisRunStateManager) TaskState(ctx context.Context, runID, taskID string, lease time.Duration) (TaskState, error) {
-	keys := []string{slotsKey, tasksKeyPrefix + runID}
+	keys := []string{slotsKey, tasksKeyPrefix + runID, attemptsKeyPrefix + runID}
 
-	raw, err := taskStateScript.Run(ctx, m.client, keys, runID, taskID, lease.Milliseconds()).Int64Slice()
+	raw, err := taskStateScript.Run(ctx, m.client, keys, runID, taskID, lease.Milliseconds(), int64(m.ttl.Seconds())).Int64Slice()
 	if err != nil {
 		return TaskState{}, fmt.Errorf("reading task state: %w", err)
 	}
 
-	return TaskState{RunActive: raw[0] == 1, Done: raw[1] == 1}, nil
+	return TaskState{RunActive: raw[0] == 1, Done: raw[1] == 1, Attempts: raw[2]}, nil
 }
 
 func (m *RedisRunStateManager) CompleteTask(ctx context.Context, runID, taskID string, lease time.Duration) (int64, bool, error) {
@@ -204,7 +208,7 @@ func (m *RedisRunStateManager) CompleteTask(ctx context.Context, runID, taskID s
 }
 
 func (m *RedisRunStateManager) CleanupRun(ctx context.Context, runID string) error {
-	keys := []string{activeTasksKeyPrefix + runID, currentLinksKeyPrefix + runID, tasksKeyPrefix + runID}
+	keys := []string{activeTasksKeyPrefix + runID, currentLinksKeyPrefix + runID, tasksKeyPrefix + runID, attemptsKeyPrefix + runID}
 
 	if err := m.client.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("cleaning up run state: %w", err)

@@ -188,8 +188,12 @@ func TestCompletionCountsOnce(t *testing.T) {
 		t.Fatal("a redelivered task must not be counted twice")
 	}
 
-	if state, _ := m.TaskState(ctx, "r", "t1", lease); !state.Done || !state.RunActive {
-		t.Errorf("state = %+v, want done and active", state)
+	if state, _ := m.TaskState(ctx, "r", "t1", lease); !state.Done || !state.RunActive || state.Attempts != 1 {
+		t.Errorf("state = %+v, want done, active, started once", state)
+	}
+
+	if state, _ := m.TaskState(ctx, "r", "t1", lease); state.Attempts != 2 {
+		t.Errorf("a task started again counts %d attempts, want 2", state.Attempts)
 	}
 
 	if _, counted, _ := m.CompleteTask(ctx, "r", "never-admitted", lease); counted {
@@ -237,12 +241,13 @@ func TestCleanupRemovesRunState(t *testing.T) {
 
 	_, _, _ = m.AcquireRunSlot(ctx, "r", 1, lease)
 	_, _ = m.AdmitTask(ctx, "r", "t1", 10)
+	_, _ = m.TaskState(ctx, "r", "t1", lease)
 
 	if err := m.CleanupRun(ctx, "r"); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, key := range []string{activeTasksKeyPrefix + "r", currentLinksKeyPrefix + "r", tasksKeyPrefix + "r"} {
+	for _, key := range []string{activeTasksKeyPrefix + "r", currentLinksKeyPrefix + "r", tasksKeyPrefix + "r", attemptsKeyPrefix + "r"} {
 		if client.Exists(ctx, key).Val() != 0 {
 			t.Errorf("%s survived cleanup", key)
 		}

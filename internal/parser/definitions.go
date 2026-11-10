@@ -31,6 +31,17 @@ const (
 	attrSrc  = "src"
 )
 
+// Variables, not constants, only so tests can lower them.
+var (
+	// A body past this is parsed in part: a DOM costs many times the page's
+	// bytes, and every crawl worker may be parsing at once. A page has said
+	// what it has to say long before this.
+	maxParseBytes = 4 << 20
+	// JSON decodes into maps many times its size; a cut one would not decode,
+	// so past this its links are not looked for.
+	maxJSONBytes = 4 << 20
+)
+
 type bodyKind int
 
 const (

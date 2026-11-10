@@ -360,7 +360,8 @@ section:last-of-type { border-bottom: 0; }
 .work-meta { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); margin-top: 0.1rem; }
 .works .note { margin: 0.1rem 0 0; font-size: 0.75rem; }
 .work-reason { font-size: 0.78rem; margin-top: 0.1rem; }
-.works li.drop, .works li.drop a, .works li.pending a { color: var(--muted); }
+.works li.drop, .works li.drop a, .works li.pending a,
+.works li.read-blocked a, .works li.read-empty a, .works li.read-failed a { color: var(--muted); }
 .check { display: inline-flex; gap: 0.5rem; align-items: center; font-size: 0.82rem; cursor: pointer; }
 .web-choice { display: grid; gap: 0.7rem; margin: 0.4rem 0 1.2rem; }
 .web-choice .ticks { margin: 0; }

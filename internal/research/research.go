@@ -71,8 +71,19 @@ const (
 	ReadReading  = "reading"
 	ReadIn       = "in"
 	ReadSetAside = "set_aside"
-	ReadFailed   = "failed"
+	// The site refused it: every page came back 4xx or 5xx.
+	ReadBlocked = "blocked"
+	// Fetched, but with no text to index: a page built by scripts in the
+	// browser, or an empty one.
+	ReadEmpty  = "empty"
+	ReadFailed = "failed"
 )
+
+// unread says a read came to nothing, through no fault of the work: the
+// site, not the reviewer, kept it out.
+func unread(state string) bool {
+	return state == ReadBlocked || state == ReadEmpty || state == ReadFailed
+}
 
 type Budget struct {
 	// Works judged in a run, and works read.
@@ -111,6 +122,9 @@ type Round struct {
 	Judged int            `json:"judged"`
 	Kept   int            `json:"kept"`
 	Read   int            `json:"read"`
+	// Of those read, how many their sites kept out: their budget went back to
+	// later reads.
+	Unread int `json:"unread,omitempty"`
 	// What did not answer, and why.
 	Failed map[string]string `json:"failed,omitempty"`
 }
@@ -400,7 +414,8 @@ func doiOf(u string) string {
 }
 
 // paper is a work as OpenAlex knows it, at the address it is best read from:
-// its open-access PDF when the crawler reads PDFs, else its landing page.
+// its open-access PDF when the crawler reads PDFs, else its open copy's
+// landing page, else the publisher's.
 func (s *Service) paper(w openalex.Work) Work {
 	out := Work{Kind: KindPaper, Title: w.Title, Snippet: w.Abstract, Site: w.Venue, Year: w.Year, DOI: w.DOI, OpenAlexID: w.ID}
 
@@ -408,7 +423,8 @@ func (s *Service) paper(w openalex.Work) Work {
 		out.CitedBy = &w.CitedBy
 	}
 
-	candidates := []string{w.LandingURL}
+	// The open copy before the publisher's page, which often refuses crawlers.
+	candidates := []string{w.OALandingURL, w.LandingURL}
 	if s.cfg.Documents {
 		candidates = append([]string{w.PDFURL}, candidates...)
 	}

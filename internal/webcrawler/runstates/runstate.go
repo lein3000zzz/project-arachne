@@ -19,6 +19,9 @@ const (
 type TaskState struct {
 	RunActive bool
 	Done      bool
+	// Times the task was started, this one included. A task started again
+	// before it was done had its worker - or the whole crawler - go down.
+	Attempts int64
 }
 
 // RunStateManager coordinates runs across nodes. Every method is a single atomic
@@ -32,7 +35,8 @@ type RunStateManager interface {
 	AdmitTask(ctx context.Context, runID, taskID string, maxLinks int) (Admission, error)
 	// UnadmitTask undoes an admission whose task never reached the queue.
 	UnadmitTask(ctx context.Context, runID, taskID string) error
-	// TaskState also renews the run's lease: a task starting is proof of progress.
+	// TaskState is asked as a task starts: it also renews the run's lease, a
+	// task starting being proof of progress, and counts the attempt.
 	TaskState(ctx context.Context, runID, taskID string, lease time.Duration) (TaskState, error)
 	// CompleteTask counts a task as finished once. counted is false for a task that
 	// was already completed or never admitted; left is meaningful only when counted.

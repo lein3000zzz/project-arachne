@@ -129,11 +129,77 @@ func TestPostgresStoreKeepsRunsAndTheMap(t *testing.T) {
 	}
 
 	second, _ := store.StartRun(ctx, labID, "more", Budget{Found: 10, Read: 1}, "small")
+
+	if err := store.SaveRounds(ctx, second, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if r, _ := store.Run(ctx, second); r.Rounds == nil {
+		t.Error("a run without rounds reads as null, which the page cannot take")
+	}
 	if n, err := store.Interrupt(ctx); err != nil || n != 1 {
 		t.Errorf("interrupted %d, %v", n, err)
 	}
 
 	if r, _ := store.Run(ctx, second); r.Status != StatusFailed || r.Stopped != StopInterrupted {
 		t.Errorf("after a restart: %+v", r)
+	}
+}
+
+// A work read reports what its site did: refused it (blocked), or gave a page
+// with no text to index (empty).
+func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
+	pool := dbtest.NewPool(t)
+	store := NewPostgresStore(pool)
+	ctx := context.Background()
+
+	var labID int64
+	if err := pool.QueryRow(ctx, `
+		WITH u AS (INSERT INTO users (username, password_hash) VALUES ('lein', 'x') RETURNING id)
+		INSERT INTO labs (owner_id, name) SELECT id, 'zig' FROM u RETURNING id`).Scan(&labID); err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(url string, status int, queued int) int64 {
+		t.Helper()
+
+		var sourceID int64
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO sources (lab_id, kind, url, max_depth, max_links) VALUES ($1, 'research', $2, 1, 1) RETURNING id`, labID, url).Scan(&sourceID); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := pool.Exec(ctx, `
+			WITH r AS (INSERT INTO runs (id, start_url, max_depth, max_links, submitted_at, finished_at, source_id, docs_queued)
+			           VALUES ($1, $1, 1, 1, now() - interval '5 minutes', now() - interval '4 minutes', $2, $4)),
+			     p AS (INSERT INTO pages (url, host, status, fetched_at) VALUES ($1, 'example.com', $3, now()) RETURNING id)
+			INSERT INTO source_pages (source_id, page_id) SELECT $2, id FROM p`, url, sourceID, status, queued)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		id, _, err := store.Find(ctx, labID, 0, Work{URL: url, Kind: KindWeb}, Find{Channel: ChannelSearch, Query: "zig"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_ = store.SetSource(ctx, id, sourceID)
+
+		return id
+	}
+
+	blocked := read("https://medium.com/zig", 403, 0)
+	empty := read("https://spa.example.com/zig", 200, 0)
+
+	works, err := store.Works(ctx, labID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, w := range works {
+		want := map[int64]string{blocked: ReadBlocked, empty: ReadEmpty}[w.ID]
+		if w.Read != want {
+			t.Errorf("%s reads as %q, want %q", w.URL, w.Read, want)
+		}
 	}
 }

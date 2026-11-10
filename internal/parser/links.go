@@ -16,10 +16,14 @@ var looseURLs = xurls.Strict()
 
 func newLinkParser() *katanaparser.Parser {
 	p := katanaparser.NewResponseParser()
+	// jsluice stays off: it parses each inline script with a pure-Go
+	// tree-sitter, whose GLR stacks can explode on ordinary scripts - a 110 KB
+	// one on a 245 KB blog page took the crawler past 4 GiB in seconds
+	// (2026-11-09), and the crash put the same task back in a loop. Scripts
+	// are still read for URLs by katana's regular expressions.
 	p.InitWithOptions(&katanaparser.Options{
-		ScrapeJSLuiceResponses: true,
-		ScrapeJSResponses:      true,
-		DisableRedirects:       true,
+		ScrapeJSResponses: true,
+		DisableRedirects:  true,
 	})
 
 	return p

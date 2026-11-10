@@ -1,0 +1,7 @@
+# Overlay for a chat model served by Docker Model Runner on the Mac's GPU:
+#   make up CHAT=external CHAT_BASE_URL=http://model-runner.docker.internal/engines/v1 CONFIG_PATH=configs/config.yml,configs/dmr.yml
+# Cap its context first, or llama.cpp reserves the model's full window (37 GB
+# for this one at its default 262,144 tokens):
+#   docker model configure --context-size 8192 --keep-alive 30m ai/qwen3:4b-instruct-2507-q4_K_M
+chat:
+  model: ai/qwen3:4b-instruct-2507-q4_K_M

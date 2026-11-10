@@ -208,6 +208,25 @@ func TestDoneOrInactiveTasksAreSkippedAndAcked(t *testing.T) {
 	}
 }
 
+// A page that takes the crawler down comes back after every restart; past
+// the attempts allowed it is completed without being crawled, so the run and
+// every task behind it go on.
+func TestATaskThatKeepsCrashingIsGivenUp(t *testing.T) {
+	h := newHarness("https://example.com/a")
+	h.state.state = runstates.TaskState{RunActive: true, Attempts: maxTaskAttempts + 1}
+
+	if got := h.run(); !slices.Equal(got, []string{"complete", "ack"}) {
+		t.Errorf("events = %v: counted and acked, never crawled", got)
+	}
+
+	h = newHarness("https://example.com/a")
+	h.state.state = runstates.TaskState{RunActive: true, Attempts: maxTaskAttempts}
+
+	if got := h.run(); !slices.Contains(got, "send https://example.com/a") {
+		t.Errorf("events = %v: the last attempt allowed is still crawled", got)
+	}
+}
+
 func TestUnsentChildrenLeaveTheTaskForRedelivery(t *testing.T) {
 	h := newHarness("https://example.com/a", "https://example.com/b")
 	h.sender().errs = map[string]error{"https://example.com/b": queue.ErrQueueClosed}

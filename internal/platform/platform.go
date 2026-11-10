@@ -261,7 +261,7 @@ func NewDocumentReader(logger *zap.SugaredLogger, cfg appconfig.Config, sm manag
 
 	logger.Infow("Documents labs add are read", "maxRunes", cfg.Documents.MaxRunes)
 
-	return tika.New(base, cfg.Documents.Timeout.Std(), cfg.Documents.MaxRunes)
+	return tika.New(base, cfg.Documents.Timeout.Std(), cfg.Documents.MaxRunes, cfg.Documents.Concurrent)
 }
 
 // NewWebSearch returns nil when no SearXNG address is in Vault: labs then

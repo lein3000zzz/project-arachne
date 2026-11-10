@@ -43,6 +43,10 @@ type Work struct {
 	// An open-access PDF, when there is one, and the landing page.
 	PDFURL     string
 	LandingURL string
+	// The landing page of the open-access copy - often an arXiv or a
+	// repository page - when there is one: publishers' pages often refuse
+	// crawlers.
+	OALandingURL string
 	// Short IDs of the works it cites.
 	References []string
 }
@@ -250,7 +254,7 @@ func (w work) work() Work {
 	}
 
 	if l := w.BestOALocation; l != nil {
-		out.PDFURL = l.PDFURL
+		out.PDFURL, out.OALandingURL = l.PDFURL, l.LandingPageURL
 		if out.LandingURL == "" {
 			out.LandingURL = l.LandingPageURL
 		}

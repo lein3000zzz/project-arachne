@@ -13,6 +13,8 @@ import (
 	"web-crawler/internal/openalex"
 	"web-crawler/internal/urlnorm"
 	"web-crawler/internal/websearch"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -20,6 +22,9 @@ const (
 	maxNewQueries = 6
 	// Works of one site read per run: a big site should not fill the lab.
 	maxReadsPerSite = 3
+	// Reads started per run, refunded ones included, as a multiple of the
+	// read budget: a lab of refusing sites cannot read forever.
+	maxAttemptsFactor = 2
 	// A round with fewer new kept works than this share of all kept ones, or
 	// than minNewKept, has found what its channels can find.
 	saturationShare = 0.05
@@ -44,7 +49,9 @@ type session struct {
 	tried   []string
 
 	judged, read int
-	hosts        map[string]int
+	attempts     int
+	// Works read per site this run.
+	sites        map[string]int
 	readNow      map[int64]bool
 	followedRefs map[int64]bool
 
@@ -61,7 +68,7 @@ func (s *Service) run(id, ownerID int64, lab labs.Detail, request string, budget
 
 	r := &session{
 		s: s, id: id, ownerID: ownerID, lab: lab, request: request, budget: budget,
-		hosts: map[string]int{}, readNow: map[int64]bool{}, followedRefs: map[int64]bool{},
+		sites: map[string]int{}, readNow: map[int64]bool{}, followedRefs: map[int64]bool{},
 		byURL: map[string]int64{}, byDOI: map[string]int64{}, byOA: map[string]int64{}, urlOf: map[int64]string{},
 	}
 
@@ -80,6 +87,9 @@ func (s *Service) run(id, ownerID int64, lab labs.Detail, request string, budget
 		stopped = StopTime
 	case errors.Is(err, llm.ErrNoModel):
 		status, errText = StatusFailed, llm.ErrNoModel.Error()
+	case errors.Is(err, llm.ErrRequest):
+		status, errText = StatusFailed, "the chat model failed the request - unreachable, a wrong model name or a bad key: the server log says which"
+		s.logger.Warnw("Research failed", "run", id, "error", err)
 	default:
 		status, errText = StatusFailed, "the model could not be reached"
 		s.logger.Warnw("Research failed", "run", id, "error", err)
@@ -692,9 +702,12 @@ func channels(w Work) int {
 }
 
 // readKept reads kept works into the lab, a subtopic at a time so every one
-// gets its share, and a few per site.
+// gets its share, and a few per site. A site is trusted only once a page of it
+// came through: until then it gets one read a round, and once its reads have
+// all come to nothing - it refuses crawlers, or builds its pages in the
+// browser - it gets none, in this run or the next.
 func (r *session) readKept(ctx context.Context) {
-	if r.read >= r.budget.Read {
+	if r.read >= r.budget.Read || r.attempts >= maxAttemptsFactor*r.budget.Read {
 		return
 	}
 
@@ -702,6 +715,23 @@ func (r *session) readKept(ctx context.Context) {
 	if err != nil {
 		r.failed("reading", "could not be read")
 		return
+	}
+
+	sites := sitesOf(works)
+	triedNow := map[string]bool{}
+
+	allowed := func(w Work) bool {
+		site := siteOf(w.URL)
+		s := sites[site]
+
+		switch {
+		case s.ok > 0:
+			return r.sites[site] < maxReadsPerSite
+		case s.unread > 0, s.reading > 0, triedNow[site]:
+			return false
+		}
+
+		return true
 	}
 
 	queues := map[int64][]Work{}
@@ -729,14 +759,13 @@ func (r *session) readKept(ctx context.Context) {
 		progress = false
 
 		for _, id := range order {
-			if r.read >= r.budget.Read || ctx.Err() != nil {
+			if r.read >= r.budget.Read || r.attempts >= maxAttemptsFactor*r.budget.Read || ctx.Err() != nil {
 				return
 			}
 
-			q := queues[id]
-			for len(q) > 0 && r.hosts[hostOf(q[0].URL)] >= maxReadsPerSite {
-				q = q[1:]
-			}
+			// A work skipped now stays in the lab's list: a later round may
+			// read it, once its site has proved readable.
+			q := slices.DeleteFunc(queues[id], func(w Work) bool { return !allowed(w) })
 
 			if len(q) == 0 {
 				queues[id] = q
@@ -746,6 +775,10 @@ func (r *session) readKept(ctx context.Context) {
 			w := q[0]
 			queues[id] = q[1:]
 			progress = true
+
+			if sites[siteOf(w.URL)].ok == 0 {
+				triedNow[siteOf(w.URL)] = true
+			}
 
 			if stop := r.readWork(ctx, w); stop {
 				return
@@ -788,38 +821,37 @@ func (r *session) readWork(ctx context.Context, w Work) (stop bool) {
 	}
 
 	r.read++
+	r.attempts++
 	r.cur.Read++
-	r.hosts[hostOf(w.URL)]++
+	r.sites[siteOf(w.URL)]++
 	r.readNow[w.ID] = true
 
 	return false
 }
 
 // waitForReads gives the round's reads a while to be crawled and reviewed:
-// what they cite feeds the next round.
+// what they cite feeds the next round. A read its site kept out gives its
+// budget back, for a later round to spend on a work that can be read.
 func (r *session) waitForReads(ctx context.Context) {
 	if len(r.readNow) == 0 {
 		return
 	}
 
+	defer clear(r.readNow)
+
 	deadline := time.Now().Add(r.s.cfg.RoundWait)
 
-	for time.Now().Before(deadline) {
-		works, err := r.s.store.Works(ctx, r.lab.ID)
-		if err != nil {
+	var works []Work
+
+	for {
+		var err error
+		if works, err = r.s.store.Works(ctx, r.lab.ID); err != nil {
 			return
 		}
 
-		reading := false
+		reading := slices.ContainsFunc(works, func(w Work) bool { return r.readNow[w.ID] && w.Read == ReadReading })
 
-		for _, w := range works {
-			if r.readNow[w.ID] && w.Read == ReadReading {
-				reading = true
-				break
-			}
-		}
-
-		if !reading {
+		if !reading || !time.Now().Before(deadline) {
 			break
 		}
 
@@ -830,5 +862,60 @@ func (r *session) waitForReads(ctx context.Context) {
 		}
 	}
 
-	clear(r.readNow)
+	last := &r.rounds[len(r.rounds)-1]
+
+	for _, w := range works {
+		if r.readNow[w.ID] && unread(w.Read) {
+			r.read--
+			last.Unread++
+		}
+	}
+
+	if last.Unread > 0 {
+		r.save(ctx)
+	}
+}
+
+type siteRecord struct {
+	ok, unread, reading int
+}
+
+// sitesOf is how reads of each site have gone in this lab: through (indexed,
+// or read and set aside on review - the site gave its page either way), kept
+// out, or still under way.
+func sitesOf(works []Work) map[string]siteRecord {
+	out := map[string]siteRecord{}
+
+	for _, w := range works {
+		if w.SourceID == 0 {
+			continue
+		}
+
+		site := siteOf(w.URL)
+		s := out[site]
+
+		switch {
+		case w.Read == ReadIn || w.Read == ReadSetAside:
+			s.ok++
+		case unread(w.Read):
+			s.unread++
+		case w.Read == ReadReading:
+			s.reading++
+		}
+
+		out[site] = s
+	}
+
+	return out
+}
+
+// siteOf is the site an address belongs to, as one owner runs it: blogs on
+// medium.com share its refusals.
+func siteOf(u string) string {
+	host := hostOf(u)
+	if site, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
+		return site
+	}
+
+	return host
 }

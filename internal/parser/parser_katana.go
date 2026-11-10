@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
@@ -68,7 +69,18 @@ func (p *KatanaParser) parse(body []byte, base *url.URL, mediaType string) *Pars
 
 	var title, content string
 
-	switch classifyBody(mediaType, body) {
+	kind := classifyBody(mediaType, body)
+
+	switch {
+	case kind == kindJSON && len(body) > maxJSONBytes:
+		acc.warn(stageJSON, fmt.Sprintf("%d KiB of JSON: too big to look for links in", len(body)>>10))
+		kind = kindBinary
+	case kind != kindJSON && len(body) > maxParseBytes:
+		acc.warn(stageContent, fmt.Sprintf("a body of %d KiB: only the first %d KiB is read", len(body)>>10, maxParseBytes>>10))
+		body = body[:maxParseBytes]
+	}
+
+	switch kind {
 	case kindHTML:
 		doc := documentFrom(body, acc)
 		title, content = p.extractContent(body, base, doc, acc)

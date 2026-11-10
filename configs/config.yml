@@ -48,6 +48,9 @@ indexer:
   queue_size: 64
   # a page that can't be queued in time is skipped and indexed on its next crawl
   enqueue_timeout: 5s
+  # text indexed per page, in characters (as documents.max_runes for documents):
+  # a huge page would otherwise become thousands of chunks
+  max_runes: 150000
 
 retrieval:
   # chunks taken from each of dense and BM25 before folding into pages and fusing
@@ -224,6 +227,9 @@ documents:
   max_runes: 150000
   # one document, OCR included: a scan takes ~1-2 s a page
   timeout: 5m
+  # documents read at once (Tika has 2 CPUs); each reply is held in the
+  # crawler's memory while it is cleaned
+  concurrent: 2
 
 websearch:
   # engines a new lab may search unless its creator chooses (the SearXNG

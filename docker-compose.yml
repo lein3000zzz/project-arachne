@@ -13,6 +13,12 @@ services:
       # mounted so config edits need a restart, not a rebuild
       - ./configs:/root/configs:ro
     restart: always
+    # A crawl that runs away takes only the crawler down, not the whole VM: on
+    # 2026-11-09 it grew to 8.8 GB of a 12 GB VM and starved every service.
+    # GOMEMLIMIT has the collector work harder well before the hard limit.
+    mem_limit: 4g
+    environment:
+      GOMEMLIMIT: 3200MiB
     # Above shutdown.timeout in configs/config.yml. Docker's default of 10s would
     # kill the crawler while it is still flushing queued tasks and indexing.
     stop_grace_period: 40s
@@ -48,6 +54,9 @@ services:
     ports:
       - "8090:8090"
     restart: always
+    mem_limit: 2g
+    environment:
+      GOMEMLIMIT: 1600MiB
     depends_on:
       postgres:
         condition: service_healthy
