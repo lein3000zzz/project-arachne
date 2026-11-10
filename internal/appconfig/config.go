@@ -388,7 +388,7 @@ func Default() Config {
 		},
 		Indexer: Indexer{
 			Workers:        4,
-			QueueSize:      64,
+			QueueSize:      2000,
 			EnqueueTimeout: Duration(5 * time.Second),
 			MaxRunes:       150000,
 		},

@@ -87,7 +87,7 @@ func InitApp() *CrawlerApp {
 
 	contentParser := initParser(logger, cfg.Crawler.ParserEngine)
 
-	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword, runStore, db)
+	documentSink := initDocumentSink(logger, cfg, sm, redisURI, redisPassword, runStore, db, nodeID)
 
 	redisPagesCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBPageCache, cfg)
 	redisRobotsCacheClient := initRedisClient(logger, redisURI, redisPassword, redisDBRobotsCache, cfg)
@@ -129,7 +129,7 @@ func initParser(logger *zap.SugaredLogger, engine string) parser.Parser {
 }
 
 func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manager.SecretManager, redisURI, redisPassword string,
-	progress indexing.Progress, db *pgxpool.Pool) documents.Sink {
+	progress indexing.Progress, db *pgxpool.Pool, owner string) documents.Sink {
 	ctx, cancel := context.WithTimeout(context.Background(), indexingStartupTimeout)
 	defer cancel()
 
@@ -168,7 +168,12 @@ func initDocumentSink(logger *zap.SugaredLogger, cfg appconfig.Config, sm manage
 		chunking.Gated(reviewer)
 	}
 
-	return indexing.NewAsyncSink(logger, chunking, progress, cfg.Indexer.Workers, cfg.Indexer.QueueSize, cfg.Indexer.EnqueueTimeout.Std())
+	return indexing.NewQueuedSink(logger, chunking, indexing.NewPostgresQueue(db), progress, indexing.QueuedConfig{
+		Workers:        cfg.Indexer.Workers,
+		Capacity:       cfg.Indexer.QueueSize,
+		EnqueueTimeout: cfg.Indexer.EnqueueTimeout.Std(),
+		Owner:          owner,
+	})
 }
 
 func initRedisClient(logger *zap.SugaredLogger, uri, password string, db int, cfg appconfig.Config) *redis.Client {
@@ -291,6 +296,7 @@ func initDatabase(logger *zap.SugaredLogger, sm manager.SecretManager, cfg appco
 	ctx, cancel := context.WithTimeout(context.Background(), databaseStartupTimeout)
 	defer cancel()
 
-	// A connection per saver, plus a few for run bookkeeping and startup work.
-	return platform.OpenDatabase(ctx, logger, sm, int32(cfg.Crawler.SaverWorkers+3))
+	// A connection per saver and per indexing worker (the queue lives here),
+	// plus a few for run bookkeeping, queueing pages and startup work.
+	return platform.OpenDatabase(ctx, logger, sm, int32(cfg.Crawler.SaverWorkers+cfg.Indexer.Workers+3))
 }

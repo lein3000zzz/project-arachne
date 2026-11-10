@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 	"web-crawler/internal/chunker"
 	"web-crawler/internal/documents"
 
@@ -464,15 +463,18 @@ func TestTheGateSeesOnlyPagesWithSomethingToIndex(t *testing.T) {
 	_ = hashes
 }
 
-func TestAsyncSinkCountsRejectionsApart(t *testing.T) {
+func TestTheQueueCountsRejectionsApart(t *testing.T) {
 	hashes, next := newMemHashStore(), &recordingSink{}
 	chunking := NewChunkingSink(zap.NewNop().Sugar(), newChunker(t, 200), hashes, next).Gated(&fakeGate{})
 	progress := newProgress()
-	sink := NewAsyncSink(zap.NewNop().Sugar(), chunking, progress, 1, 4, time.Second)
+	queue := &memQueue{}
+	sink := newQueued(chunking, queue, progress, 1, 4)
 
 	doc := page(body)
 	doc.RunID = "r"
 	_ = sink.Submit(context.Background(), doc)
+
+	eventually(t, "the page reviewed", func() bool { return len(queue.snapshot()) == 0 })
 	_ = sink.Shutdown(context.Background())
 
 	if progress.rejected["r"] != 1 || progress.indexed["r"] != 0 || progress.fails["r"] != 0 {

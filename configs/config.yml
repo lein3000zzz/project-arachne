@@ -45,7 +45,9 @@ indexer:
   # embedding runs on these workers, never on the crawl workers; on a CPU-bound
   # embedder more workers only make each request wait longer
   workers: 2
-  queue_size: 64
+  # pages waiting in Postgres (index_queue) to be indexed; they outlive the
+  # crawler. Past this many a crawl worker waits for room
+  queue_size: 2000
   # a page that can't be queued in time is skipped and indexed on its next crawl
   enqueue_timeout: 5s
   # text indexed per page, in characters (as documents.max_runes for documents):
