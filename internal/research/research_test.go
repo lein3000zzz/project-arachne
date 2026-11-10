@@ -716,6 +716,18 @@ func TestCoverageIsEstimatedFromWhatSearchAndCitationsBothFound(t *testing.T) {
 	}
 }
 
+func TestReferenceNumbersAreNoPartOfATitle(t *testing.T) {
+	for in, want := range map[string]string{
+		"[3] “The rustc book,” 2023.": "“The rustc book,” 2023.",
+		"12. K. He, Deep residual":    "K. He, Deep residual",
+		"OpenMP 5.2 specification":    "OpenMP 5.2 specification",
+	} {
+		if got := entryNumber.ReplaceAllString(in, ""); got != want {
+			t.Errorf("%q → %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestDOIsAreReadFromLinks(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://doi.org/10.1145/3292500.3330701": "10.1145/3292500.3330701",
@@ -747,6 +759,11 @@ func steeredLab() (*memStore, *fakeLabs) {
 
 func TestFollowingOneWorkFollowsItAloneEvenIfDone(t *testing.T) {
 	store, lab := steeredLab()
+	// Found through the work by an earlier run and left unjudged, and a
+	// backlog work found otherwise.
+	store.works = append(store.works,
+		&Work{ID: 3, URL: "https://openmp.example.com/spec", Title: "OpenMP spec", Verdict: VerdictPending, Finds: []Find{{Channel: ChannelReference, Via: 1, Run: 7}}},
+		&Work{ID: 4, URL: "https://backlog.example.com/x", Title: "Backlog", Verdict: VerdictPending, Finds: []Find{{Channel: ChannelSearch, Query: "zig", Run: 7}}})
 	scholar := &fakeScholar{
 		catalog: map[string]openalex.Work{"W1": {ID: "W1", References: []string{"W2"}}, "W2": {ID: "W2", Title: "Highway Networks", LandingURL: "https://example.org/highway"}},
 		citing: map[string][]openalex.Work{
@@ -771,9 +788,13 @@ func TestFollowingOneWorkFollowsItAloneEvenIfDone(t *testing.T) {
 		t.Errorf("found %d works: what the work cites and what cites it, nothing else", len(store.works))
 	}
 
-	if !slices.Equal(lab.read, []string{"https://example.org/highway", "https://densenet.example.net/paper"}) &&
-		!slices.Equal(lab.read, []string{"https://densenet.example.net/paper", "https://example.org/highway"}) {
-		t.Errorf("read %v: only what was found through the work", lab.read)
+	if slices.Contains(lab.read, "https://backlog.example.com/x") || !slices.Contains(lab.read, "https://example.org/highway") ||
+		!slices.Contains(lab.read, "https://densenet.example.net/paper") || !slices.Contains(lab.read, "https://openmp.example.com/spec") {
+		t.Errorf("read %v: only what was found through the work, earlier finds of it included", lab.read)
+	}
+
+	if store.work(4).Verdict != VerdictPending || store.work(3).Verdict != VerdictKeep {
+		t.Errorf("the backlog was judged (%s) or the work's earlier find was not (%s)", store.work(4).Verdict, store.work(3).Verdict)
 	}
 }
 

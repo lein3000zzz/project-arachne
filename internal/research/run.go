@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"time"
 	"web-crawler/internal/auth"
@@ -350,6 +351,21 @@ func (r *session) follows(w Work) bool {
 	return w.Verdict == VerdictKeep
 }
 
+// judges says what a run judges: everything pending, or only what is in its
+// focus - the works found through the work it follows, whenever they were
+// found, or what this run found for its subtopic. The rest waits for a run
+// over the whole topic.
+func (r *session) judges(w Work) bool {
+	switch {
+	case r.focus.Work != 0:
+		return slices.ContainsFunc(w.Finds, func(f Find) bool { return f.Via == r.focus.Work })
+	case r.focus.Subtopic != 0:
+		return slices.ContainsFunc(w.Finds, func(f Find) bool { return f.Run == r.id })
+	}
+
+	return true
+}
+
 // forced: a work the user asked to follow is followed again, even if done.
 func (r *session) forced(w Work) bool {
 	return r.focus.Work == w.ID
@@ -446,6 +462,10 @@ func webWork(res websearch.Result) (Work, bool) {
 	return w, true
 }
 
+// entryNumber is a reference list's own numbering, "[3] " or "12. ", which is
+// no part of the work's title.
+var entryNumber = regexp.MustCompile(`^\s*(?:\[\d{1,4}\]|\d{1,4}\.)\s*`)
+
 // followReferences takes, for each kept paper, the works OpenAlex says it
 // cites, and for each work read, what its pages cite.
 func (r *session) followReferences(ctx context.Context) {
@@ -492,7 +512,7 @@ func (r *session) followReferences(ctx context.Context) {
 
 		taken[ref.Work]++
 
-		w := Work{URL: u, Kind: KindWeb, Title: cut(ref.Label, 300), Site: hostOf(u), DOI: doiOf(u)}
+		w := Work{URL: u, Kind: KindWeb, Title: cut(entryNumber.ReplaceAllString(ref.Label, ""), 300), Site: hostOf(u), DOI: doiOf(u)}
 		if w.DOI != "" {
 			w.Kind = KindPaper
 		}
@@ -698,10 +718,10 @@ func (r *session) judgeAll(ctx context.Context) (int, error) {
 	var pending []Work
 
 	for _, w := range works {
-		switch w.Verdict {
-		case VerdictPending:
+		switch {
+		case w.Verdict == VerdictPending && r.judges(w):
 			pending = append(pending, w)
-		case VerdictKeep:
+		case w.Verdict == VerdictKeep:
 			kept++
 		}
 	}
