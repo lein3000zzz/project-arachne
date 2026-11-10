@@ -240,7 +240,9 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 		                AND run.submitted_at > now() - interval '1 hour' THEN 'reading'
 		           WHEN run.docs_indexed > 0 THEN 'in'
 		           WHEN run.docs_failed > 0 THEN 'failed'
+		           WHEN run.note LIKE 'robots.txt%' THEN 'blocked'
 		           WHEN rev.ok = 0 AND rev.refused > 0 THEN 'blocked'
+		           WHEN rev.ok = 0 AND rev.gone > 0 THEN 'gone'
 		           WHEN rev.ok > 0 THEN 'empty'
 		           ELSE 'failed'
 		       END,
@@ -250,11 +252,13 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 		                 FROM work_finds f WHERE f.work_id = w.id), '[]')
 		FROM works w
 		LEFT JOIN LATERAL (
-			SELECT r.submitted_at, r.finished_at, r.docs_queued, r.docs_indexed, r.docs_failed, r.docs_rejected
+			SELECT r.submitted_at, r.finished_at, r.docs_queued, r.docs_indexed, r.docs_failed, r.docs_rejected, r.note
 			FROM runs r WHERE r.source_id = w.source_id ORDER BY r.submitted_at DESC LIMIT 1) run ON true
 		LEFT JOIN LATERAL (
 			SELECT coalesce(bool_or(pr.decision = 'index'), false) AS indexed, coalesce(bool_or(pr.decision = 'skip'), false) AS skipped,
-			       count(*) FILTER (WHERE p.status BETWEEN 200 AND 299) AS ok, count(*) FILTER (WHERE p.status >= 400) AS refused
+			       count(*) FILTER (WHERE p.status BETWEEN 200 AND 299) AS ok,
+			       count(*) FILTER (WHERE p.status IN (401, 403, 429, 451)) AS refused,
+			       count(*) FILTER (WHERE p.status IN (404, 410)) AS gone
 			FROM source_pages sp JOIN pages p ON p.id = sp.page_id LEFT JOIN page_reviews pr ON pr.url = p.url
 			WHERE sp.source_id = w.source_id) rev ON true
 		WHERE w.lab_id = $1

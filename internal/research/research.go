@@ -78,8 +78,11 @@ const (
 	ReadReading  = "reading"
 	ReadIn       = "in"
 	ReadSetAside = "set_aside"
-	// The site refused it: every page came back 4xx or 5xx.
+	// The site refused it: robots.txt forbids it, or it answered 401, 403,
+	// 429 or 451.
 	ReadBlocked = "blocked"
+	// The page is no more: 404 or 410. Its site may serve others well.
+	ReadGone = "gone"
 	// Fetched, but with no text to index: a page built by scripts in the
 	// browser, or an empty one.
 	ReadEmpty  = "empty"
@@ -89,7 +92,7 @@ const (
 // unread says a read came to nothing, through no fault of the work: the
 // site, not the reviewer, kept it out.
 func unread(state string) bool {
-	return state == ReadBlocked || state == ReadEmpty || state == ReadFailed
+	return state == ReadBlocked || state == ReadEmpty || state == ReadFailed || state == ReadGone
 }
 
 type Budget struct {

@@ -317,12 +317,30 @@ func TestChildrenOutsideTheScopeAreNotFollowed(t *testing.T) {
 }
 
 type fakeRecorder struct {
-	log *eventLog
+	log  *eventLog
+	note string
 }
 
-func (f *fakeRecorder) Finished(context.Context, *config.Run, string) error {
+func (f *fakeRecorder) Finished(_ context.Context, _ *config.Run, note string) error {
 	f.log.add("run finished")
+	f.note = note
+
 	return nil
+}
+
+// A run whose start page robots.txt forbids says so, so a lab can tell a
+// refusing site from a page that could not be fetched.
+func TestARunRefusedByRobotsSaysSo(t *testing.T) {
+	h := newHarness()
+	h.state.left = 0
+	h.repo.robots = robotsRepo("User-agent: *\nDisallow: /\n").robots
+
+	recorder := &fakeRecorder{log: h.log}
+	h.repo.runs = recorder
+
+	if got := h.run(); !slices.Contains(got, "run finished") || recorder.note != RobotsNote {
+		t.Errorf("events %v, note %q", got, recorder.note)
+	}
 }
 
 func TestExcludedLinksAreNotFollowed(t *testing.T) {

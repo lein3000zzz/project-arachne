@@ -648,7 +648,7 @@ const stopNames = {
 const channelNames = { search: "search", reference: "references", citing: "citing works", seed: "the lab's sources" };
 const readNames = {
   in: "in the index", reading: "being read", set_aside: "set aside on review", failed: "could not be fetched",
-  blocked: "blocked by the site", empty: "no text without a browser",
+  blocked: "blocked by the site", empty: "no text without a browser", gone: "no longer there",
 };
 
 // The run under way, if any: steering waits for it.
@@ -760,7 +760,7 @@ function workItem(w) {
     workActions(w));
 }
 
-const keptOut = (w) => w.read === "blocked" || w.read === "empty" || w.read === "failed";
+const keptOut = (w) => ["blocked", "empty", "failed", "gone"].includes(w.read);
 
 const works = listView({
   filters: [

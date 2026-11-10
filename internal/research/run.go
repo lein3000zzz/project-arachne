@@ -973,6 +973,8 @@ func sitesOf(works []Work) map[string]siteRecord {
 		switch {
 		case w.Read == ReadIn || w.Read == ReadSetAside:
 			s.ok++
+		case w.Read == ReadGone:
+			// One missing page says nothing of the rest of its site.
 		case unread(w.Read):
 			s.unread++
 		case w.Read == ReadReading:

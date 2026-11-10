@@ -582,6 +582,19 @@ func TestASiteThatRefusesIsTriedOnceAndItsReadRefunded(t *testing.T) {
 	}
 }
 
+// A missing page is no mark against its site: the site's other works are
+// still tried.
+func TestAGonePageDoesNotCountAgainstItsSite(t *testing.T) {
+	s := sitesOf([]Work{
+		{SourceID: 1, URL: "https://penchef.com/a", Read: ReadGone},
+		{SourceID: 2, URL: "https://medium.com/b", Read: ReadBlocked},
+	})
+
+	if s["penchef.com"].unread != 0 || s["medium.com"].unread != 1 || !unread(ReadGone) {
+		t.Errorf("sites %+v", s)
+	}
+}
+
 func TestPapersAreReadFromTheirOpenCopyFirst(t *testing.T) {
 	cfg := testConfig()
 	cfg.Documents = false

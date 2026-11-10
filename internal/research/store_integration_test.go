@@ -190,6 +190,16 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 
 	blocked := read("https://medium.com/zig", 403, 0)
 	empty := read("https://spa.example.com/zig", 200, 0)
+	gone := read("https://penchef.example.com/zig", 404, 0)
+	robots := read("https://www.reddit.com/r/zig", 0, 0)
+
+	if _, err := pool.Exec(ctx, `UPDATE runs SET note = 'robots.txt disallows it' WHERE start_url = 'https://www.reddit.com/r/zig'`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE pages SET status = NULL WHERE url = 'https://www.reddit.com/r/zig'`); err != nil {
+		t.Fatal(err)
+	}
 
 	works, err := store.Works(ctx, labID)
 	if err != nil {
@@ -197,7 +207,7 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 	}
 
 	for _, w := range works {
-		want := map[int64]string{blocked: ReadBlocked, empty: ReadEmpty}[w.ID]
+		want := map[int64]string{blocked: ReadBlocked, empty: ReadEmpty, gone: ReadGone, robots: ReadBlocked}[w.ID]
 		if w.Read != want {
 			t.Errorf("%s reads as %q, want %q", w.URL, w.Read, want)
 		}

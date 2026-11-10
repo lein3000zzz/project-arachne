@@ -128,22 +128,40 @@ func (repo *CrawlerRepo) handleTask(task *config.Task, saverChan chan<- *data.Pa
 	case known && state.Attempts > maxTaskAttempts:
 		repo.logger.Errorw("A page took the crawler down on every attempt; it is skipped", "url", task.URL, "runID", task.Run.ID,
 			"attempts", state.Attempts-1)
-		repo.completeTask(task)
+		repo.completeTask(task, startNote(task, "the page took the crawler down on every attempt"))
 
 		return
 	}
 
 	err := repo.processTask(task, saverChan)
 
+	note := ""
+
 	switch {
 	case errors.Is(err, ErrChildrenNotSent):
 		repo.logger.Warnw("Links of a page were not queued; leaving the task for redelivery", "url", task.URL, "error", err)
 		return
+	case errors.Is(err, ErrNotAllowedByRobots):
+		note = startNote(task, RobotsNote)
 	case err != nil && !errors.Is(err, ErrCacheHit):
 		repo.logger.Warnw("Error processing task", "url", task.URL, "error", err)
 	}
 
-	repo.completeTask(task)
+	repo.completeTask(task, note)
+}
+
+// RobotsNote ends a run whose start page robots.txt keeps the crawler from:
+// the site refused it, which a lab should be told rather than see nothing.
+const RobotsNote = "robots.txt disallows it"
+
+// startNote is why a run ended without its start page, when the task was
+// that page: a later page's trouble is not the run's.
+func startNote(task *config.Task, why string) string {
+	if task.CurrentDepth == 0 {
+		return why
+	}
+
+	return ""
 }
 
 // taskState says whether a redelivered task was already completed, whether its
@@ -235,7 +253,8 @@ func (repo *CrawlerRepo) sendChildren(parent *config.Task, links []string) error
 // run to zero gets past the counted check - across all nodes - and it frees the
 // slot directly. A failed count is not acked, so the task is redelivered; counting
 // is idempotent, so the redelivery cannot count it twice.
-func (repo *CrawlerRepo) completeTask(task *config.Task) {
+// A note, when the run ends with this task, says why it read nothing.
+func (repo *CrawlerRepo) completeTask(task *config.Task, note string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -260,7 +279,7 @@ func (repo *CrawlerRepo) completeTask(task *config.Task) {
 	}
 
 	if repo.runs != nil {
-		if err := repo.runs.Finished(ctx, task.Run, ""); err != nil {
+		if err := repo.runs.Finished(ctx, task.Run, note); err != nil {
 			repo.logger.Warnw("Failed to record the end of the run", "runID", task.Run.ID, "error", err)
 		}
 	}

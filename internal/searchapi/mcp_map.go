@@ -14,7 +14,7 @@ const (
 
 var readNames = map[string]string{
 	research.ReadIn: "in the index", research.ReadReading: "being read", research.ReadSetAside: "set aside on review",
-	research.ReadFailed: "could not be fetched", research.ReadBlocked: "blocked by the site",
+	research.ReadFailed: "could not be fetched", research.ReadBlocked: "blocked by the site", research.ReadGone: "no longer there",
 	research.ReadEmpty: "no text without a browser", "": "not read",
 }
 

@@ -56,7 +56,9 @@ RERANKER ?= $(if $(RERANK_BASE_URL),external,$(or $(shell sed -n 's/^RERANKER=//
 RERANKER_SERVICE := $(if $(filter local,$(RERANKER)),reranker)
 
 CONFIG_OVERLAY_vllm := ,configs/vllm.yml
-CONFIG_PATH ?= configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER))
+# Remembered in $(ENV_FILE) like the modes above: an overlay given once (the
+# Model Runner's, say) stays until another CONFIG_PATH is given.
+CONFIG_PATH ?= $(or $(shell sed -n 's/^CONFIG_PATH=//p' $(ENV_FILE) 2>/dev/null),configs/config.yml$(CONFIG_OVERLAY_$(EMBEDDER)))
 
 # $(call config_value,section,key): what the binaries will read - the last of the
 # config files to set section.key wins. Top-level sections, scalar keys only.
@@ -146,7 +148,7 @@ help:
 	@echo "make test-integration   tests against the running Milvus, Redis and Postgres"
 	@echo ""
 	@echo "tuning:  configs/config.yml  (workers, TTLs, parser engine, embedding model)"
-	@echo "         make up CONFIG_PATH=configs/other.yml to use another file"
+	@echo "         make up CONFIG_PATH=configs/other.yml to use another file (remembered in $(ENV_FILE), now: $(CONFIG_PATH))"
 	@echo ""
 	@echo "embedder (remembered in $(ENV_FILE), now: $(EMBEDDER)):"
 	@echo "         make up EMBEDDER=ollama   bundled Ollama, fastest on Apple Silicon (MODEL_CPUS=4 by default)"
