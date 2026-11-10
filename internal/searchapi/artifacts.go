@@ -100,7 +100,7 @@ func (h *artifactsHandler) saveAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 
 		a, err := h.service.SaveAnswer(ctx, owner, lab, artifacts.SavedAnswer{
-			Question: kept.query, Text: kept.res.Answer, Sources: kept.res.Sources, Claims: kept.claims, Model: kept.res.Model,
+			Question: kept.query, Text: kept.res.Answer, Sources: kept.res.Sources, Claims: kept.claims, Conflicts: kept.conflicts, Model: kept.res.Model,
 		})
 
 		return http.StatusCreated, a, err

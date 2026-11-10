@@ -153,7 +153,10 @@ func TestASavedAnswerIsTheServersOwn(t *testing.T) {
 		}
 	}
 
-	recent.check(checking, []answer.Claim{{Text: "The degradation problem.", Verdict: answer.Supported}})
+	recent.check(checking, answer.Verification{
+		Claims:    []answer.Claim{{Text: "The degradation problem.", Verdict: answer.Supported}},
+		Conflicts: []answer.Conflict{{A: 1, B: 2, About: "depth", QuoteA: "152 layers", QuoteB: "34 layers"}},
+	})
 
 	// Whatever else the body carries is refused; the text is the server's.
 	if rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/4/artifacts/answers",
@@ -163,7 +166,8 @@ func TestASavedAnswerIsTheServersOwn(t *testing.T) {
 
 	rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/4/artifacts/answers", `{"answer":"`+checking+`"}`)
 	if rec.Code != http.StatusCreated || service.lab != 4 || service.saved.Text != res.Answer ||
-		service.saved.Question != "what do residual connections solve" || service.saved.Claims[0].Verdict != answer.Supported {
+		service.saved.Question != "what do residual connections solve" || service.saved.Claims[0].Verdict != answer.Supported ||
+		len(service.saved.Conflicts) != 1 || service.saved.Conflicts[0].About != "depth" {
 		t.Errorf("save: %d %s, saved %+v", rec.Code, rec.Body, service.saved)
 	}
 }

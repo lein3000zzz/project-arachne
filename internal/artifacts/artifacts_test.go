@@ -121,11 +121,12 @@ func (f *fakeLabs) Pages(context.Context, int64, int64, int) ([]labs.Page, error
 // scripted answers each section by its heading: what the lab holds on it,
 // what the model writes, how the check goes.
 type scripted struct {
-	mu       sync.Mutex
-	sources  map[string][]answer.Source
-	written  map[string]string
-	verdicts map[string][]answer.Verdict
-	asked    []answer.Request
+	mu        sync.Mutex
+	sources   map[string][]answer.Source
+	written   map[string]string
+	verdicts  map[string][]answer.Verdict
+	conflicts map[string][]answer.Conflict
+	asked     []answer.Request
 }
 
 func (f *scripted) heading(req answer.Request) string {
@@ -163,6 +164,8 @@ func (f *scripted) Write(_ context.Context, req answer.Request, res answer.Resul
 func (f *scripted) Verify(_ context.Context, res answer.Result, _ answer.VerifyEvents) (answer.Verification, error) {
 	_, claims := answer.Split(res.Answer, len(res.Sources))
 
+	var conflicts []answer.Conflict
+
 	for h, text := range f.written {
 		if text == res.Answer {
 			for i := range claims {
@@ -170,10 +173,12 @@ func (f *scripted) Verify(_ context.Context, res answer.Result, _ answer.VerifyE
 					claims[i].Verdict = f.verdicts[h][i]
 				}
 			}
+
+			conflicts = slices.Clone(f.conflicts[h])
 		}
 	}
 
-	return answer.Verification{Claims: claims}, nil
+	return answer.Verification{Claims: claims, Conflicts: conflicts}, nil
 }
 
 func (f *scripted) Verifying() bool { return true }
@@ -276,6 +281,55 @@ func TestAReportIsBuiltSectionBySection(t *testing.T) {
 
 	if v2, _ := store.Version(context.Background(), 1, a.ID, 0); v2.Number != 2 || v2.Status != StatusDone {
 		t.Errorf("rebuild = %+v", v2)
+	}
+}
+
+// A conflict may quote a source the text never cites: the report keeps that
+// source, and both sides keep their own words under the report's numbers.
+func TestAReportKeepsTheSourcesThatDisagree(t *testing.T) {
+	const blog = "https://example.com/plain-nets"
+
+	store := newMemoryStore()
+	answers := &scripted{
+		sources: map[string][]answer.Source{
+			"Blocks": {{N: 1, Result: retrieval.Result{URL: book, Title: "Residual Networks"}}},
+			"Depth": {
+				{N: 1, Result: retrieval.Result{URL: blog, Title: "Plain nets"}},
+				{N: 2, Result: retrieval.Result{URL: paper, Title: "Deep Residual Learning"}},
+			},
+		},
+		written: map[string]string{
+			"Blocks": "A block adds its input to its output [1].",
+			"Depth":  "The deepest network had 152 layers [2].",
+		},
+		conflicts: map[string][]answer.Conflict{
+			"Depth": {{A: 1, B: 2, About: "depth", QuoteA: "34 layers at most", QuoteB: "152 layers"}},
+		},
+	}
+
+	s := newService(store, answers, &model{}, &fakeLabs{})
+
+	a, err := s.Build(context.Background(), 1, 7, "", Outline{Title: "Residual networks",
+		Sections: []Planned{{Heading: "Blocks", Focus: "blocks"}, {Heading: "Depth", Focus: "depth"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.running.Wait()
+
+	v, _ := store.Version(context.Background(), 1, a.ID, 0)
+
+	if len(v.Sources) != 3 || v.Sources[0].URL != book || v.Sources[1].URL != paper || v.Sources[2].URL != blog {
+		t.Fatalf("sources = %+v; want the uncited side of the conflict kept, after the cited ones", v.Sources)
+	}
+
+	want := answer.Conflict{A: 2, B: 3, About: "depth", QuoteA: "152 layers", QuoteB: "34 layers at most"}
+	if got := v.Sections[1].Conflicts; len(got) != 1 || got[0] != want {
+		t.Errorf("conflicts = %+v; want %+v", got, want)
+	}
+
+	if !strings.Contains(v.Markdown, `> Sources disagree on depth: [2] "152 layers", but [3] "34 layers at most"`) {
+		t.Errorf("markdown:\n%s", v.Markdown)
 	}
 }
 

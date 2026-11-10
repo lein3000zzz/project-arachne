@@ -5,6 +5,7 @@ import (
 	"html"
 	"strconv"
 	"strings"
+	"web-crawler/internal/answer"
 	"web-crawler/internal/markdown"
 	"web-crawler/internal/uploads"
 )
@@ -37,6 +38,7 @@ func Render(v Version) (string, []Heading) {
 		switch sec.State {
 		case StateDone:
 			b.WriteString(renderText(i, sec, len(v.Sources)))
+			b.WriteString(renderConflicts(sec.Conflicts))
 		case StateThin:
 			fmt.Fprintf(&b, `<div class="missing"><p>%s It was to cover: %s</p>`+
 				`<button type="button" class="action small gather" data-focus="%s">Gather for this section</button></div>`,
@@ -79,6 +81,32 @@ func Render(v Version) (string, []Heading) {
 // source list, and marks after its claims.
 func renderText(section int, sec Section, sources int) string {
 	return markdown.Render(sec.Text, markdown.Options{CiteHref: "#ref-%d", Sources: sources, Section: section, Claims: sec.Claims})
+}
+
+// renderConflicts is the box of points on which the section's sources
+// disagree, as the Look up page shows it under an answer.
+func renderConflicts(conflicts []answer.Conflict) string {
+	if len(conflicts) == 0 {
+		return ""
+	}
+
+	head := "Two sources disagree"
+	if len(conflicts) > 1 {
+		head = fmt.Sprintf("Sources disagree on %d points", len(conflicts))
+	}
+
+	var b strings.Builder
+
+	fmt.Fprintf(&b, `<aside class="conflicts"><p class="conflicts-head">%s</p><ul>`, head)
+
+	for _, c := range conflicts {
+		fmt.Fprintf(&b, `<li><span class="note">on %s: </span><a href="#ref-%d">[%d]</a> <q>%s</q><span class="note"> — but </span><a href="#ref-%d">[%d]</a> <q>%s</q></li>`,
+			html.EscapeString(c.About), c.A, c.A, html.EscapeString(c.QuoteA), c.B, c.B, html.EscapeString(c.QuoteB))
+	}
+
+	b.WriteString("</ul></aside>")
+
+	return b.String()
 }
 
 func hostOf(raw string) string {

@@ -31,6 +31,16 @@ func Markdown(a Artifact, v Version) string {
 			fmt.Fprintf(&b, "> Not written: %s\n\n", sec.Note)
 		}
 
+		if len(sec.Conflicts) > 0 {
+			lines := make([]string, len(sec.Conflicts))
+			for i, c := range sec.Conflicts {
+				lines[i] = fmt.Sprintf("> Sources disagree on %s: [%d] %q, but [%d] %q",
+					oneLine(c.About), c.A, oneLine(c.QuoteA), c.B, oneLine(c.QuoteB))
+			}
+
+			b.WriteString(strings.Join(lines, "\n>\n") + "\n\n")
+		}
+
 		for _, c := range sec.Claims {
 			if c.Verdict == answer.Unsupported || c.Verdict == answer.Partly {
 				doubtful = append(doubtful, c)

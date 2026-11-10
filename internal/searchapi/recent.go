@@ -26,10 +26,11 @@ type recentAnswers struct {
 }
 
 type recentAnswer struct {
-	owner  int64
-	query  string
-	res    answer.Result
-	claims []answer.Claim
+	owner     int64
+	query     string
+	res       answer.Result
+	claims    []answer.Claim
+	conflicts []answer.Conflict
 	// False while its check is still running.
 	checked bool
 	at      time.Time
@@ -60,12 +61,12 @@ func (r *recentAnswers) add(owner int64, query string, res answer.Result, checke
 	return id
 }
 
-func (r *recentAnswers) check(id string, claims []answer.Claim) {
+func (r *recentAnswers) check(id string, v answer.Verification) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if a, ok := r.items[id]; ok {
-		a.claims, a.checked = claims, true
+		a.claims, a.conflicts, a.checked = v.Claims, v.Conflicts, true
 	}
 }
 

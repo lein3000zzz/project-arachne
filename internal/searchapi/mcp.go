@@ -355,7 +355,7 @@ func (t *mcpTools) ask(ctx context.Context, user auth.User, call *mcp.CallToolRe
 		}
 
 		claims, conflicts = v.Claims, v.Conflicts
-		a.recent.check(id, claims)
+		a.recent.check(id, v)
 	}
 
 	return answerText(res, claims, conflicts, check, broke, looked, in.Web, id), nil
@@ -1082,7 +1082,7 @@ func (t *mcpTools) saveAnswer(ctx context.Context, user auth.User, _ *mcp.CallTo
 	defer cancel()
 
 	a, err := t.artifacts.service.SaveAnswer(ctx, user.ID, in.Lab, artifacts.SavedAnswer{
-		Question: kept.query, Text: kept.res.Answer, Sources: kept.res.Sources, Claims: kept.claims, Model: kept.res.Model,
+		Question: kept.query, Text: kept.res.Answer, Sources: kept.res.Sources, Claims: kept.claims, Conflicts: kept.conflicts, Model: kept.res.Model,
 	})
 	if err != nil {
 		return reportView{}, t.reportFailed(err)

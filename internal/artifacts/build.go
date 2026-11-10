@@ -119,7 +119,7 @@ func (s *Service) section(ctx context.Context, title string, sec Section, urls [
 
 		v, err := s.answers.Verify(ctx, written, answer.VerifyEvents{})
 		if err == nil {
-			sec.Claims = v.Claims
+			sec.Claims, sec.Conflicts = v.Claims, v.Conflicts
 		}
 
 		sec.State = StateDone
@@ -172,18 +172,47 @@ func renumber(sec Section, sources []answer.Source, numbers map[string]int, all 
 		}
 	}
 
+	sec.Conflicts = renumbered(sec.Conflicts, global)
+
 	return sec
 }
 
+// renumbered moves conflicts to other source numbers, leaving out those that
+// lost a side.
+func renumbered(conflicts []answer.Conflict, to func(int) int) []answer.Conflict {
+	var out []answer.Conflict
+
+	for _, c := range conflicts {
+		c.A, c.B = to(c.A), to(c.B)
+		if c.A < 1 || c.B < 1 || c.A == c.B {
+			continue
+		}
+
+		if c.A > c.B {
+			c.A, c.B, c.QuoteA, c.QuoteB = c.B, c.A, c.QuoteB, c.QuoteA
+		}
+
+		out = append(out, c)
+	}
+
+	return out
+}
+
 // compact numbers the sources by first citation and leaves out those no
-// section cites any more - a rewritten section may have dropped one.
+// section cites any more - a rewritten section may have dropped one. A source
+// a conflict quotes stays, uncited or not: the reader must be able to look.
 func compact(v *Version) {
 	moved := map[int]int{}
 
 	var kept []Source
 
 	for _, sec := range v.Sections {
-		for _, n := range cite.In(sec.Text) {
+		numbers := cite.In(sec.Text)
+		for _, c := range sec.Conflicts {
+			numbers = append(numbers, c.A, c.B)
+		}
+
+		for _, n := range numbers {
 			if _, ok := moved[n]; ok || n < 1 || n > len(v.Sources) {
 				continue
 			}
@@ -210,6 +239,8 @@ func compact(v *Version) {
 				v.Sections[i].Claims[j].Cites[k] = moved[n]
 			}
 		}
+
+		v.Sections[i].Conflicts = renumbered(v.Sections[i].Conflicts, func(n int) int { return moved[n] })
 	}
 
 	v.Sources = nonNil(kept)

@@ -109,7 +109,10 @@ type Section struct {
 	Text string `json:"text,omitempty"`
 	// Each sentence of Text that cites sources, in order, with its verdict.
 	Claims []answer.Claim `json:"claims,omitempty"`
-	Note   string         `json:"note,omitempty"`
+	// Points on which two of the section's sources disagree, numbered as
+	// Sources.
+	Conflicts []answer.Conflict `json:"conflicts,omitempty"`
+	Note      string            `json:"note,omitempty"`
 }
 
 type Source struct {
@@ -327,6 +330,7 @@ func carried(latest Version) Version {
 
 	for i, sec := range latest.Sections {
 		sec.Claims = slices.Clone(sec.Claims)
+		sec.Conflicts = slices.Clone(sec.Conflicts)
 		v.Sections[i] = sec
 	}
 
@@ -388,11 +392,12 @@ func (s *Service) Delete(ctx context.Context, ownerID, artifactID int64) error {
 // SavedAnswer is an answer as the server produced it - never as a client
 // sent it back, or anyone could write into an artifact.
 type SavedAnswer struct {
-	Question string
-	Text     string
-	Sources  []answer.Source
-	Claims   []answer.Claim
-	Model    string
+	Question  string
+	Text      string
+	Sources   []answer.Source
+	Claims    []answer.Claim
+	Conflicts []answer.Conflict
+	Model     string
 }
 
 // SaveAnswer keeps an answer, with its check, as an artifact of the lab.
@@ -417,7 +422,7 @@ func (s *Service) SaveAnswer(ctx context.Context, ownerID, labID int64, saved Sa
 	v := Version{
 		Status:     StatusDone,
 		Outline:    Outline{Title: title},
-		Sections:   []Section{{State: StateDone, Text: strings.TrimSpace(saved.Text), Claims: saved.Claims}},
+		Sections:   []Section{{State: StateDone, Text: strings.TrimSpace(saved.Text), Claims: saved.Claims, Conflicts: saved.Conflicts}},
 		Sources:    []Source{},
 		Model:      saved.Model,
 		FinishedAt: &now,

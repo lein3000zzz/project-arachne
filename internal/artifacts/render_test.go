@@ -75,6 +75,25 @@ func TestClaimsNoLongerMatchingTheTextAreNotMarked(t *testing.T) {
 	}
 }
 
+func TestRenderShowsTheSourcesThatDisagree(t *testing.T) {
+	body, _ := Render(Version{
+		Sections: []Section{{State: StateDone, Text: "Zig wins [1].",
+			Conflicts: []answer.Conflict{{A: 1, B: 2, About: "speed", QuoteA: "Zig is <b>faster</b>", QuoteB: "Rust is faster"}}}},
+		Sources: []Source{{N: 1, URL: "https://a.example/"}, {N: 2, URL: "https://b.example/"}},
+	})
+
+	for _, want := range []string{`class="conflicts"`, "Two sources disagree", `<a href="#ref-1">[1]</a> <q>Zig is &lt;b&gt;faster&lt;/b&gt;</q>`,
+		`<a href="#ref-2">[2]</a> <q>Rust is faster</q>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+
+	if body, _ := Render(Version{Sections: []Section{{State: StateDone, Text: "One [1]."}}}); strings.Contains(body, "conflicts") {
+		t.Errorf("a box with nothing in it:\n%s", body)
+	}
+}
+
 func TestMarkdownSaysWhatWasNotWritten(t *testing.T) {
 	out := Markdown(Artifact{Kind: KindReport, Title: "Residual networks"}, Version{
 		Sections: []Section{

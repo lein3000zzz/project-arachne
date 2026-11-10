@@ -119,7 +119,7 @@ func (h *answerHandler) serveJSON(w http.ResponseWriter, r *http.Request) {
 			out.Verification, claims = &v, v.Claims
 		}
 
-		h.recent.check(out.ID, v.Claims)
+		h.recent.check(out.ID, v)
 	}
 
 	out.HTML = answerHTML(res.Answer, len(res.Sources), claims)
@@ -343,7 +343,7 @@ func (h *answerHandler) stream(w http.ResponseWriter, r *http.Request, timeout t
 		return
 	}
 
-	h.recent.check(id, v.Claims)
+	h.recent.check(id, v)
 	_ = send("verified", map[string]any{"model": v.Model, "seconds": v.Seconds})
 }
 
