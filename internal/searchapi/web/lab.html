@@ -713,6 +713,7 @@ const channelNames = { search: "search", reference: "references", citing: "citin
 const readNames = {
   in: "in the index", reading: "being read", set_aside: "set aside on review", failed: "could not be fetched",
   blocked: "blocked by the site", empty: "no text without a browser", gone: "no longer there",
+  copy: "a copy of a page the lab holds",
 };
 
 // The run under way, if any: steering waits for it.
@@ -736,7 +737,8 @@ function renderRun(run, m) {
     return el("li", {},
       el("b", {}, `round ${r.n}`),
       el("span", {}, ` found ${found || "nothing new"} · judged ${r.judged} · kept ${r.kept} · read ${r.read}` +
-        (r.unread ? ` (${r.unread} kept out by their sites, budget given back)` : "")),
+        (r.unread ? ` (${r.unread} kept out by their sites, budget given back)` : "") +
+        (r.copies ? ` (${r.copies} only text the lab had, budget given back)` : "")),
       r.queries && r.queries.length ? el("div", { class: "note clamp-2" }, "searched " + r.queries.map((q) => "“" + q + "”").join(", ")) : null,
       failed ? el("div", { class: "note" }, failed) : null);
   });
@@ -818,7 +820,7 @@ function workItem(w) {
   return el("li", { class: "work " + (w.read ? "read-" + w.read : w.verdict) },
     el("div", {},
       el("a", { href: pageHref(w.url), target: "_blank", rel: "noopener noreferrer" }, w.title || w.url),
-      w.read ? el("span", { class: "tag" + (w.read === "in" ? " lab" : "") }, readNames[w.read] || w.read) : null),
+      w.read ? el("span", { class: "tag" + (w.read === "in" ? " lab" : ""), title: w.copy_of ? "the same text as " + w.copy_of : null }, readNames[w.read] || w.read) : null),
     el("div", { class: "work-meta" }, meta),
     el("div", { class: "note clamp-1" }, howFound(w)),
     w.reason ? el("div", { class: "work-reason" }, w.reason) : null,
@@ -886,6 +888,7 @@ function renderMap(m) {
     el("span", { class: "chip" }, el("b", {}, c.kept), " kept"),
     el("span", { class: "chip" }, el("b", {}, c.in), " in the index"),
     c.kept_out ? el("span", { class: "chip" }, el("b", {}, c.kept_out), " kept out by sites") : null,
+    c.copies ? el("span", { class: "chip" }, el("b", {}, c.copies), " copies of pages held") : null,
     c.pending ? el("span", { class: "chip" }, el("b", {}, c.pending), " not yet judged") : null,
     el("span", { class: "chip", title: e ? "Search and citations together, compared: rough, and likely optimistic" : "Too few works found both by search and by citations to estimate" },
       e ? [el("b", {}, "~" + Math.round(e.share * 100) + "%"), " of what exists found"] : "coverage: too early to tell")));

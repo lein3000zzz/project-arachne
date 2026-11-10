@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"web-crawler/internal/copies"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/openalex"
@@ -873,6 +874,74 @@ func TestAFocusMustMakeSense(t *testing.T) {
 	} {
 		if _, err := s.Start(context.Background(), 1, 3, Ask{Focus: focus}); !errors.Is(err, want) {
 			t.Errorf("%+v: %v, want %v", focus, err, want)
+		}
+	}
+}
+
+// A mirror's page is read like any other, but it brings only what the lab has:
+// its read goes back to the budget, and its site is no worse for it.
+func TestACopyGivesItsReadBack(t *testing.T) {
+	store := newMemStore()
+	store.readAs = map[string]string{"mirror.org": ReadCopy}
+
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "Zig", Engines: []string{"brave"}}}}
+
+	var results []websearch.Result
+	for _, u := range []string{"https://mirror.org/x", "https://go.dev/doc/1", "https://go.dev/doc/2"} {
+		results = append(results, websearch.Result{URL: u, Title: "Page " + u})
+	}
+
+	chat := &model{plan: `{"subtopics": [{"name": "A", "focus": "a", "queries": ["zig"]}, {"name": "B", "focus": "b"}]}`, queries: `{}`}
+	s := NewService(zap.NewNop().Sugar(), store, lab, &fakeSearch{results: map[string][]websearch.Result{"zig": results}}, nil, chat, testConfig())
+
+	run, _ := s.Start(context.Background(), 1, 3, Ask{Read: ptr(2)})
+	run = waitDone(t, store, run.ID)
+
+	if run.Rounds[0].Copies != 1 || len(lab.read) != 3 {
+		t.Errorf("round 1 %+v, read %v: the copy's read spent again on a work the lab lacks", run.Rounds[0], lab.read)
+	}
+
+	if s := sitesOf([]Work{{SourceID: 1, URL: "https://mirror.org/x", Read: ReadCopy}}); s["mirror.org"].ok != 1 {
+		t.Errorf("sites %+v: the site gave its page", s)
+	}
+}
+
+func TestAWorkThatBringsOnlyTextTheLabHadIsACopy(t *testing.T) {
+	var text strings.Builder
+	for i := range 80 {
+		fmt.Fprintf(&text, "w%d ", i)
+	}
+
+	sketch := copies.SketchOf(copies.SetOf(text.String()))
+	other := copies.SketchOf(copies.SetOf(strings.ReplaceAll(text.String(), "w", "v")))
+
+	works := []Work{
+		{ID: 1, SourceID: 10, Read: ReadIn}, // the user's source's text, read again by a work
+		{ID: 2, SourceID: 11, Read: ReadIn}, // the arXiv page
+		{ID: 3, SourceID: 12, Read: ReadIn}, // its mirror, word for word
+		{ID: 4, SourceID: 13, Read: ReadIn}, // one page new, one copied
+		{ID: 5, SourceID: 14, Read: ReadIn}, // a page the user's source crawled already
+		{ID: 6, SourceID: 15, Read: ReadSetAside},
+	}
+
+	pages := []LabPage{
+		{SourceID: 1, URL: "https://docs.dev/a", Hash: "a", Sketch: sketch},
+		{SourceID: 10, URL: "https://blog.dev/a-again", Hash: "a2", Sketch: sketch},
+		{SourceID: 11, URL: "https://arxiv.org/abs/1", Hash: "p", Sketch: other},
+		{SourceID: 12, URL: "https://mirror.org/1", Hash: "p"},
+		{SourceID: 13, URL: "https://new.dev/x", Hash: "x"},
+		{SourceID: 13, URL: "https://new.dev/copy", Hash: "p"},
+		{SourceID: 14, URL: "https://docs.dev/a", Hash: "a", Sketch: sketch},
+		{SourceID: 15, URL: "https://spam.dev/a", Hash: "a"},
+	}
+
+	markCopies(works, pages)
+
+	want := map[int64]string{1: "https://docs.dev/a", 3: "https://arxiv.org/abs/1", 5: "https://docs.dev/a"}
+
+	for _, w := range works {
+		if of, copied := want[w.ID]; copied != (w.Read == ReadCopy) || w.CopyOf != of {
+			t.Errorf("work %d: %s, copy of %q", w.ID, w.Read, w.CopyOf)
 		}
 	}
 }

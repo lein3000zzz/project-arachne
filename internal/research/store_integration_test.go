@@ -192,6 +192,16 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 	empty := read("https://spa.example.com/zig", 200, 0)
 	gone := read("https://penchef.example.com/zig", 404, 0)
 	robots := read("https://www.reddit.com/r/zig", 0, 0)
+	paper := read("https://arxiv.org/abs/zig", 200, 1)
+	mirror := read("https://mirror.example.com/zig", 200, 1)
+
+	// The mirror's text is the paper's, word for word.
+	for _, url := range []string{"https://arxiv.org/abs/zig", "https://mirror.example.com/zig"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO page_reviews (url, content_hash, decision, model, tool_calls, seconds)
+			VALUES ($1, 'same', 'index', 'm', 0, 0)`, url); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if _, err := pool.Exec(ctx, `UPDATE runs SET note = 'robots.txt disallows it' WHERE start_url = 'https://www.reddit.com/r/zig'`); err != nil {
 		t.Fatal(err)
@@ -207,9 +217,13 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 	}
 
 	for _, w := range works {
-		want := map[int64]string{blocked: ReadBlocked, empty: ReadEmpty, gone: ReadGone, robots: ReadBlocked}[w.ID]
+		want := map[int64]string{blocked: ReadBlocked, empty: ReadEmpty, gone: ReadGone, robots: ReadBlocked, paper: ReadIn, mirror: ReadCopy}[w.ID]
 		if w.Read != want {
 			t.Errorf("%s reads as %q, want %q", w.URL, w.Read, want)
+		}
+
+		if w.ID == mirror && w.CopyOf != "https://arxiv.org/abs/zig" {
+			t.Errorf("the mirror copies %q", w.CopyOf)
 		}
 	}
 }

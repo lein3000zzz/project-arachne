@@ -12,6 +12,8 @@ type Coverage struct {
 	SetAside int `json:"set_aside"`
 	// Read, but kept out by their sites: blocked, empty or not fetched.
 	KeptOut int `json:"kept_out"`
+	// Read, and the same text as a page the lab held already.
+	Copies int `json:"copies"`
 	// Absent while search or citations have found too few kept works.
 	Estimate  *Estimate          `json:"estimate,omitempty"`
 	Subtopics []SubtopicCoverage `json:"subtopics"`
@@ -67,6 +69,8 @@ func coverageOf(subtopics []Subtopic, works []Work) Coverage {
 			c.In++
 		case ReadSetAside:
 			c.SetAside++
+		case ReadCopy:
+			c.Copies++
 		}
 
 		if unread(w.Read) {

@@ -87,6 +87,9 @@ const (
 	// browser, or an empty one.
 	ReadEmpty  = "empty"
 	ReadFailed = "failed"
+	// Read and indexed, but its text is the same, or nearly, as a page the
+	// lab held already: a mirror, a reprint, another URL for one paper.
+	ReadCopy = "copy"
 )
 
 // unread says a read came to nothing, through no fault of the work: the
@@ -144,6 +147,9 @@ type Round struct {
 	// Of those read, how many their sites kept out: their budget went back to
 	// later reads.
 	Unread int `json:"unread,omitempty"`
+	// Of those read, how many held text the lab had already: their budget
+	// went back too.
+	Copies int `json:"copies,omitempty"`
 	// What did not answer, and why.
 	Failed map[string]string `json:"failed,omitempty"`
 }
@@ -173,8 +179,10 @@ type Work struct {
 	ByUser     bool   `json:"by_user,omitempty"`
 	SourceID   int64  `json:"source_id,omitempty"`
 	// Set once it is read: reading, in, set_aside or failed.
-	Read  string `json:"read,omitempty"`
-	Finds []Find `json:"finds"`
+	Read string `json:"read,omitempty"`
+	// For a copy: the page of the lab whose text it repeats.
+	CopyOf string `json:"copy_of,omitempty"`
+	Finds  []Find `json:"finds"`
 
 	ReferencesDone bool `json:"-"`
 	CitingDone     bool `json:"-"`

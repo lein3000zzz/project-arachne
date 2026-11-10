@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"web-crawler/internal/copies"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -281,11 +283,52 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 
 		return w, json.Unmarshal(finds, &w.Finds)
 	})
+	if err != nil {
+		return nil, err
+	}
+
 	if works == nil {
 		works = []Work{}
 	}
 
-	return works, err
+	if slices.ContainsFunc(works, func(w Work) bool { return w.Read == ReadIn }) {
+		pages, err := s.labPages(ctx, labID)
+		if err != nil {
+			return nil, err
+		}
+
+		markCopies(works, pages)
+	}
+
+	return works, nil
+}
+
+// labPages are the lab's pages kept on review, by the source that brought
+// each in, oldest source first.
+func (s *PostgresStore) labPages(ctx context.Context, labID int64) ([]LabPage, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT sp.source_id, p.url, pr.content_hash, pr.sketch
+		FROM sources src
+		JOIN source_pages sp ON sp.source_id = src.id
+		JOIN pages p ON p.id = sp.page_id
+		JOIN page_reviews pr ON pr.url = p.url
+		WHERE src.lab_id = $1 AND pr.decision = 'index'
+		ORDER BY sp.source_id, p.url`, labID)
+	if err != nil {
+		return nil, err
+	}
+
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (LabPage, error) {
+		var (
+			p      LabPage
+			sketch []byte
+		)
+
+		err := row.Scan(&p.SourceID, &p.URL, &p.Hash, &sketch)
+		p.Sketch = copies.SketchFrom(sketch)
+
+		return p, err
+	})
 }
 
 func (s *PostgresStore) Judge(ctx context.Context, workID int64, verdict, reason string, subtopicID int64) error {

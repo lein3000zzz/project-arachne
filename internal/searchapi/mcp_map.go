@@ -15,7 +15,7 @@ const (
 var readNames = map[string]string{
 	research.ReadIn: "in the index", research.ReadReading: "being read", research.ReadSetAside: "set aside on review",
 	research.ReadFailed: "could not be fetched", research.ReadBlocked: "blocked by the site", research.ReadGone: "no longer there",
-	research.ReadEmpty: "no text without a browser", "": "not read",
+	research.ReadEmpty: "no text without a browser", research.ReadCopy: "a copy of a page the lab holds", "": "not read",
 }
 
 // mapText is a lab's map as an agent reads it: per subtopic the kept works,
@@ -34,8 +34,8 @@ func mapText(labName string, m research.Map, dropped bool) string {
 	b.WriteString(runLine(*m.Run))
 
 	c := m.Coverage
-	fmt.Fprintf(&b, "%d works found: %d kept, %d maybe, %d dropped, %d not yet judged. %d read: %d in the index, %d set aside on review, %d kept out by their sites.\n",
-		c.Works, c.Kept, c.Maybe, c.Dropped, c.Pending, c.Read, c.In, c.SetAside, c.KeptOut)
+	fmt.Fprintf(&b, "%d works found: %d kept, %d maybe, %d dropped, %d not yet judged. %d read: %d in the index, %d set aside on review, %d kept out by their sites, %d copies of pages the lab held.\n",
+		c.Works, c.Kept, c.Maybe, c.Dropped, c.Pending, c.Read, c.In, c.SetAside, c.KeptOut, c.Copies)
 
 	if e := c.Estimate; e != nil {
 		fmt.Fprintf(&b, "Coverage: search and citations together found %d of an estimated %d kept works (%.0f%%); a rough estimate, likely optimistic.\n",
@@ -148,7 +148,12 @@ func writeWorks(b *strings.Builder, works []research.Work, titles map[int64]stri
 			about = append(about, w.Site)
 		}
 
-		fmt.Fprintf(b, "- %s (%s): %s; %s", mdLink(titles[w.ID], w.URL), strings.Join(about, ", "), readNames[w.Read], foundBy(w, titles))
+		read := readNames[w.Read]
+		if w.CopyOf != "" {
+			read = "the same text as " + w.CopyOf + ", in the lab already"
+		}
+
+		fmt.Fprintf(b, "- %s (%s): %s; %s", mdLink(titles[w.ID], w.URL), strings.Join(about, ", "), read, foundBy(w, titles))
 
 		if w.Reason != "" {
 			fmt.Fprintf(b, ". %s", w.Reason)

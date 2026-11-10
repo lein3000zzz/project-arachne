@@ -927,7 +927,8 @@ func (r *session) readWork(ctx context.Context, w Work) (stop bool) {
 
 // waitForReads gives the round's reads a while to be crawled and reviewed:
 // what they cite feeds the next round. A read its site kept out gives its
-// budget back, for a later round to spend on a work that can be read.
+// budget back, for a later round to spend on a work that can be read; so does
+// one that brought only text the lab had.
 func (r *session) waitForReads(ctx context.Context) {
 	if len(r.readNow) == 0 {
 		return
@@ -961,13 +962,18 @@ func (r *session) waitForReads(ctx context.Context) {
 	last := &r.rounds[len(r.rounds)-1]
 
 	for _, w := range works {
-		if r.readNow[w.ID] && unread(w.Read) {
+		switch {
+		case !r.readNow[w.ID]:
+		case unread(w.Read):
 			r.read--
 			last.Unread++
+		case w.Read == ReadCopy:
+			r.read--
+			last.Copies++
 		}
 	}
 
-	if last.Unread > 0 {
+	if last.Unread > 0 || last.Copies > 0 {
 		r.save(ctx)
 	}
 }
@@ -977,7 +983,7 @@ type siteRecord struct {
 }
 
 // sitesOf is how reads of each site have gone in this lab: through (indexed,
-// or read and set aside on review - the site gave its page either way), kept
+// set aside on review, or a copy - the site gave its page either way), kept
 // out, or still under way.
 func sitesOf(works []Work) map[string]siteRecord {
 	out := map[string]siteRecord{}
@@ -991,7 +997,7 @@ func sitesOf(works []Work) map[string]siteRecord {
 		s := out[site]
 
 		switch {
-		case w.Read == ReadIn || w.Read == ReadSetAside:
+		case w.Read == ReadIn || w.Read == ReadSetAside || w.Read == ReadCopy:
 			s.ok++
 		case w.Read == ReadGone:
 			// One missing page says nothing of the rest of its site.
