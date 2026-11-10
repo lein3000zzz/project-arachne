@@ -1,9 +1,11 @@
 package labs
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"web-crawler/internal/copies"
 )
 
 func TestQualitySaysWhatALabsPagesAre(t *testing.T) {
@@ -58,5 +60,43 @@ func TestQualitySaysWhatALabsPagesAre(t *testing.T) {
 	good := QualityOf([]QualityPage{ok("https://a.dev/1", "a.dev", "1"), ok("https://b.dev/1", "b.dev", "2"), ok("https://c.dev/1", "c.dev", "3")})
 	if good.Verdict != "good" || len(good.Notes) != 0 {
 		t.Errorf("a clean lab: %+v", good)
+	}
+}
+
+// Two versions of one docs page, or a mirror with its own header, are one
+// text: the quality report counts the first and names the rest.
+func TestNearCopiesAreCopiesToo(t *testing.T) {
+	words := func(seed, n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("s%dw%d", seed, i)
+		}
+
+		return out
+	}
+
+	body := words(1, 400)
+	v2 := slices.Clone(body)
+	v2[200] = "changed"
+
+	sketch := func(w []string) copies.Sketch { return copies.SketchOf(copies.SetOf(strings.Join(w, " "))) }
+	page := func(url string, w []string) QualityPage {
+		return QualityPage{URL: url, Host: "a.dev", Title: url, Status: 200, Decision: "index", Hash: url, Sketch: sketch(w)}
+	}
+
+	q := QualityOf([]QualityPage{
+		page("https://a.dev/v1/intro", body),
+		page("https://a.dev/v2/intro", v2),
+		page("https://a.dev/other", words(2, 400)),
+		{URL: "https://a.dev/old", Host: "a.dev", Status: 200, Decision: "index", Hash: "old"},
+	})
+
+	if q.Usable != 3 || q.Duplicates != 1 || len(q.DuplicateGroups) != 1 || !q.DuplicateGroups[0].Near ||
+		!slices.Equal(q.DuplicateGroups[0].URLs, []string{"https://a.dev/v1/intro", "https://a.dev/v2/intro"}) {
+		t.Errorf("quality %+v", q)
+	}
+
+	if !slices.ContainsFunc(q.Notes, func(n string) bool { return strings.Contains(n, "1 page has the same or nearly the same text") }) {
+		t.Errorf("notes %q", q.Notes)
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"web-crawler/internal/copies"
 	"web-crawler/internal/database/dbtest"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -165,6 +167,26 @@ func TestSourcesAndTheirPages(t *testing.T) {
 
 	if got, _ := store.Get(ctx, lein, golab.ID); reviewed != 1 || got.SetAside != 1 {
 		t.Errorf("%d pages with a review, %d set aside", reviewed, got.SetAside)
+	}
+
+	var text strings.Builder
+	for i := range 60 {
+		fmt.Fprintf(&text, "w%d ", i)
+	}
+
+	sketch := copies.SketchOf(copies.SetOf(text.String()))
+	exec(t, pool, `INSERT INTO page_reviews (url, content_hash, sketch, decision, model, tool_calls, seconds)
+		VALUES ('https://go.dev/doc/', 'h2', $1, 'index', 'm', 1, 1)`, sketch.Bytes())
+
+	quality, err := store.QualityPages(ctx, lein, golab.ID)
+	if err != nil || len(quality) != 4 {
+		t.Fatalf("quality pages %+v, %v", quality, err)
+	}
+
+	for _, p := range quality {
+		if want := p.URL == "https://go.dev/doc/"; (p.Sketch != nil) != want || want && copies.Resemblance(p.Sketch, sketch) != 1 {
+			t.Errorf("%s: sketch %v", p.URL, p.Sketch)
+		}
 	}
 
 	if err := store.RemoveSource(ctx, other, golab.ID, doc.ID); !errors.Is(err, ErrNotFound) {

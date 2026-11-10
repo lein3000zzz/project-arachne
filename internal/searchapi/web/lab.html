@@ -375,7 +375,7 @@ function renderQuality() {
   }
   const dupes = q.duplicate_groups.map((d) => el("li", {},
     el("span", {}, d.title || host(d.urls[0])),
-    el("span", { class: "note" }, ` · ${d.urls.length} copies: `),
+    el("span", { class: "note" }, ` · ${d.urls.length} ${d.near ? "near copies" : "copies"}: `),
     d.urls.map((u, i) => [i ? ", " : "", el("a", { href: u, target: "_blank", rel: "noopener noreferrer" }, host(u) + shortPath(u))])));
   // replaceChildren would print a null as "null".
   $("qualityReport").replaceChildren(...[

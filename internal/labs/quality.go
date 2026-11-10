@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"web-crawler/internal/copies"
 )
 
 // QualityPage is a page of a lab as the quality report reads it: how it was
@@ -20,6 +21,8 @@ type QualityPage struct {
 	Reasons    []string
 	Unreviewed bool
 	Hash       string
+	// Nil when the page has none: too short, or not sketched yet.
+	Sketch copies.Sketch
 }
 
 // Quality is how good a lab's material is, before an answer leans on it:
@@ -36,7 +39,8 @@ type Quality struct {
 	SetAside   int            `json:"set_aside"`
 	Reasons    map[string]int `json:"reasons"`
 	Unreviewed int            `json:"unreviewed"`
-	// Pages whose text is the same as another page's, past the first.
+	// Pages whose text is the same or nearly the same as another page's, past
+	// the first.
 	Duplicates      int         `json:"duplicates"`
 	DuplicateGroups []Duplicate `json:"duplicate_groups"`
 
@@ -52,6 +56,8 @@ type Quality struct {
 type Duplicate struct {
 	Title string   `json:"title"`
 	URLs  []string `json:"urls"`
+	// Not word for word: another version, a mirror with its own header.
+	Near bool `json:"near,omitempty"`
 }
 
 const (
@@ -72,8 +78,7 @@ var reasonWords = map[string]string{
 func QualityOf(pages []QualityPage) Quality {
 	q := Quality{Pages: len(pages), Reasons: map[string]int{}, DuplicateGroups: []Duplicate{}, Notes: []string{}}
 
-	byHash := map[string][]QualityPage{}
-	sites := map[string]int{}
+	var kept []QualityPage
 
 	for _, p := range pages {
 		switch {
@@ -91,29 +96,27 @@ func QualityOf(pages []QualityPage) Quality {
 			q.Unreviewed++
 		}
 
-		if p.Hash != "" {
-			byHash[p.Hash] = append(byHash[p.Hash], p)
-			if len(byHash[p.Hash]) > 1 {
-				q.Duplicates++
-				continue
-			}
-		}
-
-		q.Usable++
-		sites[p.Host]++
+		kept = append(kept, p)
 	}
 
-	for _, group := range byHash {
+	sites := map[string]int{}
+
+	for _, group := range sameText(kept) {
+		q.Usable++
+		sites[kept[group[0]].Host]++
+
 		if len(group) < 2 {
 			continue
 		}
 
-		d := Duplicate{Title: group[0].Title}
-		for _, p := range group {
-			d.URLs = append(d.URLs, p.URL)
+		q.Duplicates += len(group) - 1
+
+		d := Duplicate{Title: kept[group[0]].Title}
+		for _, i := range group {
+			d.URLs = append(d.URLs, kept[i].URL)
+			d.Near = d.Near || kept[i].Hash == "" || kept[i].Hash != kept[group[0]].Hash
 		}
 
-		slices.Sort(d.URLs)
 		q.DuplicateGroups = append(q.DuplicateGroups, d)
 	}
 
@@ -153,6 +156,73 @@ func QualityOf(pages []QualityPage) Quality {
 	return q
 }
 
+// sameText groups pages that are one text, word for word or nearly, by
+// index: each group in page order, the first page the one that counts.
+func sameText(pages []QualityPage) [][]int {
+	parent := make([]int, len(pages))
+	for i := range parent {
+		parent[i] = i
+	}
+
+	var find func(int) int
+	find = func(i int) int {
+		if parent[i] != i {
+			parent[i] = find(parent[i])
+		}
+
+		return parent[i]
+	}
+
+	join := func(i, j int) {
+		a, b := find(i), find(j)
+		if a > b {
+			a, b = b, a
+		}
+
+		parent[b] = a
+	}
+
+	byHash := map[string]int{}
+	sketches := make([]copies.Sketch, len(pages))
+
+	for i, p := range pages {
+		sketches[i] = p.Sketch
+
+		if p.Hash == "" {
+			continue
+		}
+
+		if first, ok := byHash[p.Hash]; ok {
+			join(first, i)
+		} else {
+			byHash[p.Hash] = i
+		}
+	}
+
+	for _, pair := range copies.Candidates(sketches) {
+		if copies.Same(sketches[pair[0]], sketches[pair[1]]) {
+			join(pair[0], pair[1])
+		}
+	}
+
+	var groups [][]int
+
+	at := map[int]int{}
+
+	for i := range pages {
+		root := find(i)
+		if g, ok := at[root]; ok {
+			groups[g] = append(groups[g], i)
+			continue
+		}
+
+		at[root] = len(groups)
+		groups = append(groups, []int{i})
+	}
+
+	return groups
+}
+
 func notes(q Quality) []string {
 	type note struct {
 		n    int
@@ -181,7 +251,12 @@ func notes(q Quality) []string {
 	}
 
 	if q.Duplicates > 0 {
-		out = append(out, note{q.Duplicates, fmt.Sprintf("%d %s the same text as another page of the lab", q.Duplicates, pluralHas(q.Duplicates))})
+		same := "the same text"
+		if slices.ContainsFunc(q.DuplicateGroups, func(d Duplicate) bool { return d.Near }) {
+			same = "the same or nearly the same text"
+		}
+
+		out = append(out, note{q.Duplicates, fmt.Sprintf("%d %s %s as another page of the lab", q.Duplicates, pluralHas(q.Duplicates), same)})
 	}
 
 	if q.Unreviewed > 0 {

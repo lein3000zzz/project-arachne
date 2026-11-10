@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"web-crawler/internal/copies"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/retrieval"
 
@@ -97,6 +98,8 @@ type Found struct {
 	InLab bool `json:"in_lab"`
 	// The number the answer cites it by; 0 when the model did not read it.
 	Source int `json:"source,omitempty"`
+	// The source whose text this one repeats, and was not read for it.
+	CopyOf int `json:"copy_of,omitempty"`
 	retrieval.Result
 }
 
@@ -242,7 +245,8 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 
 	if req.LabURLs != nil {
 		group.Go(func() (err error) {
-			inLabs, err = search(groupCtx, req.LabURLs, s.cfg.Sources)
+			// Spares for the places copies would take.
+			inLabs, err = search(groupCtx, req.LabURLs, 2*s.cfg.Sources)
 			return err
 		})
 	}
@@ -253,26 +257,50 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 
 	var picked []retrieval.Result
 
-	relevantLabs := s.relevant(inLabs)
+	texts := excerptSets{}
+	relevantLabs := s.fill(texts, s.relevant(inLabs), nil)
 
 	switch {
-	case req.LabOnly:
-		picked = s.fill(relevantLabs, nil)
-	case req.LabURLs != nil && len(relevantLabs) >= s.cfg.MinLabSources:
-		picked = s.fill(relevantLabs, nil)
+	case req.LabOnly, req.LabURLs != nil && len(relevantLabs) >= s.cfg.MinLabSources:
+		picked = relevantLabs
 	default:
-		picked = s.fill(relevantLabs, s.relevant(shared))
+		picked = s.fill(texts, relevantLabs, s.relevant(shared))
 	}
 
 	if len(picked) == 0 {
-		picked = s.fill(inLabs, shared)
+		picked = s.fill(texts, inLabs, shared)
 		weak = len(picked) > 0
 	}
 
 	sources = number(picked, req.LabURLs)
 	s.deepen(sources)
 
-	return list(shared[:min(len(shared), req.Results)], sources, req.LabURLs), sources, weak, nil
+	return list(texts, shared[:min(len(shared), req.Results)], sources, req.LabURLs), sources, weak, nil
+}
+
+// excerptSets holds the shingles of each result's matched text, by URL, as
+// copies are looked for.
+type excerptSets map[string]copies.Set
+
+func (e excerptSets) of(res retrieval.Result) copies.Set {
+	set, ok := e[res.URL]
+	if !ok {
+		set = copies.SetOf(append([]string{res.Snippet}, res.Passages...)...)
+		e[res.URL] = set
+	}
+
+	return set
+}
+
+// copyOf is the first of results whose text res repeats; -1 for none.
+func (e excerptSets) copyOf(res retrieval.Result, results []retrieval.Result) int {
+	for i, other := range results {
+		if other.URL != res.URL && copies.Repeats(e.of(res), e.of(other)) {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // deepen gives the room fewer sources leave to further passages of the same
@@ -298,8 +326,13 @@ func (s *Service) deepen(sources []Source) {
 	}
 }
 
-func list(results []retrieval.Result, sources []Source, labURLs []string) []Found {
+func list(texts excerptSets, results []retrieval.Result, sources []Source, labURLs []string) []Found {
 	found := make([]Found, len(results))
+
+	read := make([]retrieval.Result, len(sources))
+	for i, src := range sources {
+		read[i] = src.Result
+	}
 
 	for i, res := range results {
 		found[i] = Found{InLab: slices.Contains(labURLs, res.URL), Result: res}
@@ -309,22 +342,29 @@ func list(results []retrieval.Result, sources []Source, labURLs []string) []Foun
 				found[i].Source = src.N
 			}
 		}
+
+		if found[i].Source == 0 {
+			if j := texts.copyOf(res, read); j >= 0 {
+				found[i].CopyOf = sources[j].N
+			}
+		}
 	}
 
 	return found
 }
 
-// fill takes first's results, then second's that are not already there, up to
-// the number of sources.
-func (s *Service) fill(first, second []retrieval.Result) []retrieval.Result {
-	out := slices.Clone(first[:min(len(first), s.cfg.Sources)])
+// fill takes first's results, then second's, up to the number of sources:
+// each page once, and no page whose text one taken already holds - the model
+// would read the same words twice, and take one source for two that agree.
+func (s *Service) fill(texts excerptSets, first, second []retrieval.Result) []retrieval.Result {
+	var out []retrieval.Result
 
-	for _, res := range second {
+	for _, res := range append(slices.Clone(first), second...) {
 		if len(out) >= s.cfg.Sources {
 			break
 		}
 
-		if !slices.ContainsFunc(out, func(r retrieval.Result) bool { return r.URL == res.URL }) {
+		if !slices.ContainsFunc(out, func(r retrieval.Result) bool { return r.URL == res.URL }) && texts.copyOf(res, out) < 0 {
 			out = append(out, res)
 		}
 	}

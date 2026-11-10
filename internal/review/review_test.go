@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"web-crawler/internal/copies"
 	"web-crawler/internal/documents"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/vectorstore"
@@ -44,7 +45,7 @@ type memStore struct {
 	saved map[string]Verdict
 }
 
-func (m *memStore) Save(_ context.Context, url, _ string, v Verdict) error {
+func (m *memStore) Save(_ context.Context, url, _ string, _ copies.Sketch, v Verdict) error {
 	m.saved[url] = v
 	return nil
 }

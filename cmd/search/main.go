@@ -9,6 +9,7 @@ import (
 	"time"
 	"web-crawler/internal/answer"
 	"web-crawler/internal/artifacts"
+	"web-crawler/internal/copies"
 	"web-crawler/internal/endpoints"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/llm"
@@ -16,6 +17,7 @@ import (
 	"web-crawler/internal/platform"
 	"web-crawler/internal/research"
 	"web-crawler/internal/retrieval"
+	"web-crawler/internal/review"
 	"web-crawler/internal/runs"
 	"web-crawler/internal/searchapi"
 	"web-crawler/internal/uploads"
@@ -271,6 +273,15 @@ func main() {
 		}
 	}()
 
+	// Pages reviewed before sketches were kept get theirs from their chunks,
+	// for the quality report to see near copies among them.
+	sketched := make(chan struct{})
+
+	go func() {
+		defer close(sketched)
+		copies.Backfill(ctx, logger, review.NewPostgresStore(db), store)
+	}()
+
 	<-ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Shutdown.Timeout.Std())
@@ -288,6 +299,7 @@ func main() {
 		logger.Warnw("Research did not stop in time", "error", err)
 	}
 
+	<-sketched
 	db.Close()
 
 	if err := store.Close(shutdownCtx); err != nil {

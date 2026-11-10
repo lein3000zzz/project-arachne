@@ -304,6 +304,8 @@ function renderResults(list) {
     el("div", {},
       el("h3", {}, el("a", { href: pageHref(r.url), target: "_blank", rel: "noopener noreferrer" }, r.title || (isUpload(r.url) ? "your file" : r.url)),
         r.source ? el("span", { class: "tag source" }, "source " + r.source) : null,
+        // Not read: the model has its words already, as that source.
+        r.copy_of ? el("span", { class: "tag", title: "the same text as source " + r.copy_of + ", so not read again" }, "copy of " + r.copy_of) : null,
         r.in_lab ? el("span", { class: "tag lab" }, "lab") : null),
       isUpload(r.url) ? null : el("p", { class: "result-url" }, r.url),
       el("p", { class: "snippet" }, r.snippet || ""),

@@ -3,6 +3,7 @@ package labs
 import (
 	"context"
 	"errors"
+	"web-crawler/internal/copies"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -266,7 +267,7 @@ func (s *PostgresStore) QualityPages(ctx context.Context, ownerID, labID int64) 
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT p.url, p.host, coalesce(p.title, ''), coalesce(p.status, 0), coalesce(r.decision, ''), coalesce(r.reasons, '{}'),
-		       coalesce(r.unreviewed, false), coalesce(r.content_hash, '')
+		       coalesce(r.unreviewed, false), coalesce(r.content_hash, ''), r.sketch
 		FROM pages p LEFT JOIN page_reviews r ON r.url = p.url
 		WHERE p.id IN (SELECT sp.page_id FROM sources s JOIN source_pages sp ON sp.source_id = s.id WHERE s.lab_id = $1)
 		ORDER BY p.url`, labID)
@@ -275,8 +276,13 @@ func (s *PostgresStore) QualityPages(ctx context.Context, ownerID, labID int64) 
 	}
 
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (QualityPage, error) {
-		var p QualityPage
-		err := row.Scan(&p.URL, &p.Host, &p.Title, &p.Status, &p.Decision, &p.Reasons, &p.Unreviewed, &p.Hash)
+		var (
+			p      QualityPage
+			sketch []byte
+		)
+
+		err := row.Scan(&p.URL, &p.Host, &p.Title, &p.Status, &p.Decision, &p.Reasons, &p.Unreviewed, &p.Hash, &sketch)
+		p.Sketch = copies.SketchFrom(sketch)
 
 		return p, err
 	})

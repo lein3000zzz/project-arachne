@@ -400,3 +400,49 @@ func TestASectionReadsItsLabAloneAndWritesWhatItIsAsked(t *testing.T) {
 		t.Errorf("write: %+v, %v; asked %+v", written, err, chat.got)
 	}
 }
+
+// A mirror's words are not a second source: the next distinct page takes its
+// place, and the list says whose copy it is.
+func TestACopyDoesNotTakeASourcesPlace(t *testing.T) {
+	const text = "Residual learning reformulates the layers as learning residual functions with reference to the layer inputs " +
+		"instead of learning unreferenced functions, and these networks are easier to optimize and gain accuracy from depth"
+
+	with := func(url, snippet string, score float64) retrieval.Result {
+		r := reranked(url, score)
+		r.Snippet = snippet
+
+		return r
+	}
+
+	search := &scopedSearch{
+		lab: []retrieval.Result{
+			with("paper", text+".", 3),
+			with("mirror", "Mirrored from arXiv. "+text+" (2015).", 2.5),
+			reranked("blog", 2), reranked("book", 1),
+		},
+		shared: []retrieval.Result{with("syndicated", text, 2)},
+	}
+
+	var listed []Found
+
+	res, err := labService(t, search, &fakeChat{reply: "x"}).Answer(context.Background(),
+		Request{Query: "q", LabURLs: []string{"paper", "mirror", "blog", "book"}, Results: 3},
+		Events{Results: func(f []Found) error { listed = f; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := urlsOf(res.Sources); got != "paper(lab) blog(lab) book(lab)" {
+		t.Errorf("sources %q; the mirror repeats the paper", got)
+	}
+
+	if len(listed) != 1 || listed[0].CopyOf != 1 || listed[0].Source != 0 {
+		t.Errorf("listed %+v; the syndicated copy is marked as the paper's", listed)
+	}
+
+	for _, req := range search.requests {
+		if req.URLs != nil && req.Limit != 6 {
+			t.Errorf("the lab search asked for %d results; spares are needed for copies", req.Limit)
+		}
+	}
+}

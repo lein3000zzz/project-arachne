@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"web-crawler/internal/copies"
 	"web-crawler/internal/documents"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/vectorstore"
@@ -47,7 +48,7 @@ type Index interface {
 }
 
 type Store interface {
-	Save(ctx context.Context, url, contentHash string, v Verdict) error
+	Save(ctx context.Context, url, contentHash string, sketch copies.Sketch, v Verdict) error
 }
 
 type Config struct {
@@ -132,7 +133,9 @@ func (r *Reviewer) Admit(ctx context.Context, doc *documents.Document) (bool, er
 
 	sum := sha256.Sum256([]byte(doc.Title + "\x00" + doc.Content))
 
-	if err := r.store.Save(context.WithoutCancel(ctx), doc.URL, hex.EncodeToString(sum[:]), v); err != nil {
+	sketch := copies.SketchOf(copies.SetOf(doc.Content))
+
+	if err := r.store.Save(context.WithoutCancel(ctx), doc.URL, hex.EncodeToString(sum[:]), sketch, v); err != nil {
 		r.logger.Warnw("Failed to record a review", "url", doc.URL, "error", err)
 	}
 
