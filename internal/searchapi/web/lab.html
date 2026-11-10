@@ -107,6 +107,28 @@
     </div>
     <p class="note" id="researchNote" aria-live="polite"></p>
     <div id="researchStats"></div>
+    <div class="view-switch" id="viewSwitch" hidden>
+      <div class="segmented" role="group" aria-label="View">
+        <button type="button" class="seg" data-view="list" aria-pressed="true">List</button>
+        <button type="button" class="seg" data-view="graph" aria-pressed="false">Graph</button>
+      </div>
+    </div>
+    <div class="graph" id="researchGraph" hidden>
+      <div class="graph-tools">
+        <span class="control-label">Also show</span>
+        <label class="tick"><input type="checkbox" id="gMaybe"> maybe</label>
+        <label class="tick"><input type="checkbox" id="gPending"> not yet judged</label>
+        <label class="tick"><input type="checkbox" id="gDropped"> dropped</label>
+        <button type="button" class="action small" id="graphFit">fit</button>
+        <span class="note" id="graphNote" aria-live="polite"></span>
+      </div>
+      <div class="graph-body">
+        <div id="graphCanvas" class="graph-canvas" role="img" aria-label="The research map as a graph: works and the citations between them"></div>
+        <aside id="graphSide" class="graph-side"></aside>
+      </div>
+      <p class="note graph-legend">● in the index &nbsp; ◐ being read &nbsp; ○ not read &nbsp; ◌ kept out or set aside &nbsp;·&nbsp; a line: one cites the other
+        &nbsp;·&nbsp; size: how often the map's own works cite it &nbsp;·&nbsp; boxes: subtopics</p>
+    </div>
     <div class="map" id="researchMap" hidden>
       <nav class="map-groups" id="mapGroups" aria-label="Subtopics"></nav>
       <div class="map-works">
@@ -805,12 +827,14 @@ function groupsOf(m) {
 function renderMap(m) {
   const c = m.coverage;
   $("countResearch").textContent = c.kept || "";
+  $("viewSwitch").hidden = !c.works;
   if (!c.works) {
-    $("researchMap").hidden = true;
+    $("researchMap").hidden = $("researchGraph").hidden = true;
     $("researchStats").replaceChildren();
     return;
   }
-  $("researchMap").hidden = false;
+  $("researchMap").hidden = view !== "list";
+  $("researchGraph").hidden = view !== "graph";
   titles = new Map(m.works.map((w) => [w.id, w.title || w.url]));
 
   const e = c.estimate;
@@ -860,12 +884,188 @@ async function loadResearch() {
     if (m.run) m.run.rounds = m.run.rounds || [];
     renderRun(m.run, m);
     renderMap(m);
+    lastMap = m;
+    if (view === "graph") renderGraph();
     return researching;
   } catch (err) {
     $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
     return false;
   }
 }
+
+// ---- the map as a graph: works as dots in their subtopics' boxes, citations
+// as lines. Cytoscape loads only when the graph is first opened.
+let view = "list", lastMap = null, cy = null, graphShape = "", graphPick = null, cytoscapeLoading = null;
+
+document.querySelectorAll("#viewSwitch .seg").forEach((b) => b.addEventListener("click", () => {
+  view = b.dataset.view;
+  document.querySelectorAll("#viewSwitch .seg").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  if (lastMap) renderMap(lastMap);
+  if (view === "graph") renderGraph();
+}));
+
+for (const id of ["gMaybe", "gPending", "gDropped"]) $(id).addEventListener("change", () => renderGraph());
+$("graphFit").addEventListener("click", () => cy && cy.fit(undefined, 24));
+
+function loadCytoscape() {
+  if (window.cytoscape) return Promise.resolve();
+  cytoscapeLoading = cytoscapeLoading || new Promise((resolve, reject) => {
+    const s = el("script", { src: "/static/cytoscape.min.js" });
+    s.onload = resolve;
+    s.onerror = () => { cytoscapeLoading = null; reject(new Error("the graph library could not be loaded")); };
+    document.head.append(s);
+  });
+  return cytoscapeLoading;
+}
+
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function graphStyle() {
+  // Plain colours only: the canvas cannot read "rgb(… / alpha)".
+  const fg = cssVar("--fg"), bg = cssVar("--bg"), muted = cssVar("--muted"), line = cssVar("--line");
+  return [
+    { selector: "node.sub", style: {
+      "background-color": line, "background-opacity": 0.25, "border-color": line, "border-width": 1, shape: "round-rectangle",
+      label: "data(label)", "text-valign": "top", "text-halign": "center", "text-margin-y": -4, color: muted,
+      "font-family": "ui-monospace, Menlo, monospace", "font-size": 11, padding: 14 } },
+    { selector: "node.work", style: {
+      width: "data(size)", height: "data(size)", "background-color": bg, "border-color": fg, "border-width": 1.5,
+      label: "data(label)", "font-size": 9, color: fg, "text-valign": "bottom", "text-margin-y": 3,
+      "font-family": "ui-monospace, Menlo, monospace", "text-max-width": 140, "text-wrap": "ellipsis", "min-zoomed-font-size": 13 } },
+    // The works the map cites most keep their names at any zoom: landmarks.
+    { selector: "node.work[links >= 3], node.work[cited >= 2]", style: { "font-size": 11, "font-weight": 600, "min-zoomed-font-size": 4, "text-background-color": bg,
+      "text-background-opacity": 0.85, "text-background-padding": 2 } },
+    { selector: "node.in", style: { "background-color": fg } },
+    { selector: "node.reading", style: { "background-color": fg, "background-opacity": 0.45 } },
+    { selector: "node.out", style: { "border-color": muted, "border-style": "dashed" } },
+    { selector: "node.maybe, node.pending, node.drop", style: { "border-color": muted, color: muted, opacity: 0.75 } },
+    { selector: "node.drop", style: { "border-style": "dotted" } },
+    { selector: "node.work:selected", style: { "border-width": 3, "border-color": cssVar("--pod") || fg, "overlay-opacity": 0 } },
+    { selector: "edge", style: {
+      width: 1, "line-color": line, "curve-style": "bezier", "target-arrow-shape": "triangle", "target-arrow-color": line, "arrow-scale": 0.6 } },
+    { selector: "edge.near", style: { "line-color": fg, "target-arrow-color": fg, width: 1.5 } },
+  ];
+}
+
+// The graph's elements: the works shown, the citations between them, and a
+// box for each subtopic that holds any.
+function graphElements(m) {
+  const show = new Set(["keep"]);
+  if ($("gMaybe").checked) show.add("maybe");
+  if ($("gPending").checked) show.add("pending");
+  if ($("gDropped").checked) show.add("drop");
+
+  const works = m.works.filter((w) => show.has(w.verdict));
+  const ids = new Set(works.map((w) => w.id));
+  const links = m.links.filter((l) => l.from !== l.to && ids.has(l.from) && ids.has(l.to));
+  const cited = new Map(), degree = new Map();
+  for (const l of links) {
+    cited.set(l.to, (cited.get(l.to) || 0) + 1);
+    for (const id of [l.from, l.to]) degree.set(id, (degree.get(id) || 0) + 1);
+  }
+
+  const subs = new Set(m.subtopics.map((s) => s.id));
+  const used = new Set(works.filter((w) => subs.has(w.subtopic_id)).map((w) => w.subtopic_id));
+  const state = (w) => w.verdict !== "keep" ? w.verdict
+    : w.read === "in" ? "in" : w.read === "reading" ? "reading" : w.read ? "out" : "unread";
+
+  const elements = [
+    ...m.subtopics.filter((s) => used.has(s.id)).map((s) => ({ group: "nodes", data: { id: "s" + s.id, label: s.name }, classes: "sub" })),
+    ...works.map((w) => {
+      const n = cited.get(w.id) || 0;
+      const title = w.title || host(w.url);
+      return { group: "nodes", classes: "work " + state(w), data: {
+        id: "w" + w.id, work: w.id, parent: used.has(w.subtopic_id) ? "s" + w.subtopic_id : undefined,
+        size: 12 + 7 * Math.sqrt(n), cited: n, links: degree.get(w.id) || 0, label: title.length > 40 ? title.slice(0, 38) + "…" : title,
+      } };
+    }),
+    ...links.map((l) => ({ group: "edges", data: { id: `e${l.from}-${l.to}`, source: "w" + l.from, target: "w" + l.to } })),
+  ];
+
+  return { elements, works: works.length, links: links.length };
+}
+
+async function renderGraph() {
+  if (view !== "graph" || !lastMap) return;
+  try {
+    await loadCytoscape();
+  } catch (err) {
+    $("graphNote").replaceChildren(el("span", { class: "error" }, err.message));
+    return;
+  }
+
+  const { elements, works, links } = graphElements(lastMap);
+  $("graphNote").textContent = `${plural(works, "work")} · ${plural(links, "citation")} between them`;
+
+  // Polling redraws only what changed: a new layout every few seconds would
+  // throw the dots around under the reader's eyes.
+  const shape = elements.map((e) => e.data.id + (e.data.parent || "")).join(",");
+  if (cy && shape === graphShape) {
+    for (const e of elements) if (e.group === "nodes") cy.getElementById(e.data.id).classes(e.classes).data(e.data);
+    showPicked();
+    return;
+  }
+
+  graphShape = shape;
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: $("graphCanvas"), elements, style: graphStyle(), wheelSensitivity: 0.3, minZoom: 0.1, maxZoom: 3,
+    layout: { name: "preset" },
+  });
+  arrange();
+  cy.on("tap", "node.work", (e) => { graphPick = e.target.data("work"); showPicked(); });
+  cy.on("tap", (e) => { if (e.target === cy) { graphPick = null; showPicked(); } });
+  showPicked();
+}
+
+// arrange lays each subtopic out as its own cluster, the most-cited works in
+// its middle, and the clusters side by side. Citations among the works of a
+// map are few - a force layout would string them out in rows - so the
+// subtopics give the shape and the citations are drawn across it.
+function arrange() {
+  const clusters = cy.nodes(".sub").map((sub) => sub.children());
+  const loose = cy.nodes(".work").orphans();
+  if (loose.length) clusters.push(loose);
+
+  const sideOf = (nodes) => Math.max(160, Math.ceil(Math.sqrt(nodes.length)) * 76);
+  const cell = Math.max(...clusters.map(sideOf)) + 90;
+  // As many columns as the canvas's shape asks for: wide on a desk, one or
+  // two on a phone.
+  const aspect = cy.width() / Math.max(1, cy.height());
+  const cols = Math.max(1, Math.min(clusters.length, Math.round(Math.sqrt(clusters.length * aspect))));
+
+  clusters.forEach((nodes, i) => {
+    const side = sideOf(nodes);
+    const x = (i % cols) * cell + (cell - side) / 2, y = Math.floor(i / cols) * cell + (cell - side) / 2;
+    nodes.layout({
+      name: "concentric", boundingBox: { x1: x, y1: y, w: side, h: side }, fit: false, animate: false,
+      concentric: (n) => n.data("cited"), levelWidth: () => 1, minNodeSpacing: 26, avoidOverlap: true,
+      startAngle: (3 / 2) * Math.PI,
+    }).run();
+  });
+
+  cy.fit(undefined, 24);
+}
+
+// The work picked shows beside the graph with everything the list gives it;
+// its citations light up.
+function showPicked() {
+  if (!cy) return;
+  cy.edges().removeClass("near");
+  const w = graphPick && lastMap.works.find((x) => x.id === graphPick);
+  if (!w) {
+    $("graphSide").replaceChildren(el("p", { class: "note" }, "Pick a work to see it here, with what it cites and what cites it lit up."));
+    return;
+  }
+  const node = cy.getElementById("w" + w.id);
+  node.select();
+  node.connectedEdges().addClass("near");
+  $("graphSide").replaceChildren(el("ol", { class: "works" }, workItem(w)));
+}
+
+// The colours come from the page's theme: redrawn when it changes.
+new MutationObserver(() => cy && cy.style(graphStyle())).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => cy && cy.style(graphStyle()));
 
 $("researchForm").addEventListener("submit", async (e) => {
   e.preventDefault();

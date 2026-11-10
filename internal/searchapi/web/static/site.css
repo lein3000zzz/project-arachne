@@ -557,3 +557,15 @@ a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
 .list-tools .seg { white-space: nowrap; }
 .works { grid-template-columns: minmax(0, 1fr); }
 .works li { min-width: 0; }
+
+/* The map as a graph, with the work picked beside it. */
+.view-switch { margin: 0 0 0.8rem; }
+.graph { border-top: 1px solid var(--line); padding-top: 0.8rem; }
+.graph-tools { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; margin: 0 0 0.6rem; }
+.graph-tools .ticks, .graph-tools .tick { margin: 0; }
+.graph-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+@media (min-width: 60rem) { .graph-body { grid-template-columns: minmax(0, 1fr) 20rem; } }
+.graph-canvas { height: min(72vh, 46rem); min-height: 22rem; border: 1px solid var(--line); background: var(--bg); }
+.graph-side { min-width: 0; }
+.graph-side .works li { border-bottom: 0; padding-top: 0; }
+.graph-legend { margin: 0.6rem 0 0; font-size: 0.76rem; }
