@@ -112,3 +112,58 @@ const verdictNames = {
   supported: "supported by the cited excerpts", partly: "partly supported: some of it is not in the cited excerpts",
   unsupported: "not supported by the cited excerpts", unchecked: "not checked",
 };
+
+// listView shows a long list a page at a time, with filter buttons and a
+// search. Polling hands it new items; the page, the filter and what was typed
+// stay. filters: [[value, label, keep(item)]]; text(item) is what the search
+// looks in; wrap builds the list around the rows.
+function listView({ filters, text, row, size = 25, empty = "None yet.", wrap = (rows) => el("ol", { class: "rows" }, rows) }) {
+  const state = { page: 0, filter: filters ? filters[0][0] : "", query: "", items: [] };
+  const counts = new Map();
+
+  const search = el("input", { type: "search", class: "list-search", placeholder: "search…", "aria-label": "Search the list" });
+  search.addEventListener("input", () => { state.query = search.value.trim().toLowerCase(); state.page = 0; draw(); });
+
+  const buttons = (filters || []).map(([value, label]) => {
+    const b = el("button", { type: "button", class: "seg", "aria-pressed": String(value === state.filter) }, label);
+    b.addEventListener("click", () => {
+      state.filter = value;
+      state.page = 0;
+      buttons.forEach((x, i) => x.setAttribute("aria-pressed", String(filters[i][0] === value)));
+      draw();
+    });
+    counts.set(value, b);
+    return b;
+  });
+
+  const body = el("div", { class: "list-body" });
+  const box = el("div", { class: "listview" },
+    el("div", { class: "list-tools" }, filters ? el("div", { class: "segmented", role: "group", "aria-label": "Show" }, buttons) : null, search),
+    body);
+
+  function draw() {
+    const keep = (filters || []).find(([value]) => value === state.filter);
+    for (const [value, label, pred] of filters || []) {
+      counts.get(value).textContent = `${label} ${state.items.filter(pred).length}`;
+    }
+    const shown = state.items.filter((it) => (!keep || keep[2](it)) && (!state.query || text(it).toLowerCase().includes(state.query)));
+    const pages = Math.max(1, Math.ceil(shown.length / size));
+    state.page = Math.min(state.page, pages - 1);
+    const slice = shown.slice(state.page * size, (state.page + 1) * size);
+
+    const go = (to) => { state.page = to; draw(); box.scrollIntoView({ block: "nearest" }); };
+    const pager = pages > 1 ? el("div", { class: "pager" },
+      el("button", { type: "button", class: "action small", disabled: state.page === 0, onclick: () => go(state.page - 1) }, "‹ prev"),
+      el("span", { class: "note" }, `${state.page * size + 1}–${state.page * size + slice.length} of ${shown.length}`),
+      el("button", { type: "button", class: "action small", disabled: state.page === pages - 1, onclick: () => go(state.page + 1) }, "next ›")) : null;
+
+    // replaceChildren would print a null as "null".
+    body.replaceChildren(...[slice.length ? wrap(slice.map(row)) : el("p", { class: "note empty" }, state.items.length ? "Nothing matches." : empty), pager]
+      .filter(Boolean));
+  }
+
+  return {
+    el: box,
+    set(items) { state.items = items; draw(); },
+  };
+}

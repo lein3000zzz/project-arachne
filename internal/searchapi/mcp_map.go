@@ -67,7 +67,7 @@ func mapText(labName string, m research.Map, dropped bool) string {
 			estimate = fmt.Sprintf(", about %.0f%% found", 100*c.Subtopics[i].Estimate.Share)
 		}
 
-		fmt.Fprintf(&b, "\n## %d. %s: %d kept%s\n", i+1, sub.Name, len(kept), estimate)
+		fmt.Fprintf(&b, "\n## %d. %s (subtopic %d): %d kept%s\n", i+1, sub.Name, sub.ID, len(kept), estimate)
 
 		if sub.Focus != "" {
 			fmt.Fprintf(&b, "%s\n", sub.Focus)
@@ -108,7 +108,7 @@ func mapText(labName string, m research.Map, dropped bool) string {
 				break
 			}
 
-			fmt.Fprintf(&b, "- %s: %s\n", mdLink(titles[w.ID], w.URL), w.Reason)
+			fmt.Fprintf(&b, "- %s (work %d): %s\n", mdLink(titles[w.ID], w.URL), w.ID, w.Reason)
 		}
 	}
 
@@ -129,6 +129,7 @@ func runLine(r research.Run) string {
 var stopNames = map[string]string{
 	research.StopSaturated: "new rounds found little new", research.StopBudget: "the judging budget was spent; research again to go on",
 	research.StopRounds: "the rounds ran out", research.StopTime: "out of time", research.StopInterrupted: "interrupted",
+	research.StopFollowed: "the work's citations were followed",
 }
 
 func writeWorks(b *strings.Builder, works []research.Work, titles map[int64]string, shown int) {
@@ -138,9 +139,7 @@ func writeWorks(b *strings.Builder, works []research.Work, titles map[int64]stri
 			return
 		}
 
-		var about []string
-
-		about = append(about, w.Kind)
+		about := []string{fmt.Sprintf("work %d", w.ID), w.Kind}
 		if w.Year > 0 {
 			about = append(about, fmt.Sprint(w.Year))
 		}
@@ -153,6 +152,10 @@ func writeWorks(b *strings.Builder, works []research.Work, titles map[int64]stri
 
 		if w.Reason != "" {
 			fmt.Fprintf(b, ". %s", w.Reason)
+		}
+
+		if w.ByUser {
+			b.WriteString(" (the user's verdict)")
 		}
 
 		b.WriteString("\n")

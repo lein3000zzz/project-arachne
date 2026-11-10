@@ -42,6 +42,16 @@ func (f *fakeResearch) Map(_ context.Context, owner, lab int64) (research.Map, e
 		Links: []research.Link{}, Coverage: research.Coverage{Works: 1, Kept: 1, Subtopics: []research.SubtopicCoverage{{ID: 1, Kept: 1}}}}, f.err
 }
 
+func (f *fakeResearch) SetVerdict(_ context.Context, owner, lab, work int64, verdict string, subtopic int64) (research.Work, error) {
+	f.owner, f.lab = owner, lab
+	return research.Work{ID: work, Verdict: verdict, SubtopicID: subtopic, ByUser: true}, f.err
+}
+
+func (f *fakeResearch) ReadWork(_ context.Context, owner, lab, work int64) (research.Work, error) {
+	f.owner, f.lab = owner, lab
+	return research.Work{ID: work, Verdict: research.VerdictKeep, SourceID: 5, ByUser: true}, f.err
+}
+
 func serveResearch(service ResearchService, method, target, body string) *httptest.ResponseRecorder {
 	services := Services{Labs: &fakeLabs{}}
 	if service != nil {
@@ -84,6 +94,32 @@ func TestResearchIsStartedAndMappedForTheOwner(t *testing.T) {
 	} {
 		if rec := serveResearch(&fakeResearch{err: c.err}, http.MethodPost, "/api/labs/7/research", `{}`); rec.Code != c.want || strings.Contains(rec.Body.String(), "boom") {
 			t.Errorf("%v: %d %s", c.err, rec.Code, rec.Body)
+		}
+	}
+
+	if rec := serveResearch(f, http.MethodPost, "/api/labs/7/research", `{"subtopic": 3}`); rec.Code != http.StatusAccepted || f.ask.Focus.Subtopic != 3 {
+		t.Errorf("one subtopic: %d %+v", rec.Code, f.ask)
+	}
+
+	if rec := serveResearch(f, http.MethodPut, "/api/labs/7/research/works/12", `{"verdict": "drop"}`); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"verdict":"drop"`) {
+		t.Errorf("verdict: %d %s", rec.Code, rec.Body)
+	}
+
+	if rec := serveResearch(f, http.MethodPost, "/api/labs/7/research/works/12/read", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"source_id":5`) {
+		t.Errorf("read: %d %s", rec.Code, rec.Body)
+	}
+
+	if rec := serveResearch(f, http.MethodPut, "/api/labs/7/research/works/x", `{"verdict": "drop"}`); rec.Code != http.StatusNotFound {
+		t.Errorf("a work that is no number: %d", rec.Code)
+	}
+
+	for _, c := range []struct {
+		err  error
+		want int
+	}{{research.ErrWorkNotFound, http.StatusNotFound}, {research.ErrSubtopicNotFound, http.StatusNotFound}, {research.ErrNothingToFollow, http.StatusBadRequest}} {
+		if rec := serveResearch(&fakeResearch{err: c.err}, http.MethodPut, "/api/labs/7/research/works/1", `{"verdict": "keep"}`); rec.Code != c.want {
+			t.Errorf("%v: %d", c.err, rec.Code)
 		}
 	}
 

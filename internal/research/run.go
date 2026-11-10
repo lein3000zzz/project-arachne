@@ -41,6 +41,7 @@ type session struct {
 	lab     labs.Detail
 	request string
 	budget  Budget
+	focus   Focus
 
 	subs    []Subtopic
 	planned bool
@@ -61,13 +62,13 @@ type session struct {
 	urlOf              map[int64]string
 }
 
-func (s *Service) run(id, ownerID int64, lab labs.Detail, request string, budget Budget) {
+func (s *Service) run(id, ownerID int64, lab labs.Detail, request string, budget Budget, focus Focus) {
 	// The owner's own endpoint judges, when they have one.
 	ctx, cancel := context.WithTimeout(auth.WithUser(s.ctx, auth.User{ID: ownerID}), s.cfg.Timeout)
 	defer cancel()
 
 	r := &session{
-		s: s, id: id, ownerID: ownerID, lab: lab, request: request, budget: budget,
+		s: s, id: id, ownerID: ownerID, lab: lab, request: request, budget: budget, focus: focus,
 		sites: map[string]int{}, readNow: map[int64]bool{}, followedRefs: map[int64]bool{},
 		byURL: map[string]int64{}, byDOI: map[string]int64{}, byOA: map[string]int64{}, urlOf: map[int64]string{},
 	}
@@ -125,9 +126,16 @@ func (r *session) research(ctx context.Context) (string, error) {
 		r.planned = true
 	}
 
-	r.seed(ctx)
+	rounds := r.s.cfg.Rounds
 
-	for n := 1; n <= r.s.cfg.Rounds; n++ {
+	switch {
+	case r.focus.Work != 0:
+		rounds = 1
+	case r.focus.Subtopic == 0:
+		r.seed(ctx)
+	}
+
+	for n := 1; n <= rounds; n++ {
 		r.cur = &Round{N: n, Found: map[string]int{}}
 
 		queries, err := r.queries(ctx, n)
@@ -165,6 +173,8 @@ func (r *session) research(ctx context.Context) (string, error) {
 		}
 
 		switch {
+		case r.focus.Work != 0:
+			return StopFollowed, nil
 		case r.judged >= r.budget.Found:
 			return StopBudget, nil
 		case found == 0 && round.Judged == 0:
@@ -271,8 +281,29 @@ func (r *session) seed(ctx context.Context) {
 }
 
 // queries are the round's searches: a new plan's own queries first, then
-// queries the model writes for the subtopics with the fewest kept works.
+// queries the model writes for the subtopics with the fewest kept works. A
+// run on one subtopic searches for it alone, starting with its own queries
+// not yet tried; one following a work searches nothing.
 func (r *session) queries(ctx context.Context, n int) ([]string, error) {
+	subs := r.subs
+
+	switch {
+	case r.focus.Work != 0:
+		return nil, nil
+	case r.focus.Subtopic != 0:
+		subs = slices.DeleteFunc(slices.Clone(r.subs), func(s Subtopic) bool { return s.ID != r.focus.Subtopic })
+	}
+
+	var untried []string
+
+	if r.focus.Subtopic != 0 && n == 1 {
+		for _, q := range subs[0].Queries {
+			if !containsFold(r.tried, q) {
+				untried = append(untried, q)
+			}
+		}
+	}
+
 	if n == 1 && r.planned && r.request == "" {
 		var out []string
 
@@ -300,7 +331,41 @@ func (r *session) queries(ctx context.Context, n int) ([]string, error) {
 		}
 	}
 
-	return r.s.moreQueries(ctx, r.lab, r.request, r.subs, kept, r.tried, min(maxNewQueries, 2*len(r.subs)))
+	more, err := r.s.moreQueries(ctx, r.lab, r.request, subs, kept, append(slices.Clone(r.tried), untried...), min(maxNewQueries, 2*len(subs)+1))
+
+	return append(untried, more...), err
+}
+
+// follows says whose citations a round follows: every kept work's, or the
+// focus's alone - the work asked for, whatever its verdict, or the kept works
+// of the subtopic asked for.
+func (r *session) follows(w Work) bool {
+	switch {
+	case r.focus.Work != 0:
+		return w.ID == r.focus.Work
+	case r.focus.Subtopic != 0:
+		return w.Verdict == VerdictKeep && w.SubtopicID == r.focus.Subtopic
+	}
+
+	return w.Verdict == VerdictKeep
+}
+
+// forced: a work the user asked to follow is followed again, even if done.
+func (r *session) forced(w Work) bool {
+	return r.focus.Work == w.ID
+}
+
+// mayRead says what a focused run reads: the works found through the work
+// it follows, or the subtopic's.
+func (r *session) mayRead(w Work) bool {
+	switch {
+	case r.focus.Work != 0:
+		return slices.ContainsFunc(w.Finds, func(f Find) bool { return f.Via == r.focus.Work })
+	case r.focus.Subtopic != 0:
+		return w.SubtopicID == r.focus.Subtopic
+	}
+
+	return true
 }
 
 // searchFor searches the web with the lab's engines and OpenAlex for each
@@ -397,7 +462,7 @@ func (r *session) followReferences(ctx context.Context) {
 	var read []int64
 
 	for _, w := range works {
-		if w.Read == ReadIn && !r.followedRefs[w.ID] {
+		if w.Read == ReadIn && r.follows(w) && !r.followedRefs[w.ID] {
 			read = append(read, w.ID)
 			r.followedRefs[w.ID] = true
 		}
@@ -443,7 +508,7 @@ func (r *session) paperReferences(ctx context.Context, works []Work) {
 	byID := map[string]Work{}
 
 	for _, w := range works {
-		if w.Verdict == VerdictKeep && w.OpenAlexID != "" && !w.ReferencesDone {
+		if r.follows(w) && w.OpenAlexID != "" && (!w.ReferencesDone || r.forced(w)) {
 			ids = append(ids, w.OpenAlexID)
 			byID[w.OpenAlexID] = w
 		}
@@ -513,7 +578,7 @@ func (r *session) followCiting(ctx context.Context) {
 	}
 
 	for _, w := range works {
-		if w.Verdict != VerdictKeep || w.OpenAlexID == "" || w.CitingDone || ctx.Err() != nil {
+		if !r.follows(w) || w.OpenAlexID == "" || (w.CitingDone && !r.forced(w)) || ctx.Err() != nil {
 			continue
 		}
 
@@ -641,8 +706,19 @@ func (r *session) judgeAll(ctx context.Context) (int, error) {
 		}
 	}
 
+	// What this run found first: a focused run judges what it was asked for
+	// before the backlog.
+	foundNow := func(w Work) int {
+		if slices.ContainsFunc(w.Finds, func(f Find) bool { return f.Run == r.id }) {
+			return 1
+		}
+
+		return 0
+	}
+
 	slices.SortStableFunc(pending, func(a, b Work) int {
-		return cmp.Or(cmp.Compare(channels(b), channels(a)), cmp.Compare(len(b.Finds), len(a.Finds)), cmp.Compare(a.ID, b.ID))
+		return cmp.Or(cmp.Compare(foundNow(b), foundNow(a)), cmp.Compare(channels(b), channels(a)), cmp.Compare(len(b.Finds), len(a.Finds)),
+			cmp.Compare(a.ID, b.ID))
 	})
 
 	empty := 0
@@ -737,7 +813,7 @@ func (r *session) readKept(ctx context.Context) {
 	queues := map[int64][]Work{}
 
 	for _, w := range works {
-		if w.Verdict == VerdictKeep && w.SourceID == 0 && readable(w) {
+		if w.Verdict == VerdictKeep && w.SourceID == 0 && readable(w) && r.mayRead(w) {
 			queues[w.SubtopicID] = append(queues[w.SubtopicID], w)
 		}
 	}

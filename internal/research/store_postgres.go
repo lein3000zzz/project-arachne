@@ -23,12 +23,13 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-func (s *PostgresStore) StartRun(ctx context.Context, labID int64, request string, budget Budget, model string) (int64, error) {
+func (s *PostgresStore) StartRun(ctx context.Context, labID int64, request string, budget Budget, focus Focus, model string) (int64, error) {
 	var id int64
 
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO research_runs (lab_id, request, found_budget, read_budget, status, model) VALUES ($1, $2, $3, $4, 'running', $5)
-		RETURNING id`, labID, request, budget.Found, budget.Read, model).Scan(&id)
+		INSERT INTO research_runs (lab_id, request, found_budget, read_budget, focus_work, focus_subtopic, status, model)
+		VALUES ($1, $2, $3, $4, nullif($5, 0), nullif($6, 0), 'running', $7)
+		RETURNING id`, labID, request, budget.Found, budget.Read, focus.Work, focus.Subtopic, model).Scan(&id)
 	if isUniqueViolation(err) {
 		return 0, ErrRunning
 	}
@@ -59,7 +60,8 @@ func (s *PostgresStore) FinishRun(ctx context.Context, id int64, status, stopped
 	return err
 }
 
-const runColumns = `id, lab_id, request, found_budget, read_budget, status, stopped, rounds, error, model, started_at, finished_at`
+const runColumns = `id, lab_id, request, found_budget, read_budget, coalesce(focus_work, 0), coalesce(focus_subtopic, 0), status, stopped,
+	rounds, error, model, started_at, finished_at`
 
 func scanRun(row pgx.CollectableRow) (Run, error) {
 	var (
@@ -67,8 +69,8 @@ func scanRun(row pgx.CollectableRow) (Run, error) {
 		rounds []byte
 	)
 
-	err := row.Scan(&r.ID, &r.LabID, &r.Request, &r.Budget.Found, &r.Budget.Read, &r.Status, &r.Stopped, &rounds, &r.Error, &r.Model,
-		&r.StartedAt, &r.FinishedAt)
+	err := row.Scan(&r.ID, &r.LabID, &r.Request, &r.Budget.Found, &r.Budget.Read, &r.Focus.Work, &r.Focus.Subtopic, &r.Status, &r.Stopped,
+		&rounds, &r.Error, &r.Model, &r.StartedAt, &r.FinishedAt)
 	if err != nil {
 		return Run{}, err
 	}
@@ -242,7 +244,8 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 		           WHEN rev.ok > 0 THEN 'empty'
 		           ELSE 'failed'
 		       END,
-		       coalesce((SELECT json_agg(json_build_object('channel', f.channel, 'query', f.query, 'via', coalesce(f.via_work, 0), 'round', f.round)
+		       coalesce((SELECT json_agg(json_build_object('channel', f.channel, 'query', f.query, 'via', coalesce(f.via_work, 0), 'round', f.round,
+		                                                   'run', coalesce(f.run_id, 0))
 		                                 ORDER BY f.id)
 		                 FROM work_finds f WHERE f.work_id = w.id), '[]')
 		FROM works w
@@ -285,6 +288,17 @@ func (s *PostgresStore) Judge(ctx context.Context, workID int64, verdict, reason
 	_, err := s.pool.Exec(ctx, `
 		UPDATE works SET verdict = $2, reason = $3, subtopic_id = coalesce(nullif($4, 0), subtopic_id)
 		WHERE id = $1 AND NOT by_user`, workID, verdict, reason, subtopicID)
+
+	return err
+}
+
+func (s *PostgresStore) SetVerdict(ctx context.Context, labID, workID int64, verdict string, subtopicID int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE works SET verdict = $3, by_user = true, subtopic_id = coalesce(nullif($4, 0), subtopic_id)
+		WHERE id = $2 AND lab_id = $1`, labID, workID, verdict, subtopicID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrWorkNotFound
+	}
 
 	return err
 }

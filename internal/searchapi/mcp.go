@@ -146,8 +146,11 @@ func (t *mcpTools) register(s *mcp.Server) {
 		Description: "Add pages or sites, by URL, to a lab as sources. Each is crawled, reviewed and indexed in the background: check with get_lab."},
 		t.addSources)
 	addTool(s, &mcp.Tool{Name: "research", Annotations: changes("Research a lab's topic", true),
-		Description: "Map what exists on a lab's topic: rounds of web and OpenAlex search and of following what kept works cite and what cites them; the model judges each work by what it shows, niche or famous, and the kept ones are read into the lab. Runs in the background, often tens of minutes, and stops when new rounds find little new. Check with get_lab; read the map with read_map."},
+		Description: "Map what exists on a lab's topic: rounds of web and OpenAlex search and of following what kept works cite and what cites them; the model judges each work by what it shows, niche or famous, and the kept ones are read into the lab. Runs in the background, often tens of minutes, and stops when new rounds find little new. Give a work to follow that one work's citations alone, or a subtopic to research it alone. Check with get_lab; read the map with read_map."},
 		t.startResearch)
+	addTool(s, &mcp.Tool{Name: "set_work", Annotations: changes("Steer a work on the map", true),
+		Description: "Keep, put aside (maybe) or drop a work on a lab's map, move it to another subtopic, or read it into the lab now. Your verdict stands over the model's, now and in later research."},
+		t.setWork)
 	addTextTool(s, &mcp.Tool{Name: "read_map", Annotations: readOnly("Read a lab's map"),
 		Description: "Read a lab's research map as Markdown: its subtopics, the works kept in each with how they were found and whether they are read, how complete the map looks, and optionally what was dropped and why."},
 		t.readMap)
@@ -759,10 +762,12 @@ func sourceRequests(urls []string) []labs.SourceRequest {
 }
 
 type researchInput struct {
-	Lab     int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
-	Request string `json:"request,omitempty" jsonschema:"what to look for, when not the lab's topic as a whole: newer work, another community, benchmarks"`
-	Found   *int   `json:"found,omitempty" jsonschema:"how many works to judge at most; the server's default when absent"`
-	Read    *int   `json:"read,omitempty" jsonschema:"how many kept works to read into the lab at most, 0 to map without reading; the server's default when absent"`
+	Lab      int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Request  string `json:"request,omitempty" jsonschema:"what to look for, when not the lab's topic as a whole: newer work, another community, benchmarks"`
+	Found    *int   `json:"found,omitempty" jsonschema:"how many works to judge at most; the server's default when absent"`
+	Read     *int   `json:"read,omitempty" jsonschema:"how many kept works to read into the lab at most, 0 to map without reading; the server's default when absent"`
+	Work     int64  `json:"work,omitempty" jsonschema:"follow this one work's citations alone, both ways, by its id from read_map"`
+	Subtopic int64  `json:"subtopic,omitempty" jsonschema:"research this one subtopic further, by its id from read_map"`
 }
 
 type runView struct {
@@ -779,12 +784,68 @@ func (t *mcpTools) startResearch(ctx context.Context, user auth.User, _ *mcp.Cal
 	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
 	defer cancel()
 
-	run, err := t.research.service.Start(ctx, user.ID, in.Lab, research.Ask{Request: in.Request, Found: in.Found, Read: in.Read})
+	run, err := t.research.service.Start(ctx, user.ID, in.Lab, research.Ask{Request: in.Request, Found: in.Found, Read: in.Read,
+		Focus: research.Focus{Work: in.Work, Subtopic: in.Subtopic}})
 	if err != nil {
 		return runView{}, t.labFailed(err)
 	}
 
 	return runView{ID: run.ID, Status: run.Status, Budget: run.Budget}, nil
+}
+
+type setWorkInput struct {
+	Lab      int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Work     int64  `json:"work" jsonschema:"the work's id, from read_map"`
+	Verdict  string `json:"verdict,omitempty" jsonschema:"keep, maybe or drop: stands over the model's verdict, now and in later research"`
+	Subtopic int64  `json:"subtopic,omitempty" jsonschema:"move it to this subtopic, by its id from read_map"`
+	Read     bool   `json:"read,omitempty" jsonschema:"read it into the lab now: crawled, reviewed and indexed in the background"`
+}
+
+type workView struct {
+	ID       int64  `json:"id"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Verdict  string `json:"verdict"`
+	Subtopic int64  `json:"subtopic,omitempty"`
+	// How far it is read, once it is.
+	Read string `json:"read,omitempty"`
+}
+
+func (t *mcpTools) setWork(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in setWorkInput) (workView, error) {
+	if t.research.service == nil {
+		return workView{}, errors.New("research is not available")
+	}
+
+	if in.Verdict == "" && !in.Read {
+		return workView{}, errors.New("give a verdict, read: true, or both")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
+	defer cancel()
+
+	var (
+		w   research.Work
+		err error
+	)
+
+	if in.Verdict != "" {
+		if w, err = t.research.service.SetVerdict(ctx, user.ID, in.Lab, in.Work, in.Verdict, in.Subtopic); err != nil {
+			return workView{}, t.labFailed(err)
+		}
+	}
+
+	if in.Read {
+		if w, err = t.research.service.ReadWork(ctx, user.ID, in.Lab, in.Work); err != nil {
+			return workView{}, t.labFailed(err)
+		}
+	}
+
+	read := w.Read
+	if w.SourceID != 0 && read == "" {
+		read = research.ReadReading
+	}
+
+	return workView{ID: w.ID, Title: workTitle(w), URL: w.URL, Verdict: w.Verdict, Subtopic: w.SubtopicID, Read: read}, nil
 }
 
 type readMapInput struct {
@@ -817,7 +878,8 @@ func (t *mcpTools) readMap(ctx context.Context, user auth.User, _ *mcp.CallToolR
 // pages would say, never the error itself.
 func (t *mcpTools) labFailed(err error) error {
 	switch {
-	case errors.Is(err, research.ErrRunning), errors.Is(err, research.ErrNoChannels), errors.Is(err, research.ErrUnavailable):
+	case errors.Is(err, research.ErrRunning), errors.Is(err, research.ErrNoChannels), errors.Is(err, research.ErrUnavailable),
+		errors.Is(err, research.ErrWorkNotFound), errors.Is(err, research.ErrSubtopicNotFound), errors.Is(err, research.ErrNothingToFollow):
 		return err
 	}
 

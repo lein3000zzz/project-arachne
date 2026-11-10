@@ -21,118 +21,140 @@
 
 <header class="site">
   <a class="brand" href="/">arachne</a>
+  <nav class="nav" aria-label="Main">
+    <a href="/">Look up</a>
+    <a href="/?tab=labs" aria-current="true">Labs</a>
+  </nav>
   <span class="who" id="who"></span>
   <a class="theme" href="/settings">settings</a>
   <button type="button" class="theme" id="logout">log out</button>
   <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
 </header>
 
-<main id="main" class="docs">
-  <nav class="docs-nav" aria-label="Lab">
-    <a href="/?tab=labs">&larr; Labs</a>
-    <p class="lab-name" id="labName"></p>
-    <a href="#overview">Overview</a>
-    <a href="#sources">Sources</a>
-    <a href="#research" id="researchNav">Research</a>
-    <a href="#references" id="refNav" hidden>References</a>
-    <a href="#artifacts">Artifacts</a>
-    <a href="#pages">Pages</a>
+<main id="main" class="lab-page">
+  <div class="lab-head">
+    <a class="crumb" href="/?tab=labs">&larr; Labs</a>
+    <h1 id="title">&hellip;</h1>
+    <p class="lede clamp" id="topic"></p>
+    <p class="note" id="summary"></p>
+    <div class="buttons">
+      <a class="action primary" id="askWith" href="/">Look up with this lab</a>
+      <button type="button" class="action" id="goResearch">Research</button>
+      <button type="button" class="action" id="goAdd">Add sources</button>
+    </div>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="Lab">
+    <button type="button" class="tab" role="tab" data-tab="overview">Overview</button>
+    <button type="button" class="tab" role="tab" data-tab="sources">Sources <span class="count" id="countSources"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="research" id="tabResearch" hidden>Research <span class="count" id="countResearch"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="references" id="tabReferences" hidden>References <span class="count" id="countReferences"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="artifacts">Reports <span class="count" id="countArtifacts"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="pages">Pages <span class="count" id="countPages"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="settings">Settings</button>
   </nav>
 
-  <div class="docs-main">
-    <section id="overview">
-      <p class="eyebrow">lab</p>
-      <h1 id="title">&hellip;</h1>
-      <p class="lede" id="topic"></p>
-      <p class="note" id="coverage"></p>
-      <div class="buttons"><a class="action primary" id="askWith" href="/">Look up with this lab</a></div>
-    </section>
+  <section class="panel" id="overview" role="tabpanel">
+    <div class="overview" id="overviewCards"></div>
+  </section>
 
-    <section id="sources">
-      <h2>Sources</h2>
-      <table class="table stack">
-        <thead><tr><th>URL</th><th>Status</th><th class="num">Pages</th><th class="num">Searchable</th><th></th></tr></thead>
-        <tbody id="sourceRows"></tbody>
-      </table>
-
+  <section class="panel" id="sources" role="tabpanel" hidden>
+    <div class="panel-bar">
+      <button type="button" class="action primary" id="addToggle">Add sources</button>
+      <label class="action file-pick">Upload files<input type="file" id="uploadInput" multiple></label>
+      <p class="note" id="uploadNote" aria-live="polite">PDF, Word, EPUB, scans, up to 32 MiB each.</p>
+    </div>
+    <div class="drawer" id="addDrawer" hidden>
       <form id="growForm" class="ask">
         <div class="field">
-          <label for="growText">Grow this lab</label>
+          <label for="growText">Links, or what to add, in words</label>
           <textarea id="growText" placeholder="add gobyexample.com and go.dev/blog/pipelines" required></textarea>
         </div>
-        <button class="action" id="growGo">Plan</button>
+        <div class="buttons">
+          <button class="action primary" id="growGo">Plan</button>
+          <button type="button" class="action" id="addCancel">Cancel</button>
+        </div>
       </form>
       <p class="note" id="growNote" aria-live="polite"></p>
       <div id="growCard"></div>
+    </div>
+    <div id="sourceList"></div>
+  </section>
 
-      <div class="upload">
-        <label class="action file-pick">Upload files<input type="file" id="uploadInput" multiple></label>
-        <p class="note" id="uploadNote" aria-live="polite">PDF, Word, EPUB, scans and other documents, up to 32 MiB each.
-          Found only when this lab is ticked.</p>
-      </div>
-    </section>
-
-    <section id="research" hidden>
-      <h2>Research</h2>
-      <p class="note">Finds what exists on the topic: web search with the engines ticked here, OpenAlex for papers, the works
-        the kept ones cite and the works citing them. The model judges each by what it shows, niche or famous, and the kept
-        ones are read into the lab. Dropped works stay listed, with why.</p>
-      <div class="ticks" id="engineTicks"></div>
+  <section class="panel" id="research" role="tabpanel" hidden>
+    <div class="panel-bar">
+      <div id="researchRun" class="research-run"></div>
+      <button type="button" class="action primary" id="researchNew">New research</button>
+    </div>
+    <div class="drawer" id="researchDrawer" hidden>
       <form id="researchForm" class="ask">
+        <p class="note">Finds what exists on the topic: web search, OpenAlex for papers, the works the kept ones cite and the
+          works citing them. The model judges each by what it shows, niche or famous; the kept ones are read into the lab.</p>
         <div class="field">
-          <label for="researchText">Research this topic</label>
-          <textarea id="researchText" placeholder="optional: what to look for - newer work, another community, benchmarks, Russian sources…"></textarea>
+          <label for="researchText">What to look for (optional)</label>
+          <textarea id="researchText" placeholder="newer work, another community, benchmarks, Russian sources…"></textarea>
         </div>
         <div class="research-budget">
           <label>judge up to <input type="number" id="researchFound" min="1" inputmode="numeric"> works</label>
           <label>read up to <input type="number" id="researchRead" min="0" inputmode="numeric"></label>
         </div>
-        <button class="action primary" id="researchGo">Research</button>
-      </form>
-      <p class="note" id="researchNote" aria-live="polite"></p>
-      <div id="researchRun"></div>
-      <div id="researchMap"></div>
-    </section>
-
-    <section id="artifacts">
-      <h2>Artifacts</h2>
-      <ul class="artifact-list" id="artifactRows"></ul>
-      <form id="reportForm" class="ask">
-        <div class="field">
-          <label for="reportText">New report</label>
-          <textarea id="reportText" placeholder="how residual connections fix the degradation problem, and what came after" required></textarea>
+        <p class="note" id="engineSummary"></p>
+        <div class="buttons">
+          <button class="action primary" id="researchGo">Research</button>
+          <button type="button" class="action" id="researchCancel">Cancel</button>
         </div>
-        <button class="action" id="reportGo">Outline</button>
       </form>
-      <p class="note" id="reportNote" aria-live="polite"></p>
-      <div id="outlineCard"></div>
-    </section>
+    </div>
+    <p class="note" id="researchNote" aria-live="polite"></p>
+    <div id="researchStats"></div>
+    <div class="map" id="researchMap" hidden>
+      <nav class="map-groups" id="mapGroups" aria-label="Subtopics"></nav>
+      <div class="map-works">
+        <div id="groupHead" class="group-head"></div>
+        <div id="workList"></div>
+      </div>
+    </div>
+  </section>
 
-    <section id="references" hidden>
-      <h2>References</h2>
-      <p class="note">What this lab's documents link to or cite. None of it is crawled unless you add it: each one
-        becomes a source of its own, that page alone, reviewed like any other page.</p>
+  <section class="panel" id="references" role="tabpanel" hidden>
+    <p class="note">What this lab's documents link to or cite. None of it is crawled unless you add it: each one becomes a
+      source of its own, that page alone, reviewed like any other page.</p>
+    <div class="panel-bar">
+      <input id="refFilter" class="list-search" type="search" placeholder="author, title, site…" autocomplete="off" aria-label="Filter references">
+      <button type="button" class="action primary" id="refAdd" disabled>Add as sources</button>
+    </div>
+    <p class="note" id="refNote" aria-live="polite"></p>
+    <div id="refDocs"></div>
+  </section>
+
+  <section class="panel" id="artifacts" role="tabpanel" hidden>
+    <form id="reportForm" class="ask">
       <div class="field">
-        <label for="refFilter">Filter</label>
-        <input id="refFilter" type="search" placeholder="author, title, site…" autocomplete="off">
+        <label for="reportText">New report</label>
+        <textarea id="reportText" placeholder="how residual connections fix the degradation problem, and what came after" required></textarea>
       </div>
-      <div id="refDocs"></div>
-      <div class="buttons"><button type="button" class="action primary" id="refAdd" disabled>Add as sources</button></div>
-      <p class="note" id="refNote" aria-live="polite"></p>
-    </section>
+      <button class="action" id="reportGo">Outline</button>
+    </form>
+    <p class="note" id="reportNote" aria-live="polite"></p>
+    <div id="outlineCard"></div>
+    <ul class="artifact-list" id="artifactRows"></ul>
+  </section>
 
-    <section id="pages">
-      <h2>Pages</h2>
-      <ul class="pages" id="pageList"></ul>
-    </section>
+  <section class="panel" id="pages" role="tabpanel" hidden>
+    <div id="pageList"></div>
+  </section>
 
-    <section>
-      <div class="buttons">
-        <button type="button" class="action danger" id="deleteLab">Delete lab</button>
-        <span class="note">Its pages stay in the shared base.</span>
-      </div>
-    </section>
-  </div>
+  <section class="panel" id="settings" role="tabpanel" hidden>
+    <h2>Search engines</h2>
+    <p class="note">What research searches besides OpenAlex. Saved as you tick.</p>
+    <div class="ticks" id="engineTicks"></div>
+    <p class="note" id="engineNote" aria-live="polite"></p>
+    <h2>Delete</h2>
+    <div class="buttons">
+      <button type="button" class="action danger" id="deleteLab">Delete lab</button>
+      <span class="note">Its pages stay in the shared base.</span>
+    </div>
+  </section>
 </main>
 
 <footer class="footer">
@@ -151,6 +173,54 @@
 const labID = Number(location.pathname.split("/").pop());
 const base = "/api/labs/" + labID;
 let polling = null;
+let lab = null;
+
+// ---- tabs: one part of the lab at a time; the address names it ----
+const tabs = ["overview", "sources", "research", "references", "artifacts", "pages", "settings"];
+const tabAliases = { web: "research", reports: "artifacts" };
+let current = "overview";
+
+function showTab(name, focus) {
+  name = tabAliases[name] || name;
+  const button = document.querySelector(`.tab[data-tab="${name}"]`);
+  if (!tabs.includes(name) || !button || button.hidden) name = "overview";
+  current = name;
+  for (const t of tabs) {
+    $(t).hidden = t !== name;
+    document.querySelector(`.tab[data-tab="${t}"]`).setAttribute("aria-selected", String(t === name));
+  }
+  history.replaceState(null, "", location.pathname + location.search + (name === "overview" ? "" : "#" + name));
+  if (focus) $(focus).focus();
+}
+
+document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+function openDrawer(drawer, focus) {
+  $(drawer).hidden = false;
+  if (focus) $(focus).focus();
+}
+
+$("goResearch").addEventListener("click", () => { showTab("research"); openDrawer("researchDrawer", "researchText"); });
+$("goAdd").addEventListener("click", () => { showTab("sources"); openDrawer("addDrawer", "growText"); });
+$("addToggle").addEventListener("click", () => openDrawer("addDrawer", "growText"));
+$("addCancel").addEventListener("click", () => { $("addDrawer").hidden = true; $("growCard").replaceChildren(); });
+$("researchNew").addEventListener("click", () => openDrawer("researchDrawer", "researchText"));
+$("researchCancel").addEventListener("click", () => { $("researchDrawer").hidden = true; });
+
+function host(u) {
+  if (isUpload(u)) return "an uploaded file";
+  try { return new URL(u).hostname.replace(/^www\./, ""); } catch (_) { return u; }
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// ---- sources ----
+function sourceProgress(src) {
+  const run = src.run;
+  if (run && active(run.status)) return "progress";
+  if (!run || run.status === "dropped" || run.status === "stalled" || run.docs_indexed === 0) return "problems";
+  return "done";
+}
 
 function sourceRow(src) {
   const run = src.run;
@@ -159,14 +229,16 @@ function sourceRow(src) {
 
   const tag = { search: "found", reference: "cited", upload: "file", research: "research" }[src.kind] || src.scope;
   const upload = src.kind === "upload";
+  const why = src.kind === "search" ? `“${src.query}”` + (src.reason ? " — " + src.reason : "")
+    : src.kind === "reference" ? `in ${host(src.cited_by)}: ${src.citation}`
+    : src.kind === "research" ? src.reason : "";
   return el("tr", {},
-    el("td", { class: "url" }, el("a", { href: pageHref(src.url), target: "_blank", rel: "noopener noreferrer" }, upload ? src.filename : src.url),
+    el("td", { class: "url" },
+      el("a", { href: pageHref(src.url), target: "_blank", rel: "noopener noreferrer", title: src.url }, upload ? src.filename : host(src.url) + shortPath(src.url)),
       el("span", { class: "tag" }, tag),
-      src.kind === "search" ? el("div", { class: "note" }, `“${src.query}”` + (src.reason ? " — " + src.reason : "")) : null,
-      src.kind === "reference" ? el("div", { class: "note" }, `in ${host(src.cited_by)}: ${src.citation}`) : null,
-      src.kind === "research" && src.reason ? el("div", { class: "note" }, src.reason) : null),
+      why ? el("div", { class: "note clamp-1", title: why }, why) : null,
+      run && run.note ? el("div", { class: "note error" }, run.note) : null),
     el("td", { "data-label": "status" }, status),
-    el("td", { class: "num", "data-label": "pages" }, String(src.pages)),
     el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–",
       run && run.docs_rejected ? el("div", { class: "note" }, run.docs_rejected + " set aside") : null),
     el("td", { class: "actions" },
@@ -185,6 +257,31 @@ function sourceRow(src) {
         }))));
 }
 
+function shortPath(u) {
+  try {
+    const p = new URL(u);
+    const path = (p.pathname + p.search).replace(/\/$/, "");
+    return path.length > 48 ? path.slice(0, 46) + "…" : path;
+  } catch (_) { return ""; }
+}
+
+const sources = listView({
+  filters: [
+    ["all", "all", () => true],
+    ["progress", "in progress", (s) => sourceProgress(s) === "progress"],
+    ["problems", "problems", (s) => sourceProgress(s) === "problems"],
+    ["done", "done", (s) => sourceProgress(s) === "done"],
+  ],
+  text: (s) => [s.url, s.filename, s.reason, s.query, s.citation].filter(Boolean).join(" "),
+  row: sourceRow,
+  empty: "None yet: add links or files, or research the topic.",
+  wrap: (rows) => el("table", { class: "table stack" },
+    el("thead", {}, el("tr", {}, el("th", {}, "Source"), el("th", {}, "Status"), el("th", { class: "num" }, "Searchable"), el("th", {}))),
+    el("tbody", {}, rows)),
+});
+$("sourceList").append(sources.el);
+
+// ---- pages ----
 const reasonNames = {
   navigation_only: "menus only", error_page: "error page", spam: "spam", prompt_injection: "aimed at AI models",
   machine_junk: "machine junk", too_thin: "too thin",
@@ -195,51 +292,109 @@ const reasonNames = {
 function pageItem(p) {
   const r = p.review;
   const setAside = r && r.decision === "skip";
-  return el("li", { class: setAside ? "set-aside" : null },
+  return el("li", { class: "page" + (setAside ? " set-aside" : "") },
     el("span", { class: "status" }, p.status ? String(p.status) : "–"),
-    el("a", { href: pageHref(p.url), target: "_blank", rel: "noopener noreferrer" }, p.title || (isUpload(p.url) ? "an uploaded file" : p.url)),
-    setAside ? el("span", { class: "tag" }, "set aside: " + (r.reasons.map((x) => reasonNames[x] || x).join(", ") || "review")) : null,
-    r && r.unreviewed ? el("span", { class: "tag" }, "unreviewed") : null,
-    r && r.summary ? el("div", { class: "page-summary" }, r.summary) : null);
+    el("div", {},
+      el("a", { href: pageHref(p.url), target: "_blank", rel: "noopener noreferrer" }, p.title || (isUpload(p.url) ? "an uploaded file" : p.url)),
+      el("span", { class: "host" }, isUpload(p.url) ? "" : host(p.url)),
+      setAside ? el("span", { class: "tag" }, "set aside: " + (r.reasons.map((x) => reasonNames[x] || x).join(", ") || "review")) : null,
+      r && r.unreviewed ? el("span", { class: "tag" }, "unreviewed") : null,
+      r && r.summary ? el("div", { class: "note clamp-2" }, r.summary) : null));
 }
+
+const pageState = (p) => (p.review && p.review.decision === "skip" ? "aside" : p.status >= 200 && p.status < 300 ? "in" : "failed");
+
+const pagesList = listView({
+  filters: [
+    ["all", "all", () => true],
+    ["in", "read", (p) => pageState(p) === "in"],
+    ["aside", "set aside", (p) => pageState(p) === "aside"],
+    ["failed", "not fetched", (p) => pageState(p) === "failed"],
+  ],
+  text: (p) => [p.url, p.title, p.review && p.review.summary].filter(Boolean).join(" "),
+  row: pageItem,
+  size: 40,
+  wrap: (rows) => el("ul", { class: "pages" }, rows),
+});
+$("pageList").append(pagesList.el);
 
 async function loadPages() {
   try {
-    const { pages } = await api(`${base}/pages?limit=200`);
-    $("pageList").replaceChildren(...(pages.length ? pages.map(pageItem) : [el("li", { class: "note" }, "None yet.")]));
+    const { pages } = await api(`${base}/pages?limit=1000`);
+    pagesList.set(pages);
+    $("countPages").textContent = pages.length || "";
+    return pages;
   } catch (err) {
-    $("pageList").replaceChildren(el("li", { class: "error" }, err.message));
+    $("pageList").replaceChildren(el("p", { class: "error" }, err.message));
+    return [];
   }
 }
 
+// ---- the whole lab, polled while anything in it moves ----
+let researchMap = null, artifactList = [];
+
 async function load() {
   clearTimeout(polling);
-  let lab;
   try {
     lab = await api(base);
   } catch (err) {
     $("title").textContent = err.message === "no such lab" ? "No such lab." : "The lab could not be loaded.";
-    $("coverage").textContent = err.message;
+    $("summary").textContent = err.message;
     return;
   }
 
   document.title = lab.name + " · arachne";
-  $("labName").textContent = lab.name;
   $("title").textContent = lab.name;
   $("topic").textContent = lab.topic;
-  $("coverage").textContent = `${lab.sources.length} sources · ${lab.pages} pages` +
+  $("summary").textContent = `${plural(lab.sources.length, "source")} · ${plural(lab.pages, "page")}` +
     (lab.set_aside ? ` · ${lab.set_aside} set aside on review` : "") + ` · updated ${ago(lab.updated_at)}`;
   $("askWith").href = "/?labs=" + lab.id;
+  $("countSources").textContent = lab.sources.length || "";
 
-  $("sourceRows").replaceChildren(...(lab.sources.length ? lab.sources.map(sourceRow)
-    : [el("tr", {}, el("td", { colspan: "5", class: "note" }, "None yet."))]));
-
+  sources.set(lab.sources);
   renderEngines(lab.engines);
 
-  const [researching, building] = await Promise.all([loadResearch(), loadArtifacts()]);
+  const [researching, building] = await Promise.all([loadResearch(), loadArtifacts(), loadPages(), loadReferences()]);
+  renderOverview();
   if (researching || building || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
-  loadPages();
-  loadReferences();
+}
+
+// ---- overview: where each part stands, and the way in ----
+function card(tab, title, big, lines) {
+  return el("button", { type: "button", class: "ov-card", onclick: () => showTab(tab) },
+    el("span", { class: "ov-title" }, title),
+    el("span", { class: "ov-big" }, big),
+    lines.filter(Boolean).map((l) => el("span", { class: "ov-line" }, l)));
+}
+
+function renderOverview() {
+  if (!lab) return;
+  const by = (k) => lab.sources.filter((s) => sourceProgress(s) === k).length;
+  const cards = [
+    card("sources", "Sources", lab.sources.length, [
+      by("progress") ? `${by("progress")} being crawled` : null,
+      by("problems") ? `${by("problems")} with nothing searchable` : null,
+      `${by("done")} done`,
+    ]),
+  ];
+
+  if (researchMap) {
+    const c = researchMap.coverage, run = researchMap.run;
+    cards.push(card("research", "Research", c.kept + " kept", [
+      run ? (run.status === "running" ? `researching… round ${Math.max(run.rounds.length, 1)}` : `last run ${ago(run.finished_at || run.started_at)}`) : "not researched yet",
+      c.works ? `${c.works} found · ${c.in} in the index` : null,
+      c.estimate ? `about ${Math.round(c.estimate.share * 100)}% of what exists found` : null,
+    ]));
+  }
+
+  const writing = artifactList.filter((a) => a.latest.status === "running").length;
+  cards.push(card("artifacts", "Reports", artifactList.length, [
+    writing ? `${writing} being written` : null,
+    artifactList[0] ? "latest: " + artifactList[0].title : "none yet",
+  ]));
+  cards.push(card("pages", "Pages", lab.pages, [lab.set_aside ? `${lab.set_aside} set aside on review` : "all read pages kept"]));
+
+  $("overviewCards").replaceChildren(...cards);
 }
 
 // ---- references: what the lab's documents cite, offered and never followed ----
@@ -316,7 +471,8 @@ async function loadReferences() {
   if (shown === shownReferences) return;
   shownReferences = shown;
 
-  $("references").hidden = $("refNav").hidden = documents.length === 0;
+  $("tabReferences").hidden = documents.length === 0;
+  $("countReferences").textContent = documents.length || "";
 
   const offered = new Set(documents.flatMap((d) => citations(d.references).filter((c) => !c.inLab).map((c) => c.url)));
   for (const url of [...ticked.keys()]) if (!offered.has(url)) ticked.delete(url);
@@ -328,7 +484,22 @@ async function loadReferences() {
 
 $("refFilter").addEventListener("input", filterReferences);
 
-// ---- artifacts: reports built from the lab, saved answers ----
+$("refAdd").addEventListener("click", async () => {
+  const references = [...ticked].map(([url, doc]) => ({ document: doc, url }));
+  $("refAdd").disabled = true;
+  $("refNote").textContent = "Adding…";
+  try {
+    await send("POST", `${base}/references`, { references });
+    ticked.clear();
+    $("refNote").textContent = `Added ${references.length}: each is crawled alone and reviewed before it is searchable.`;
+  } catch (err) {
+    $("refNote").textContent = err.message;
+    syncReferences();
+  }
+  load();
+});
+
+// ---- reports: built from the lab; answers saved to it ----
 const sectionStates = { pending: "·", writing: "…", checking: "…", done: "✓", thin: "–", failed: "✕" };
 
 function artifactRow(a) {
@@ -349,6 +520,8 @@ function artifactRow(a) {
 async function loadArtifacts() {
   try {
     const { artifacts } = await api(`${base}/artifacts`);
+    artifactList = artifacts;
+    $("countArtifacts").textContent = artifacts.length || "";
     $("artifactRows").replaceChildren(...(artifacts.length ? artifacts.map(artifactRow)
       : [el("li", { class: "note" }, "None yet. A report is written from this lab's documents alone; an answer can be saved here from Look up.")]));
     return artifacts.some((a) => a.latest.status === "running");
@@ -424,17 +597,6 @@ $("reportForm").addEventListener("submit", (e) => {
   if (outlineRequest) draftOutline();
 });
 
-// Arriving from Look up with a question to make a report of: outline it.
-{
-  const p = new URLSearchParams(location.search);
-  if (p.get("report")) {
-    outlineRequest = p.get("report").trim().slice(0, 1000);
-    $("reportText").value = outlineRequest;
-    history.replaceState(null, "", location.pathname + location.hash);
-    draftOutline();
-  }
-}
-
 // ---- uploads: files of the user's own, sources like links ----
 $("uploadInput").addEventListener("change", async (e) => {
   const files = [...e.target.files];
@@ -457,91 +619,117 @@ $("uploadInput").addEventListener("change", async (e) => {
   load();
 });
 
-$("refAdd").addEventListener("click", async () => {
-  const references = [...ticked].map(([url, doc]) => ({ document: doc, url }));
-  $("refAdd").disabled = true;
-  $("refNote").textContent = "Adding…";
-  try {
-    await send("POST", `${base}/references`, { references });
-    ticked.clear();
-    $("refNote").textContent = `Added ${references.length}: each is crawled alone and reviewed before it is searchable.`;
-  } catch (err) {
-    $("refNote").textContent = err.message;
-    syncReferences();
-  }
-  load();
-});
-
 // ---- research: what exists on the topic, found, judged and read ----
 let engines = { available: [], default: [] };
-// Which lists are open survives the redraws while a run goes on.
-const openGroups = new Set(["sub-first"]);
 
 function renderEngines(ticked) {
-  $("engineTicks").hidden = engines.available.length === 0;
-  $("engineTicks").replaceChildren(el("span", { class: "control-label" }, "Engines"),
-    ...engines.available.map((e) => el("label", { class: "tick" },
-      el("input", { type: "checkbox", value: e, checked: ticked.includes(e), onchange: saveEngines }), e)));
+  $("engineTicks").replaceChildren(...engines.available.map((e) => el("label", { class: "tick" },
+    el("input", { type: "checkbox", value: e, checked: ticked.includes(e), onchange: saveEngines }), e)));
+  if (!engines.available.length) $("engineNote").textContent = "No web search on this server: research searches OpenAlex alone.";
+  $("engineSummary").replaceChildren(ticked.length ? `Searches ${ticked.join(", ")} and OpenAlex. ` : "Searches OpenAlex alone. ",
+    el("a", { href: "#settings", onclick: (e) => { e.preventDefault(); showTab("settings"); } }, "Change engines"));
 }
 
 async function saveEngines() {
   const chosen = [...document.querySelectorAll("#engineTicks input:checked")].map((box) => box.value);
   try {
-    await send("PUT", `${base}/engines`, { engines: chosen });
-    $("researchNote").textContent = chosen.length ? "" : "No engines: research searches OpenAlex alone.";
+    lab.engines = (await send("PUT", `${base}/engines`, { engines: chosen })).engines;
+    $("engineNote").textContent = chosen.length ? "Saved." : "No engines: research searches OpenAlex alone.";
+    renderEngines(lab.engines);
   } catch (err) {
-    $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
+    $("engineNote").replaceChildren(el("span", { class: "error" }, err.message));
   }
-}
-
-function host(u) {
-  if (isUpload(u)) return "an uploaded file";
-  try { return new URL(u).hostname; } catch (_) { return u; }
 }
 
 const stopNames = {
   saturated: "new rounds found little new", budget: "the judging budget was spent: research again to go on",
-  rounds: "the rounds ran out", time: "out of time", interrupted: "interrupted",
+  rounds: "the rounds ran out", time: "out of time", interrupted: "interrupted", followed: "its citations followed",
 };
 const channelNames = { search: "search", reference: "references", citing: "citing works", seed: "the lab's sources" };
 const readNames = {
   in: "in the index", reading: "being read", set_aside: "set aside on review", failed: "could not be fetched",
   blocked: "blocked by the site", empty: "no text without a browser",
 };
-const shownPerList = 200;
 
-function renderRun(run) {
+// The run under way, if any: steering waits for it.
+let researching = false;
+let roundsOpen = false;
+
+function renderRun(run, m) {
+  researching = Boolean(run && run.status === "running");
+  $("researchGo").disabled = researching;
+  $("researchNew").disabled = researching;
   if (!run) {
-    $("researchRun").replaceChildren(el("p", { class: "note" }, "Not researched yet."));
-    $("researchGo").disabled = false;
+    $("researchRun").replaceChildren(el("p", { class: "note" }, "Not researched yet: start with New research."));
     return;
   }
-  const running = run.status === "running";
-  const status = running ? `researching… round ${Math.max((run.rounds || []).length, 1)} · started ${ago(run.started_at)}`
+  const status = researching ? `researching… round ${Math.max(run.rounds.length, 1)} · started ${ago(run.started_at)}`
     : run.status === "failed" ? `stopped: ${run.error}`
     : `researched ${ago(run.finished_at)} · ${stopNames[run.stopped] || run.stopped}`;
-  const rounds = (run.rounds || []).map((r) => {
+  const rounds = run.rounds.map((r) => {
     const found = ["search", "reference", "citing"].filter((c) => (r.found || {})[c]).map((c) => `${r.found[c]} by ${channelNames[c]}`).join(", ");
     const failed = Object.entries(r.failed || {}).map(([what, why]) => `${what}: ${why}`).join("; ");
     return el("li", {},
       el("b", {}, `round ${r.n}`),
       el("span", {}, ` found ${found || "nothing new"} · judged ${r.judged} · kept ${r.kept} · read ${r.read}` +
         (r.unread ? ` (${r.unread} kept out by their sites, budget given back)` : "")),
-      r.queries && r.queries.length ? el("div", { class: "note" }, "searched " + r.queries.map((q) => "“" + q + "”").join(", ")) : null,
+      r.queries && r.queries.length ? el("div", { class: "note clamp-2" }, "searched " + r.queries.map((q) => "“" + q + "”").join(", ")) : null,
       failed ? el("div", { class: "note" }, failed) : null);
   });
-  $("researchRun").replaceChildren(el("div", { class: "research-run" },
-    el("p", { class: "eyebrow" }, `${run.model} · judge up to ${run.budget.found} · read up to ${run.budget.read}`),
-    el("p", {}, el("span", { class: "state " + (running ? "running" : run.status === "failed" ? "dropped" : "finished") },
-      el("span", { class: "state-glyph", "aria-hidden": "true" }, running ? "●" : run.status === "failed" ? "✕" : "✓"), status)),
+  const details = el("details", { class: "options rounds-box", open: roundsOpen },
+    el("summary", {}, plural(run.rounds.length, "round") + ` · ${run.model} · judge up to ${run.budget.found} · read up to ${run.budget.read}`),
     run.request ? el("p", { class: "note" }, "asked: " + run.request) : null,
-    el("ol", { class: "rounds" }, rounds)));
-  $("researchGo").disabled = running;
+    el("ol", { class: "rounds" }, rounds));
+  details.addEventListener("toggle", () => { roundsOpen = details.open; });
+  $("researchRun").replaceChildren(
+    el("p", { class: "run-status" }, el("span", { class: "state " + (researching ? "running" : run.status === "failed" ? "dropped" : "finished") },
+      el("span", { class: "state-glyph", "aria-hidden": "true" }, researching ? "●" : run.status === "failed" ? "✕" : "✓"), status)),
+    focusLine(run.focus, m),
+    details);
+}
+
+function focusLine(focus, m) {
+  if (!focus || (!focus.work && !focus.subtopic)) return null;
+  if (focus.work) {
+    const w = m.works.find((x) => x.id === focus.work);
+    return el("p", { class: "note" }, "following the citations of “" + (w ? w.title || w.url : "a work") + "”");
+  }
+  const sub = m.subtopics.find((s) => s.id === focus.subtopic);
+  return el("p", { class: "note" }, "researching “" + (sub ? sub.name : "a subtopic") + "” further");
+}
+
+// Steering: what the user says of a work stands over the model's verdict.
+async function steer(method, path, body) {
+  $("researchNote").textContent = "";
+  try {
+    await send(method, base + path, body);
+  } catch (err) {
+    $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
+  }
+  load();
+}
+
+function workActions(w) {
+  const verdicts = ["keep", "maybe", "drop"].map((v) => el("button", {
+    type: "button", class: "seg", "aria-pressed": String(w.verdict === v),
+    onclick: () => w.verdict !== v && steer("PUT", `/research/works/${w.id}`, { verdict: v }),
+  }, v));
+  const canRead = !w.source_id && w.verdict !== "drop" && !/\/\/openalex\.org\//.test(w.url);
+  const canFollow = w.openalex_id || w.read === "in";
+  return el("div", { class: "work-actions" },
+    el("div", { class: "segmented small", role: "group", "aria-label": "verdict" }, verdicts),
+    w.by_user ? el("span", { class: "tag" }, "your verdict") : null,
+    canRead ? el("button", { type: "button", class: "action small", onclick: () => steer("POST", `/research/works/${w.id}/read`) }, "read now") : null,
+    canFollow ? el("button", { type: "button", class: "action small", disabled: researching,
+      title: researching ? "after the research under way" : "find what it cites and what cites it",
+      onclick: () => steer("POST", "/research", { work: w.id }) }, "follow citations") : null);
 }
 
 // How a work was found: a few of its queries, and the works it was found
 // through - what cites it, what it cites.
-function howFound(w, titles) {
+let titles = new Map();
+
+function howFound(w) {
   const queries = [], citedBy = [], cites = [];
   let seed = false;
   for (const f of w.finds) {
@@ -560,81 +748,119 @@ function howFound(w, titles) {
   ].filter(Boolean).join(" · ");
 }
 
-function workItem(w, titles) {
+function workItem(w) {
   const meta = [w.kind, w.year, w.site, w.cited_by ? `cited ${w.cited_by.toLocaleString()} times` : null].filter(Boolean).join(" · ");
   return el("li", { class: "work " + (w.read ? "read-" + w.read : w.verdict) },
     el("div", {},
       el("a", { href: pageHref(w.url), target: "_blank", rel: "noopener noreferrer" }, w.title || w.url),
       w.read ? el("span", { class: "tag" + (w.read === "in" ? " lab" : "") }, readNames[w.read] || w.read) : null),
     el("div", { class: "work-meta" }, meta),
-    el("div", { class: "note" }, howFound(w, titles)),
-    w.reason ? el("div", { class: "work-reason" }, w.reason) : null);
+    el("div", { class: "note clamp-1" }, howFound(w)),
+    w.reason ? el("div", { class: "work-reason" }, w.reason) : null,
+    workActions(w));
 }
 
-function group(key, heading, works, titles, opts = {}) {
-  if (!works.length && !opts.always) return null;
-  const list = works.slice(0, shownPerList).map((w) => workItem(w, titles));
-  if (works.length > shownPerList) list.push(el("li", { class: "note" }, `and ${works.length - shownPerList} more`));
-  const box = el("details", { class: "map-group", open: openGroups.has(key) },
-    el("summary", {}, heading),
-    opts.focus ? el("p", { class: "note" }, opts.focus) : null,
-    el("ol", { class: "works" }, list));
-  box.addEventListener("toggle", () => { box.open ? openGroups.add(key) : openGroups.delete(key); });
-  return box;
+const keptOut = (w) => w.read === "blocked" || w.read === "empty" || w.read === "failed";
+
+const works = listView({
+  filters: [
+    ["all", "all", () => true],
+    ["in", "in the index", (w) => w.read === "in"],
+    ["unread", "not read", (w) => !w.source_id],
+    ["out", "kept out", keptOut],
+  ],
+  text: (w) => [w.title, w.url, w.site, w.reason].filter(Boolean).join(" "),
+  row: workItem,
+  size: 20,
+  empty: "No works here yet.",
+  wrap: (rows) => el("ol", { class: "works" }, rows),
+});
+$("workList").append(works.el);
+
+// The map: groups on the left - subtopics, then what no subtopic holds - and
+// the chosen group's works on the right.
+let group = "";
+
+function groupsOf(m) {
+  const c = m.coverage;
+  const inSub = new Set(m.subtopics.map((s) => s.id));
+  const kept = m.works.filter((w) => w.verdict === "keep");
+  const out = m.subtopics.map((sub, i) => {
+    const sc = c.subtopics[i];
+    return {
+      key: "sub-" + sub.id, name: sub.name, focus: sub.focus, subtopic: sub.id,
+      works: kept.filter((w) => w.subtopic_id === sub.id),
+      share: sc && sc.estimate ? Math.round(sc.estimate.share * 100) : null,
+      inIndex: sc ? sc.in : 0,
+    };
+  });
+  const loose = kept.filter((w) => !inSub.has(w.subtopic_id));
+  if (loose.length) out.push({ key: "loose", name: "In no subtopic", works: loose, muted: true });
+  out.push({ key: "maybe", name: "Maybe", works: m.works.filter((w) => w.verdict === "maybe"), muted: true });
+  out.push({ key: "pending", name: "Not yet judged", works: m.works.filter((w) => w.verdict === "pending"), muted: true });
+  out.push({ key: "drop", name: "Dropped", works: m.works.filter((w) => w.verdict === "drop"), muted: true });
+  return out;
 }
 
 function renderMap(m) {
   const c = m.coverage;
+  $("countResearch").textContent = c.kept || "";
   if (!c.works) {
-    $("researchMap").replaceChildren();
+    $("researchMap").hidden = true;
+    $("researchStats").replaceChildren();
     return;
   }
-  const titles = new Map(m.works.map((w) => [w.id, w.title || w.url]));
+  $("researchMap").hidden = false;
+  titles = new Map(m.works.map((w) => [w.id, w.title || w.url]));
+
   const e = c.estimate;
-  const estimate = e
-    ? el("p", { class: "estimate" }, `Search and citations together found ${e.found} of an estimated ${e.total} kept works: about ${Math.round(e.share * 100)}%. `,
-      el("span", { class: "note" }, "A rough estimate, and likely optimistic: well-known works are found both ways."))
-    : el("p", { class: "note" }, "Too few works found both by search and by citations to estimate what is still unfound.");
+  $("researchStats").replaceChildren(el("div", { class: "chips stats" },
+    el("span", { class: "chip" }, el("b", {}, c.works), " found"),
+    el("span", { class: "chip" }, el("b", {}, c.kept), " kept"),
+    el("span", { class: "chip" }, el("b", {}, c.in), " in the index"),
+    c.kept_out ? el("span", { class: "chip" }, el("b", {}, c.kept_out), " kept out by sites") : null,
+    c.pending ? el("span", { class: "chip" }, el("b", {}, c.pending), " not yet judged") : null,
+    el("span", { class: "chip", title: e ? "Search and citations together, compared: rough, and likely optimistic" : "Too few works found both by search and by citations to estimate" },
+      e ? [el("b", {}, "~" + Math.round(e.share * 100) + "%"), " of what exists found"] : "coverage: too early to tell")));
 
-  const inSub = new Set(m.subtopics.map((s) => s.id));
-  const kept = m.works.filter((w) => w.verdict === "keep");
-  const subGroups = m.subtopics.map((sub, i) => {
-    const mine = kept.filter((w) => w.subtopic_id === sub.id);
-    const sc = c.subtopics[i];
-    const share = sc && sc.estimate ? ` · about ${Math.round(sc.estimate.share * 100)}% found` : "";
-    return group(i === 0 ? "sub-first" : "sub-" + sub.id, `${sub.name} · ${sc ? sc.kept : mine.length} kept · ${sc ? sc.in : 0} in the index${share}`,
-      mine, titles, { focus: sub.focus, always: true });
-  });
+  const groups = groupsOf(m);
+  if (!groups.some((g) => g.key === group)) group = groups[0].key;
 
-  $("researchMap").replaceChildren(el("div", { class: "research-map" },
-    el("p", { class: "note" }, `${c.works} works found · ${c.kept} kept · ${c.maybe} maybe · ${c.dropped} dropped · ${c.pending} not yet judged · ` +
-      `${c.read} read, ${c.in} in the index` + (c.set_aside ? `, ${c.set_aside} set aside on review` : "") +
-      (c.kept_out ? `, ${c.kept_out} kept out by their sites` : "")),
-    estimate,
-    ...subGroups,
-    group("loose", `In no subtopic · ${kept.filter((w) => !inSub.has(w.subtopic_id)).length}`, kept.filter((w) => !inSub.has(w.subtopic_id)), titles),
-    group("maybe", `Maybe · ${c.maybe}`, m.works.filter((w) => w.verdict === "maybe"), titles),
-    group("pending", `Not yet judged · ${c.pending}`, m.works.filter((w) => w.verdict === "pending"), titles),
-    group("dropped", `Dropped · ${c.dropped}`, m.works.filter((w) => w.verdict === "drop"), titles)));
+  $("mapGroups").replaceChildren(...groups.map((g) => el("button", {
+    type: "button", class: "map-group-btn" + (g.muted ? " muted" : ""), "aria-pressed": String(g.key === group),
+    onclick: () => { group = g.key; renderMap(m); },
+  }, el("span", { class: "g-name" }, g.name), el("span", { class: "g-count" }, g.works.length + (g.share != null ? ` · ${g.share}%` : "")))));
+
+  const g = groups.find((x) => x.key === group);
+  $("groupHead").replaceChildren(
+    el("h3", {}, g.name),
+    g.focus ? el("p", { class: "note" }, g.focus) : null,
+    g.subtopic ? el("div", { class: "buttons" },
+      el("span", { class: "note" }, `${g.works.length} kept · ${g.inIndex} in the index` + (g.share != null ? ` · about ${g.share}% found` : "")),
+      el("button", { type: "button", class: "action small", disabled: researching,
+        onclick: () => steer("POST", "/research", { subtopic: g.subtopic }) }, "research this further")) : null);
+  works.set(g.works);
 }
 
 async function loadResearch() {
   try {
     const res = await call(`${base}/research`);
     if (res.status === 503) {
-      $("research").hidden = $("researchNav").hidden = true;
+      $("tabResearch").hidden = $("goResearch").hidden = true;
       return false;
     }
     const m = await res.json();
     if (!res.ok) throw new Error(m.error || res.statusText);
-    $("research").hidden = $("researchNav").hidden = false;
+    researchMap = m;
+    $("tabResearch").hidden = $("goResearch").hidden = false;
     $("researchFound").placeholder = String(m.budget.found);
     $("researchFound").max = String(m.max_budget.found);
     $("researchRead").placeholder = String(m.budget.read);
     $("researchRead").max = String(m.max_budget.read);
-    renderRun(m.run);
+    if (m.run) m.run.rounds = m.run.rounds || [];
+    renderRun(m.run, m);
     renderMap(m);
-    return Boolean(m.run && m.run.status === "running");
+    return researching;
   } catch (err) {
     $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
     return false;
@@ -651,6 +877,7 @@ $("researchForm").addEventListener("submit", async (e) => {
   try {
     await send("POST", `${base}/research`, body);
     $("researchText").value = "";
+    $("researchDrawer").hidden = true;
     load();
   } catch (err) {
     $("researchNote").replaceChildren(el("span", { class: "error" }, err.message));
@@ -675,6 +902,7 @@ function renderPlan(plan) {
           await send("POST", `${base}/sources`, { sources: plan.sources });
           $("growCard").replaceChildren();
           $("growText").value = "";
+          $("addDrawer").hidden = true;
           load();
         } catch (err) {
           $("growNote").replaceChildren(el("span", { class: "error" }, err.message));
@@ -711,7 +939,24 @@ $("deleteLab").addEventListener("click", async () => {
   }
 });
 
-api("/api/engines").then((e) => { engines = e; }).catch(() => {}).finally(load);
+// Arriving from Look up with a question to make a report of: outline it.
+{
+  const p = new URLSearchParams(location.search);
+  if (p.get("report")) {
+    outlineRequest = p.get("report").trim().slice(0, 1000);
+    $("reportText").value = outlineRequest;
+    history.replaceState(null, "", location.pathname + "#artifacts");
+    draftOutline();
+    showTab("artifacts");
+  }
+}
+
+// The tab asked for may be one that shows only once the lab has loaded.
+const startTab = location.hash.slice(1);
+api("/api/engines").then((e) => { engines = e; }).catch(() => {}).finally(async () => {
+  await load();
+  showTab(startTab);
+});
 </script>
 </body>
 </html>

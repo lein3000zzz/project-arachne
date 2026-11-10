@@ -31,12 +31,12 @@ func TestPostgresStoreKeepsRunsAndTheMap(t *testing.T) {
 		t.Errorf("before any run: %v", err)
 	}
 
-	run, err := store.StartRun(ctx, labID, "", Budget{Found: 300, Read: 50}, "small")
+	run, err := store.StartRun(ctx, labID, "", Budget{Found: 300, Read: 50}, Focus{}, "small")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := store.StartRun(ctx, labID, "", Budget{Found: 1, Read: 1}, "small"); !errors.Is(err, ErrRunning) {
+	if _, err := store.StartRun(ctx, labID, "", Budget{Found: 1, Read: 1}, Focus{}, "small"); !errors.Is(err, ErrRunning) {
 		t.Errorf("a second at once: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestPostgresStoreKeepsRunsAndTheMap(t *testing.T) {
 		t.Errorf("latest %+v, %v", latest, err)
 	}
 
-	second, _ := store.StartRun(ctx, labID, "more", Budget{Found: 10, Read: 1}, "small")
+	second, _ := store.StartRun(ctx, labID, "more", Budget{Found: 10, Read: 1}, Focus{}, "small")
 
 	if err := store.SaveRounds(ctx, second, nil); err != nil {
 		t.Fatal(err)

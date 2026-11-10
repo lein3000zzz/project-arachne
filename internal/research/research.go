@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,10 @@ var (
 	ErrUnavailable = errors.New("research needs a chat model, and web search or OpenAlex")
 	ErrNoChannels  = errors.New("tick search engines for the lab first: research has nowhere else to search")
 	ErrNotFound    = errors.New("the lab has not been researched yet")
+
+	ErrWorkNotFound     = errors.New("no such work in this lab's map")
+	ErrSubtopicNotFound = errors.New("no such subtopic in this lab")
+	ErrNothingToFollow  = errors.New("this work's citations cannot be followed: OpenAlex does not know it, and it has not been read")
 )
 
 const (
@@ -43,6 +48,8 @@ const (
 	StopRounds      = "rounds"
 	StopTime        = "time"
 	StopInterrupted = "interrupted"
+	// A run following one work's citations ends when it has.
+	StopFollowed = "followed"
 )
 
 const (
@@ -97,6 +104,14 @@ type Ask struct {
 	Request string
 	Found   *int
 	Read    *int
+	Focus   Focus
+}
+
+// Focus narrows a run: one work's citations followed, both ways, or one
+// subtopic researched further. Zero is the whole topic.
+type Focus struct {
+	Work     int64 `json:"work,omitempty"`
+	Subtopic int64 `json:"subtopic,omitempty"`
 }
 
 type Run struct {
@@ -104,6 +119,7 @@ type Run struct {
 	LabID      int64      `json:"lab_id"`
 	Request    string     `json:"request"`
 	Budget     Budget     `json:"budget"`
+	Focus      Focus      `json:"focus"`
 	Status     string     `json:"status"`
 	Stopped    string     `json:"stopped,omitempty"`
 	Rounds     []Round    `json:"rounds"`
@@ -168,6 +184,8 @@ type Find struct {
 	// The work it was found through: the one citing it, or the one it cites.
 	Via   int64 `json:"via,omitempty"`
 	Round int   `json:"round"`
+	// The run that found it this way.
+	Run int64 `json:"run,omitempty"`
 }
 
 // Link is a work of the lab citing another.
@@ -214,7 +232,7 @@ type Scholar interface {
 }
 
 type Store interface {
-	StartRun(ctx context.Context, labID int64, request string, budget Budget, model string) (int64, error)
+	StartRun(ctx context.Context, labID int64, request string, budget Budget, focus Focus, model string) (int64, error)
 	SaveRounds(ctx context.Context, id int64, rounds []Round) error
 	FinishRun(ctx context.Context, id int64, status, stopped, errText string) error
 	Run(ctx context.Context, id int64) (Run, error)
@@ -231,6 +249,8 @@ type Store interface {
 	Works(ctx context.Context, labID int64) ([]Work, error)
 	// Judge leaves a verdict the user gave alone.
 	Judge(ctx context.Context, workID int64, verdict, reason string, subtopicID int64) error
+	// SetVerdict is the user's: it stands over the model's, now and later.
+	SetVerdict(ctx context.Context, labID, workID int64, verdict string, subtopicID int64) error
 	SetSource(ctx context.Context, workID, sourceID int64) error
 	Expanded(ctx context.Context, workID int64, references, citing bool) error
 	Link(ctx context.Context, labID int64, l Link) error
@@ -295,7 +315,12 @@ func (s *Service) Start(ctx context.Context, ownerID, labID int64, ask Ask) (Run
 		return Run{}, err
 	}
 
-	if s.scholar == nil && len(lab.Engines) == 0 {
+	if err := s.checkFocus(ctx, lab, ask.Focus); err != nil {
+		return Run{}, err
+	}
+
+	// Following one work's citations searches nothing.
+	if ask.Focus.Work == 0 && s.scholar == nil && len(lab.Engines) == 0 {
 		return Run{}, ErrNoChannels
 	}
 
@@ -317,7 +342,7 @@ func (s *Service) Start(ctx context.Context, ownerID, labID int64, ask Ask) (Run
 		return Run{}, fmt.Errorf("%w: a run judges 1 to %d works and reads 0 to %d", labs.ErrInvalid, s.cfg.MaxBudget.Found, s.cfg.MaxBudget.Read)
 	}
 
-	id, err := s.store.StartRun(ctx, labID, request, budget, llm.ModelOf(ctx, s.chat))
+	id, err := s.store.StartRun(ctx, labID, request, budget, ask.Focus, llm.ModelOf(ctx, s.chat))
 	if err != nil {
 		return Run{}, err
 	}
@@ -326,10 +351,117 @@ func (s *Service) Start(ctx context.Context, ownerID, labID int64, ask Ask) (Run
 
 	go func() {
 		defer s.running.Done()
-		s.run(id, ownerID, lab, request, budget)
+		s.run(id, ownerID, lab, request, budget, ask.Focus)
 	}()
 
 	return s.store.Run(ctx, id)
+}
+
+// checkFocus says whether a run can be narrowed so: to a work of the lab with
+// citations to follow, or to one of its subtopics.
+func (s *Service) checkFocus(ctx context.Context, lab labs.Detail, f Focus) error {
+	switch {
+	case f.Work != 0 && f.Subtopic != 0:
+		return fmt.Errorf("%w: follow a work or research a subtopic, not both", labs.ErrInvalid)
+	case f.Work != 0:
+		w, err := s.work(ctx, lab.ID, f.Work)
+		if err != nil {
+			return err
+		}
+
+		if (s.scholar == nil || w.OpenAlexID == "") && w.Read != ReadIn {
+			return ErrNothingToFollow
+		}
+	case f.Subtopic != 0:
+		subs, err := s.store.Subtopics(ctx, lab.ID)
+		if err != nil {
+			return err
+		}
+
+		if !slices.ContainsFunc(subs, func(sub Subtopic) bool { return sub.ID == f.Subtopic }) {
+			return ErrSubtopicNotFound
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) work(ctx context.Context, labID, workID int64) (Work, error) {
+	works, err := s.store.Works(ctx, labID)
+	if err != nil {
+		return Work{}, err
+	}
+
+	for _, w := range works {
+		if w.ID == workID {
+			return w, nil
+		}
+	}
+
+	return Work{}, ErrWorkNotFound
+}
+
+// SetVerdict is the user keeping, dropping or putting aside a work, and maybe
+// moving it to another subtopic: research never overrules it.
+func (s *Service) SetVerdict(ctx context.Context, ownerID, labID, workID int64, verdict string, subtopicID int64) (Work, error) {
+	if verdict != VerdictKeep && verdict != VerdictMaybe && verdict != VerdictDrop {
+		return Work{}, fmt.Errorf("%w: a verdict is keep, maybe or drop", labs.ErrInvalid)
+	}
+
+	if _, err := s.labs.Get(ctx, ownerID, labID); err != nil {
+		return Work{}, err
+	}
+
+	if subtopicID != 0 {
+		subs, err := s.store.Subtopics(ctx, labID)
+		if err != nil {
+			return Work{}, err
+		}
+
+		if !slices.ContainsFunc(subs, func(sub Subtopic) bool { return sub.ID == subtopicID }) {
+			return Work{}, ErrSubtopicNotFound
+		}
+	}
+
+	if err := s.store.SetVerdict(ctx, labID, workID, verdict, subtopicID); err != nil {
+		return Work{}, err
+	}
+
+	return s.work(ctx, labID, workID)
+}
+
+// ReadWork reads a work into the lab now, whatever research would choose: the
+// user picked it, so it is kept as theirs too.
+func (s *Service) ReadWork(ctx context.Context, ownerID, labID, workID int64) (Work, error) {
+	if _, err := s.labs.Get(ctx, ownerID, labID); err != nil {
+		return Work{}, err
+	}
+
+	w, err := s.work(ctx, labID, workID)
+
+	switch {
+	case err != nil:
+		return Work{}, err
+	case w.SourceID != 0:
+		return w, nil
+	case !readable(w):
+		return Work{}, fmt.Errorf("%w: this work has no address to read it from", labs.ErrInvalid)
+	}
+
+	src, err := s.labs.AddResearched(ctx, ownerID, labID, labs.Researched{URL: w.URL, Reason: w.Reason})
+	if err != nil {
+		return Work{}, err
+	}
+
+	if err := s.store.SetSource(ctx, workID, src.ID); err != nil {
+		return Work{}, err
+	}
+
+	if err := s.store.SetVerdict(ctx, labID, workID, VerdictKeep, 0); err != nil {
+		return Work{}, err
+	}
+
+	return s.work(ctx, labID, workID)
 }
 
 // Map is the lab's research as it stands, while a run goes on too.

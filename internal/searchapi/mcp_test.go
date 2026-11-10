@@ -181,7 +181,7 @@ func TestMCPToolsAreListedWithHints(t *testing.T) {
 	}
 
 	want := []string{"add_sources", "ask", "create_lab", "draft_report", "get_lab", "list_labs", "read_map", "read_report", "research", "save_answer", "search",
-		"write_report"}
+		"set_work", "write_report"}
 	if slices.Sort(names); !slices.Equal(names, want) {
 		t.Errorf("tools %v", names)
 	}
@@ -281,9 +281,22 @@ func TestMCPLabsAndReports(t *testing.T) {
 		t.Errorf("research: %s", text)
 	}
 
-	if res, text = call(t, session, "read_map", map[string]any{"lab": 4}, false); res.IsError || !strings.Contains(text, "## 1. Blocks: 1 kept") ||
+	if res, text = call(t, session, "read_map", map[string]any{"lab": 4}, false); res.IsError || !strings.Contains(text, "## 1. Blocks (subtopic 1): 1 kept") || !strings.Contains(text, "work 2, paper") ||
 		!strings.Contains(text, "[ResNet](<https://arxiv.org/abs/1512.03385>)") || !strings.Contains(text, "stopped: new rounds found little new") {
 		t.Errorf("read_map:\n%s", text)
+	}
+
+	if res, text = call(t, session, "research", map[string]any{"lab": 4, "work": 2}, false); res.IsError || researcher.ask.Focus.Work != 2 {
+		t.Errorf("research one work: %s", text)
+	}
+
+	if res, text = call(t, session, "set_work", map[string]any{"lab": 4, "work": 2, "verdict": "drop", "read": true}, false); res.IsError ||
+		!strings.Contains(text, `"read":"reading"`) {
+		t.Errorf("set_work: %s", text)
+	}
+
+	if res, text = call(t, session, "set_work", map[string]any{"lab": 4, "work": 2}, false); !res.IsError {
+		t.Errorf("set_work with nothing to do: %s", text)
 	}
 
 	// No sections: the outline is drafted, then written.

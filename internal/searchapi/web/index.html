@@ -252,11 +252,24 @@ function renderCards() {
     $("labCards").replaceChildren(el("p", { class: "note" }, "None yet."));
     return;
   }
-  $("labCards").replaceChildren(...labs.map((lab) => el("a", { class: "card", href: "/labs/" + lab.id },
-    el("h3", {}, lab.name),
-    lab.topic ? el("p", { class: "note" }, lab.topic) : null,
-    el("p", { class: "note" }, `${lab.sources} sources · ${lab.pages} pages` +
-      (lab.set_aside ? ` · ${lab.set_aside} set aside` : "") + ` · ${ago(lab.updated_at)}`))));
+  $("labCards").replaceChildren(...labs.map((lab) => el("div", { class: "card" },
+    el("h3", {}, el("a", { href: "/labs/" + lab.id }, lab.name)),
+    lab.topic ? el("p", { class: "note clamp" }, lab.topic) : null,
+    el("p", { class: "note card-meta" }, `${lab.sources} sources · ${lab.pages} pages` +
+      (lab.set_aside ? ` · ${lab.set_aside} set aside` : "") + ` · ${ago(lab.updated_at)}`),
+    el("button", { type: "button", class: "card-delete", "aria-label": `Delete ${lab.name}`, title: "Delete this lab",
+      onclick: () => deleteLab(lab) }, "delete"))));
+}
+
+async function deleteLab(lab) {
+  if (!confirm(`Delete “${lab.name}”? Its reports and map go; its pages stay in the shared base.`)) return;
+  try {
+    await send("DELETE", "/api/labs/" + lab.id);
+    ticked.delete(lab.id);
+  } catch (err) {
+    alert(err.message);
+  }
+  loadLabs();
 }
 
 async function loadLabs() {

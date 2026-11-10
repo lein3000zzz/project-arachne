@@ -35,7 +35,7 @@ func newMemStore() *memStore {
 	return &memStore{runs: map[int64]*Run{}, refs: map[int64][]Reference{}}
 }
 
-func (m *memStore) StartRun(_ context.Context, labID int64, request string, budget Budget, model string) (int64, error) {
+func (m *memStore) StartRun(_ context.Context, labID int64, request string, budget Budget, focus Focus, model string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -44,7 +44,7 @@ func (m *memStore) StartRun(_ context.Context, labID int64, request string, budg
 	}
 
 	id := int64(len(m.runs) + 1)
-	m.runs[id] = &Run{ID: id, LabID: labID, Request: request, Budget: budget, Status: StatusRunning, Model: model, Rounds: []Round{}}
+	m.runs[id] = &Run{ID: id, LabID: labID, Request: request, Budget: budget, Focus: focus, Status: StatusRunning, Model: model, Rounds: []Round{}}
 
 	return id, nil
 }
@@ -111,6 +111,8 @@ func (m *memStore) Find(_ context.Context, _, runID int64, w Work, f Find) (int6
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	f.Run = runID
+
 	for _, have := range m.works {
 		if have.URL == w.URL || (w.DOI != "" && have.DOI == w.DOI) || (w.OpenAlexID != "" && have.OpenAlexID == w.OpenAlexID) {
 			if have.Title == "" {
@@ -175,6 +177,24 @@ func (m *memStore) Judge(_ context.Context, id int64, verdict, reason string, su
 		if subtopicID != 0 {
 			w.SubtopicID = subtopicID
 		}
+	}
+
+	return nil
+}
+
+func (m *memStore) SetVerdict(_ context.Context, _, id int64, verdict string, subtopicID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if id < 1 || int(id) > len(m.works) {
+		return ErrWorkNotFound
+	}
+
+	w := m.work(id)
+	w.Verdict, w.ByUser = verdict, true
+
+	if subtopicID != 0 {
+		w.SubtopicID = subtopicID
 	}
 
 	return nil
@@ -693,6 +713,132 @@ func TestDOIsAreReadFromLinks(t *testing.T) {
 	} {
 		if got := doiOf(in); got != want {
 			t.Errorf("doiOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// steeredLab is a lab already researched once: two subtopics, a kept paper
+// in each, both already followed.
+func steeredLab() (*memStore, *fakeLabs) {
+	store := newMemStore()
+	store.subtopics = []Subtopic{{ID: 1, Name: "Blocks", Queries: []string{"residual blocks", "resnet"}}, {ID: 2, Name: "Training"}}
+	store.works = []*Work{
+		{ID: 1, URL: "https://arxiv.org/abs/1512.03385", Kind: KindPaper, Title: "ResNet", OpenAlexID: "W1", SubtopicID: 1, Verdict: VerdictKeep,
+			ReferencesDone: true, CitingDone: true, Finds: []Find{{Channel: ChannelSearch, Query: "resnet"}}},
+		{ID: 2, URL: "https://arxiv.org/abs/1603.09382", Kind: KindPaper, Title: "Stochastic Depth", OpenAlexID: "W9", SubtopicID: 2, Verdict: VerdictKeep,
+			Finds: []Find{{Channel: ChannelSearch, Query: "resnet"}}},
+	}
+
+	return store, &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "ResNets", Engines: []string{"brave"}}}}
+}
+
+func TestFollowingOneWorkFollowsItAloneEvenIfDone(t *testing.T) {
+	store, lab := steeredLab()
+	scholar := &fakeScholar{
+		catalog: map[string]openalex.Work{"W1": {ID: "W1", References: []string{"W2"}}, "W2": {ID: "W2", Title: "Highway Networks", LandingURL: "https://example.org/highway"}},
+		citing: map[string][]openalex.Work{
+			"W1": {{ID: "W4", Title: "DenseNet", LandingURL: "https://densenet.example.net/paper"}},
+			"W9": {{ID: "W8", Title: "Not asked for", LandingURL: "https://example.org/other"}},
+		},
+	}
+
+	s := NewService(zap.NewNop().Sugar(), store, lab, nil, scholar, &model{}, testConfig())
+
+	run, err := s.Start(context.Background(), 1, 3, Ask{Focus: Focus{Work: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run = waitDone(t, store, run.ID)
+	if run.Stopped != StopFollowed || len(run.Rounds) != 1 || run.Focus.Work != 1 || len(run.Rounds[0].Queries) != 0 {
+		t.Errorf("run %+v", run)
+	}
+
+	if store.byURL("https://example.org/highway") == nil || store.byURL("https://densenet.example.net/paper") == nil || store.byURL("https://example.org/other") != nil {
+		t.Errorf("found %d works: what the work cites and what cites it, nothing else", len(store.works))
+	}
+
+	if !slices.Equal(lab.read, []string{"https://example.org/highway", "https://densenet.example.net/paper"}) &&
+		!slices.Equal(lab.read, []string{"https://densenet.example.net/paper", "https://example.org/highway"}) {
+		t.Errorf("read %v: only what was found through the work", lab.read)
+	}
+}
+
+func TestResearchingOneSubtopicStaysOnIt(t *testing.T) {
+	store, lab := steeredLab()
+
+	search := &fakeSearch{results: map[string][]websearch.Result{
+		"residual blocks": {{URL: "https://d2l.ai/resnet", Title: "ResNet chapter"}},
+	}}
+
+	chat := &model{queries: `{"queries": [{"subtopic": 1, "query": "bottleneck blocks"}]}`}
+	s := NewService(zap.NewNop().Sugar(), store, lab, search, nil, chat, testConfig())
+
+	run, err := s.Start(context.Background(), 1, 3, Ask{Focus: Focus{Subtopic: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitDone(t, store, run.ID)
+
+	if len(search.asked) < 2 || search.asked[0] != "residual blocks" || slices.Contains(search.asked, "resnet") || !slices.Contains(search.asked, "bottleneck blocks") {
+		t.Errorf("searched %v: the subtopic's own untried query first, then the model's", search.asked)
+	}
+
+	if slices.Contains(lab.read, "https://arxiv.org/abs/1603.09382") || !slices.Contains(lab.read, "https://d2l.ai/resnet") {
+		t.Errorf("read %v: the subtopic's works alone", lab.read)
+	}
+}
+
+func TestTheUsersVerdictStandsAndAWorkCanBeReadByHand(t *testing.T) {
+	store, lab := steeredLab()
+	s := NewService(zap.NewNop().Sugar(), store, lab, nil, &fakeScholar{}, &model{}, testConfig())
+	ctx := context.Background()
+
+	w, err := s.SetVerdict(ctx, 1, 3, 2, VerdictDrop, 1)
+	if err != nil || w.Verdict != VerdictDrop || !w.ByUser || w.SubtopicID != 1 {
+		t.Fatalf("set: %+v, %v", w, err)
+	}
+
+	if err := store.Judge(ctx, 2, VerdictKeep, "the model's", 2); err != nil || store.work(2).Verdict != VerdictDrop {
+		t.Error("the model overruled the user")
+	}
+
+	for _, c := range []struct {
+		verdict  string
+		work     int64
+		subtopic int64
+		want     error
+	}{{"great", 2, 0, labs.ErrInvalid}, {VerdictKeep, 99, 0, ErrWorkNotFound}, {VerdictKeep, 2, 77, ErrSubtopicNotFound}} {
+		if _, err := s.SetVerdict(ctx, 1, 3, c.work, c.verdict, c.subtopic); !errors.Is(err, c.want) {
+			t.Errorf("%+v: %v", c, err)
+		}
+	}
+
+	w, err = s.ReadWork(ctx, 1, 3, 2)
+	if err != nil || w.SourceID == 0 || w.Verdict != VerdictKeep || !slices.Equal(lab.read, []string{"https://arxiv.org/abs/1603.09382"}) {
+		t.Errorf("read by hand: %+v, %v, read %v", w, err, lab.read)
+	}
+
+	if _, err := s.ReadWork(ctx, 1, 3, 2); err != nil || len(lab.read) != 1 {
+		t.Errorf("read twice: %v, read %v", err, lab.read)
+	}
+}
+
+func TestAFocusMustMakeSense(t *testing.T) {
+	store, lab := steeredLab()
+	store.works = append(store.works, &Work{ID: 3, URL: "https://example.com/blog", Kind: KindWeb, Verdict: VerdictKeep})
+
+	s := NewService(zap.NewNop().Sugar(), store, lab, nil, &fakeScholar{}, &model{}, testConfig())
+
+	for focus, want := range map[Focus]error{
+		{Work: 1, Subtopic: 1}: labs.ErrInvalid,
+		{Work: 42}:             ErrWorkNotFound,
+		{Work: 3}:              ErrNothingToFollow,
+		{Subtopic: 9}:          ErrSubtopicNotFound,
+	} {
+		if _, err := s.Start(context.Background(), 1, 3, Ask{Focus: focus}); !errors.Is(err, want) {
+			t.Errorf("%+v: %v, want %v", focus, err, want)
 		}
 	}
 }
