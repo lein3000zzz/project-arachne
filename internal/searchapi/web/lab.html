@@ -56,6 +56,7 @@
 
   <section class="panel" id="overview" role="tabpanel">
     <div class="overview" id="overviewCards"></div>
+    <div class="quality" id="qualityReport"></div>
   </section>
 
   <section class="panel" id="sources" role="tabpanel" hidden>
@@ -352,6 +353,41 @@ async function loadPages() {
   }
 }
 
+// ---- quality: how good the lab's material is, before an answer leans on it ----
+let quality = null;
+
+const verdictWords = { good: "good", mixed: "mixed", poor: "poor", empty: "nothing yet" };
+
+async function loadQuality() {
+  try {
+    quality = await api(`${base}/quality`);
+  } catch (_) {
+    quality = null;
+  }
+  renderQuality();
+}
+
+function renderQuality() {
+  const q = quality;
+  if (!q || !q.pages) {
+    $("qualityReport").replaceChildren();
+    return;
+  }
+  const dupes = q.duplicate_groups.map((d) => el("li", {},
+    el("span", {}, d.title || host(d.urls[0])),
+    el("span", { class: "note" }, ` · ${d.urls.length} copies: `),
+    d.urls.map((u, i) => [i ? ", " : "", el("a", { href: u, target: "_blank", rel: "noopener noreferrer" }, host(u) + shortPath(u))])));
+  // replaceChildren would print a null as "null".
+  $("qualityReport").replaceChildren(...[
+    el("h2", {}, "Context quality"),
+    el("p", {}, el("span", { class: "verdict-tag " + q.verdict }, verdictWords[q.verdict] || q.verdict),
+      ` ${q.usable} of ${plural(q.pages, "page")} usable — fetched, kept on review, no copy of another. ` +
+      `From ${plural(q.sites, "site")}.`),
+    q.notes.length ? el("ul", { class: "quality-notes" }, q.notes.map((n) => el("li", {}, n))) : el("p", { class: "note" }, "Nothing stands out."),
+    dupes.length ? el("details", { class: "options" }, el("summary", {}, `Copies (${q.duplicates})`), el("ul", { class: "quality-dupes" }, dupes)) : null,
+  ].filter(Boolean));
+}
+
 // ---- the whole lab, polled while anything in it moves ----
 let researchMap = null, artifactList = [];
 
@@ -376,7 +412,7 @@ async function load() {
   sources.set(lab.sources);
   renderEngines(lab.engines);
 
-  const [researching, building] = await Promise.all([loadResearch(), loadArtifacts(), loadPages(), loadReferences()]);
+  const [researching, building] = await Promise.all([loadResearch(), loadArtifacts(), loadPages(), loadReferences(), loadQuality()]);
   renderOverview();
   if (researching || building || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
 }
@@ -392,13 +428,19 @@ function card(tab, title, big, lines) {
 function renderOverview() {
   if (!lab) return;
   const by = (k) => lab.sources.filter((s) => sourceProgress(s) === k).length;
-  const cards = [
+  const cards = [];
+  if (quality && quality.pages) {
+    cards.push(card("pages", "Context quality", verdictWords[quality.verdict] || quality.verdict, [
+      `${quality.usable} of ${quality.pages} pages usable`,
+      quality.notes[0] || "nothing stands out",
+    ]));
+  }
+  cards.push(
     card("sources", "Sources", lab.sources.length, [
       by("progress") ? `${by("progress")} being crawled` : null,
       by("problems") ? `${by("problems")} with nothing searchable` : null,
       `${by("done")} done`,
-    ]),
-  ];
+    ]));
 
   if (researchMap) {
     const c = researchMap.coverage, run = researchMap.run;
@@ -703,11 +745,12 @@ function renderRun(run, m) {
     run.request ? el("p", { class: "note" }, "asked: " + run.request) : null,
     el("ol", { class: "rounds" }, rounds));
   details.addEventListener("toggle", () => { roundsOpen = details.open; });
-  $("researchRun").replaceChildren(
+  $("researchRun").replaceChildren(...[
     el("p", { class: "run-status" }, el("span", { class: "state " + (researching ? "running" : run.status === "failed" ? "dropped" : "finished") },
       el("span", { class: "state-glyph", "aria-hidden": "true" }, researching ? "●" : run.status === "failed" ? "✕" : "✓"), status)),
     focusLine(run.focus, m),
-    details);
+    details,
+  ].filter(Boolean));
 }
 
 function focusLine(focus, m) {
@@ -856,13 +899,14 @@ function renderMap(m) {
   }, el("span", { class: "g-name" }, g.name), el("span", { class: "g-count" }, g.works.length + (g.share != null ? ` · ${g.share}%` : "")))));
 
   const g = groups.find((x) => x.key === group);
-  $("groupHead").replaceChildren(
+  $("groupHead").replaceChildren(...[
     el("h3", {}, g.name),
     g.focus ? el("p", { class: "note" }, g.focus) : null,
     g.subtopic ? el("div", { class: "buttons" },
       el("span", { class: "note" }, `${g.works.length} kept · ${g.inIndex} in the index` + (g.share != null ? ` · about ${g.share}% found` : "")),
       el("button", { type: "button", class: "action small", disabled: researching,
-        onclick: () => steer("POST", "/research", { subtopic: g.subtopic }) }, "research this further")) : null);
+        onclick: () => steer("POST", "/research", { subtopic: g.subtopic }) }, "research this further")) : null,
+  ].filter(Boolean));
   works.set(g.works);
 }
 

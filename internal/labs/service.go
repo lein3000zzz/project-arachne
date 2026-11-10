@@ -25,6 +25,7 @@ type Store interface {
 	RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error
 	PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error)
 	Pages(ctx context.Context, ownerID, labID int64, limit int) ([]Page, error)
+	QualityPages(ctx context.Context, ownerID, labID int64) ([]QualityPage, error)
 	References(ctx context.Context, ownerID, labID int64) ([]Document, error)
 }
 

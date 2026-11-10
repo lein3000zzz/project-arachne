@@ -113,6 +113,7 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("PUT /api/labs/{id}/research/works/{work}", signIn.api(researchAPI.setVerdict))
 	mux.Handle("POST /api/labs/{id}/research/works/{work}/read", signIn.api(researchAPI.readWork))
 	mux.Handle("GET /api/labs/{id}/pages", signIn.api(labsAPI.pages))
+	mux.Handle("GET /api/labs/{id}/quality", signIn.api(labsAPI.quality))
 	mux.Handle("POST /api/labs/{id}/sources", signIn.api(labsAPI.addSources))
 	mux.Handle("GET /api/labs/{id}/references", signIn.api(labsAPI.references))
 	mux.Handle("POST /api/labs/{id}/references", signIn.api(labsAPI.addReferences))

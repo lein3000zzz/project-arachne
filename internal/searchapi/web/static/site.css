@@ -569,3 +569,15 @@ a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
 .graph-side { min-width: 0; }
 .graph-side .works li { border-bottom: 0; padding-top: 0; }
 .graph-legend { margin: 0.6rem 0 0; font-size: 0.76rem; }
+
+/* Context quality: a verdict, then what the unusable pages are. */
+.quality { margin-top: 1.8rem; max-width: 72ch; }
+.quality-notes { margin: 0.4rem 0 0.8rem; padding-left: 1.2rem; font-size: 0.88rem; }
+.quality-notes li { margin: 0.2rem 0; }
+.quality-dupes { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.4rem; font-size: 0.8rem; overflow-wrap: anywhere; }
+.verdict-tag {
+  display: inline-block; font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase; border: 1px solid var(--fg);
+  border-radius: 999px; padding: 0 0.6rem; margin-right: 0.3rem; vertical-align: 0.1em;
+}
+.verdict-tag.good { border-color: var(--ok); color: var(--ok); }
+.verdict-tag.poor { border-color: var(--bad); color: var(--bad); }

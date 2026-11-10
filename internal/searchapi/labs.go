@@ -25,6 +25,7 @@ type LabService interface {
 	Refresh(ctx context.Context, ownerID, labID, sourceID int64) (labs.SourceStatus, error)
 	RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error
 	Pages(ctx context.Context, ownerID, labID int64, limit int) ([]labs.Page, error)
+	Quality(ctx context.Context, ownerID, labID int64) (labs.Quality, error)
 	References(ctx context.Context, ownerID, labID int64) ([]labs.Document, error)
 	AddReferences(ctx context.Context, ownerID, labID int64, picks []labs.Cited) (labs.Detail, error)
 	AddUploads(ctx context.Context, ownerID, labID int64, files []labs.File) (labs.Detail, error)
@@ -169,6 +170,14 @@ func (h *labsHandler) refresh(w http.ResponseWriter, r *http.Request) {
 func (h *labsHandler) removeSource(w http.ResponseWriter, r *http.Request) {
 	h.withSource(w, r, func(ctx context.Context, owner, lab, source int64) (int, any, error) {
 		return http.StatusNoContent, nil, h.service.RemoveSource(ctx, owner, lab, source)
+	})
+}
+
+// quality is how good the lab's material is: usable pages, what the rest is.
+func (h *labsHandler) quality(w http.ResponseWriter, r *http.Request) {
+	h.withLab(w, r, func(ctx context.Context, owner, lab int64) (int, any, error) {
+		q, err := h.service.Quality(ctx, owner, lab)
+		return http.StatusOK, q, err
 	})
 }
 

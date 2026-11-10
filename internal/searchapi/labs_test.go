@@ -69,6 +69,12 @@ func (f *fakeLabs) Refresh(_ context.Context, owner, lab, source int64) (labs.So
 	return labs.SourceStatus{Source: labs.Source{ID: source}}, f.err
 }
 
+func (f *fakeLabs) Quality(_ context.Context, owner, lab int64) (labs.Quality, error) {
+	f.owner, f.labIDs = owner, []int64{lab}
+	return labs.QualityOf([]labs.QualityPage{{URL: "https://go.dev/", Host: "go.dev", Status: 200, Decision: "index", Hash: "1"},
+		{URL: "https://go.dev/menu", Host: "go.dev", Status: 200, Decision: "skip", Reasons: []string{"navigation_only"}}}), f.err
+}
+
 func (f *fakeLabs) PageURLs(_ context.Context, owner int64, ids []int64) ([]string, error) {
 	f.owner, f.labIDs = owner, ids
 	if f.err != nil {
@@ -147,6 +153,20 @@ func TestLabRequestsActAsTheSignedInUser(t *testing.T) {
 
 	if rec := serveLabs(service, http.MethodPost, "/api/labs", `{"name":"Go","owner_id":2}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("an owner in the body: %d, want it refused", rec.Code)
+	}
+}
+
+func TestALabsQualityIsReported(t *testing.T) {
+	f := &fakeLabs{}
+
+	rec := serveLabs(f, http.MethodGet, "/api/labs/7/quality", "")
+	if rec.Code != http.StatusOK || f.owner != testUser.ID || f.labIDs[0] != 7 || !strings.Contains(rec.Body.String(), `"verdict":"mixed"`) ||
+		!strings.Contains(rec.Body.String(), "1 menus only") {
+		t.Errorf("quality: %d %s", rec.Code, rec.Body)
+	}
+
+	if rec := serveLabs(&fakeLabs{err: labs.ErrNotFound}, http.MethodGet, "/api/labs/7/quality", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("another user's lab: %d", rec.Code)
 	}
 }
 

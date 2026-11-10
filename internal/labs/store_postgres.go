@@ -258,6 +258,30 @@ func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID int64, limit i
 	})
 }
 
+// QualityPages is every page of the lab with what the quality report reads.
+func (s *PostgresStore) QualityPages(ctx context.Context, ownerID, labID int64) ([]QualityPage, error) {
+	if _, err := s.Get(ctx, ownerID, labID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT p.url, p.host, coalesce(p.title, ''), coalesce(p.status, 0), coalesce(r.decision, ''), coalesce(r.reasons, '{}'),
+		       coalesce(r.unreviewed, false), coalesce(r.content_hash, '')
+		FROM pages p LEFT JOIN page_reviews r ON r.url = p.url
+		WHERE p.id IN (SELECT sp.page_id FROM sources s JOIN source_pages sp ON sp.source_id = s.id WHERE s.lab_id = $1)
+		ORDER BY p.url`, labID)
+	if err != nil {
+		return nil, err
+	}
+
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (QualityPage, error) {
+		var p QualityPage
+		err := row.Scan(&p.URL, &p.Host, &p.Title, &p.Status, &p.Decision, &p.Reasons, &p.Unreviewed, &p.Hash)
+
+		return p, err
+	})
+}
+
 // References lists the lab's documents that link to or cite anything, with
 // what they do, in order. A document set aside on review offers nothing.
 func (s *PostgresStore) References(ctx context.Context, ownerID, labID int64) ([]Document, error) {

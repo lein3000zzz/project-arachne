@@ -127,7 +127,7 @@ func TestEverythingButSigningInNeedsAUser(t *testing.T) {
 		"GET /search?q=x", "GET /answer?q=x", "GET /answer/stream?q=x",
 		"GET /api/runs", "POST /api/runs", "GET /api/runs/r1", "GET /api/me", "POST /api/me/password",
 		"GET /api/labs", "POST /api/labs", "POST /api/labs/plan", "GET /api/labs/1", "DELETE /api/labs/1",
-		"GET /api/labs/1/pages", "POST /api/labs/1/sources", "POST /api/labs/1/sources/2/refresh", "DELETE /api/labs/1/sources/2",
+		"GET /api/labs/1/pages", "GET /api/labs/1/quality", "POST /api/labs/1/sources", "POST /api/labs/1/sources/2/refresh", "DELETE /api/labs/1/sources/2",
 		"PUT /api/labs/1/engines", "GET /api/engines",
 		"GET /answer/web/stream?q=x", "GET /api/me/tokens", "POST /api/me/tokens", "DELETE /api/me/tokens/make", "POST /mcp",
 		"POST /api/labs/1/research", "GET /api/labs/1/research", "PUT /api/labs/1/research/works/2", "POST /api/labs/1/research/works/2/read",

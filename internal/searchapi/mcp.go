@@ -137,7 +137,7 @@ func (t *mcpTools) register(s *mcp.Server) {
 		Description: "List the user's labs: topics with their sources and how many pages are indexed."},
 		t.listLabs)
 	addTool(s, &mcp.Tool{Name: "get_lab", Annotations: readOnly("Show a lab"),
-		Description: "Show a lab: its sources and how far each one's crawl has come, its latest research and how complete its map looks, and its reports."},
+		Description: "Show a lab: how good its material is (usable pages, and what the rest is - set aside, duplicates, one site dominating), its sources and how far each one's crawl has come, its latest research and how complete its map looks, and its reports."},
 		t.getLab)
 	addTool(s, &mcp.Tool{Name: "create_lab", Annotations: changes("Create a lab", true),
 		Description: "Create a lab on a topic, optionally with sources to crawl (pages or sites, by URL). Crawling and indexing run in the background: check with get_lab."},
@@ -651,9 +651,19 @@ func reportOf(a artifacts.Artifact) reportView {
 
 type labView struct {
 	Lab      labSummary    `json:"lab"`
+	Quality  *qualityView  `json:"quality,omitempty"`
 	Sources  []sourceView  `json:"sources"`
 	Research *researchView `json:"research,omitempty"`
 	Reports  []reportView  `json:"reports"`
+}
+
+// qualityView is how good the lab's material is, for an agent to weigh what
+// the lab's answers rest on.
+type qualityView struct {
+	Verdict string   `json:"verdict"`
+	Usable  int      `json:"usable_pages"`
+	Pages   int      `json:"pages"`
+	Notes   []string `json:"notes"`
 }
 
 func (t *mcpTools) getLab(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in labInput) (labView, error) {
@@ -682,6 +692,12 @@ func (t *mcpTools) viewOf(ctx context.Context, user auth.User, detail labs.Detai
 		if s.Run != nil {
 			view.Sources[i].Crawl, view.Sources[i].Note = string(s.Run.Status), s.Run.Note
 		}
+	}
+
+	if q, err := t.labs.service.Quality(ctx, user.ID, detail.ID); err == nil {
+		view.Quality = &qualityView{Verdict: q.Verdict, Usable: q.Usable, Pages: q.Pages, Notes: q.Notes}
+	} else {
+		t.logger.Warnw("Reading a lab's quality failed", "lab", detail.ID, "error", err)
 	}
 
 	if t.research.service != nil {

@@ -267,7 +267,7 @@ func TestMCPLabsAndReports(t *testing.T) {
 	}
 
 	res, text := call(t, session, "get_lab", map[string]any{"lab": 4}, false)
-	if res.IsError || !strings.Contains(text, `"reports":[{"id":9`) || !strings.Contains(text, `"status":"done","stopped":"saturated","works":1}`) {
+	if res.IsError || !strings.Contains(text, `"reports":[{"id":9`) || !strings.Contains(text, `"status":"done","stopped":"saturated","works":1}`) || !strings.Contains(text, `"verdict":"mixed"`) {
 		t.Errorf("get_lab: %s", text)
 	}
 

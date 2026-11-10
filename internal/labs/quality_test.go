@@ -1,0 +1,62 @@
+package labs
+
+import (
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestQualitySaysWhatALabsPagesAre(t *testing.T) {
+	ok := func(url, host, hash string) QualityPage {
+		return QualityPage{URL: url, Host: host, Title: url, Status: 200, Decision: "index", Hash: hash}
+	}
+
+	q := QualityOf([]QualityPage{
+		ok("https://a.dev/1", "a.dev", "h1"),
+		ok("https://a.dev/1?tab=x", "a.dev", "h1"),
+		ok("https://a.dev/1/v2", "a.dev", "h1"),
+		ok("https://a.dev/2", "a.dev", "h2"),
+		ok("https://a.dev/3", "a.dev", "h3"),
+		ok("https://b.dev/1", "b.dev", "h4"),
+		{URL: "https://c.dev/menu", Host: "c.dev", Status: 200, Decision: "skip", Reasons: []string{"navigation_only"}},
+		{URL: "https://c.dev/thin", Host: "c.dev", Status: 200, Decision: "skip", Reasons: []string{"too_thin", "navigation_only"}},
+		{URL: "https://medium.com/x", Host: "medium.com", Status: 403},
+		{URL: "https://d.dev/new", Host: "d.dev", Status: 200, Hash: "h5"},
+	})
+
+	if q.Pages != 10 || q.Usable != 5 || q.Duplicates != 2 || q.SetAside != 2 || q.NotFetched != 1 || q.Unreviewed != 1 || q.Verdict != "mixed" {
+		t.Errorf("quality %+v", q)
+	}
+
+	if q.Reasons["navigation_only"] != 2 || q.Reasons["too_thin"] != 1 {
+		t.Errorf("reasons %v", q.Reasons)
+	}
+
+	if len(q.DuplicateGroups) != 1 || len(q.DuplicateGroups[0].URLs) != 3 {
+		t.Errorf("duplicate groups %+v", q.DuplicateGroups)
+	}
+
+	if q.TopSite != "a.dev" || q.Sites != 3 || q.TopSiteShare != 0.6 {
+		t.Errorf("sites: %d, top %s %.2f", q.Sites, q.TopSite, q.TopSiteShare)
+	}
+
+	joined := strings.Join(q.Notes, " | ")
+	for _, want := range []string{"2 pages set aside on review: 1 too thin, 2 menus only", "2 pages have the same text", "a.dev gives 60%", "1 page could not be fetched"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("notes %q lack %q", joined, want)
+		}
+	}
+
+	if !strings.HasPrefix(q.Notes[0], "2 ") || !slices.ContainsFunc(q.Notes, func(n string) bool { return strings.Contains(n, "without a review") }) {
+		t.Errorf("notes %q: the largest first", q.Notes)
+	}
+
+	if e := QualityOf(nil); e.Verdict != "empty" || e.Notes == nil || e.DuplicateGroups == nil {
+		t.Errorf("an empty lab: %+v", e)
+	}
+
+	good := QualityOf([]QualityPage{ok("https://a.dev/1", "a.dev", "1"), ok("https://b.dev/1", "b.dev", "2"), ok("https://c.dev/1", "c.dev", "3")})
+	if good.Verdict != "good" || len(good.Notes) != 0 {
+		t.Errorf("a clean lab: %+v", good)
+	}
+}
