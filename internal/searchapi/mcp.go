@@ -322,8 +322,9 @@ func (t *mcpTools) ask(ctx context.Context, user auth.User, call *mcp.CallToolRe
 	id := a.recent.add(user.ID, req.Query, res, !check)
 
 	var (
-		claims []answer.Claim
-		broke  bool
+		claims    []answer.Claim
+		conflicts []answer.Conflict
+		broke     bool
 	)
 
 	if check {
@@ -342,6 +343,10 @@ func (t *mcpTools) ask(ctx context.Context, user auth.User, call *mcp.CallToolRe
 
 				return nil
 			},
+			Conflicts: func([]answer.Conflict) error {
+				progress("compared the sources")
+				return nil
+			},
 		})
 		if err != nil {
 			t.logger.Warnw("Verifying an answer failed", "error", err)
@@ -349,11 +354,11 @@ func (t *mcpTools) ask(ctx context.Context, user auth.User, call *mcp.CallToolRe
 			broke = true
 		}
 
-		claims = v.Claims
+		claims, conflicts = v.Claims, v.Conflicts
 		a.recent.check(id, claims)
 	}
 
-	return answerText(res, claims, check, broke, looked, in.Web, id), nil
+	return answerText(res, claims, conflicts, check, broke, looked, in.Web, id), nil
 }
 
 // webLook is what looking on the web gave: the pages read, or why none.
@@ -427,7 +432,7 @@ func (t *mcpTools) lookOnTheWeb(ctx context.Context, user auth.User, req *answer
 // answerText is the answer as the agent reads it: the Markdown, where each
 // source came from, and the claims the sources did not bear out - the marks
 // a page shows, in words.
-func answerText(res answer.Result, claims []answer.Claim, checked, broke bool, looked webLook, web bool, id string) string {
+func answerText(res answer.Result, claims []answer.Claim, conflicts []answer.Conflict, checked, broke bool, looked webLook, web bool, id string) string {
 	var b strings.Builder
 
 	b.WriteString(strings.TrimSpace(res.Answer))
@@ -468,6 +473,7 @@ func answerText(res answer.Result, claims []answer.Claim, checked, broke bool, l
 		b.WriteString("The claims could not be checked against their sources.\n")
 	default:
 		b.WriteString(claimSummary(claims))
+		b.WriteString(conflictSummary(conflicts))
 	}
 
 	if web {
@@ -477,6 +483,24 @@ func answerText(res answer.Result, claims []answer.Claim, checked, broke bool, l
 
 	if id != "" {
 		fmt.Fprintf(&b, "\nAnswer id: %s (save_answer keeps it in a lab, for the next hour).\n", id)
+	}
+
+	return b.String()
+}
+
+// conflictSummary names the sources that say different things about one
+// point, each in its own words: the answer may have taken one side.
+func conflictSummary(conflicts []answer.Conflict) string {
+	if len(conflicts) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	b.WriteString("Sources that disagree:\n")
+
+	for _, c := range conflicts {
+		fmt.Fprintf(&b, "- on %s: [%d] %q, but [%d] %q\n", c.About, c.A, c.QuoteA, c.B, c.QuoteB)
 	}
 
 	return b.String()

@@ -133,6 +133,7 @@ func main() {
 				MaxClaims: cfg.Verify.MaxClaims,
 				MaxTokens: cfg.Verify.MaxTokens,
 				Timeout:   cfg.Verify.Timeout.Std(),
+				Conflicts: cfg.Verify.Conflicts,
 			})
 
 			logger.Infow("Answers are checked claim by claim", "maxClaims", cfg.Verify.MaxClaims)

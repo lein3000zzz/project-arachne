@@ -25,20 +25,27 @@ type VerifyConfig struct {
 	MaxClaims int
 	MaxTokens int
 	Timeout   time.Duration
+	// After the claims, ask once whether any two sources disagree.
+	Conflicts bool
 }
 
 type Verification struct {
-	Parts   []Part  `json:"parts"`
-	Claims  []Claim `json:"claims"`
-	Model   string  `json:"model"`
-	Seconds float64 `json:"seconds"`
+	Parts  []Part  `json:"parts"`
+	Claims []Claim `json:"claims"`
+	// Sources that say different things about one point; nil when not
+	// looked for.
+	Conflicts []Conflict `json:"conflicts,omitempty"`
+	Model     string     `json:"model"`
+	Seconds   float64    `json:"seconds"`
 }
 
 // VerifyEvents shows a check as it goes: how the answer splits into claims,
-// then each verdict as it comes. Either may be nil.
+// then each verdict as it comes, then the sources that disagree. Any may be
+// nil.
 type VerifyEvents struct {
-	Claims func([]Part, []Claim) error
-	Claim  func(i int, c Claim) error
+	Claims    func([]Part, []Claim) error
+	Claim     func(i int, c Claim) error
+	Conflicts func([]Conflict) error
 }
 
 // Verifies makes answers checkable, claim by claim, with chat - which may be
@@ -92,6 +99,20 @@ func (s *Service) Verify(ctx context.Context, res Result, events VerifyEvents) (
 		if events.Claim != nil {
 			if err := events.Claim(i, *c); err != nil {
 				return v, err
+			}
+		}
+	}
+
+	// Within the check's time: a model too slow for both checks the claims.
+	if s.verifyCfg.Conflicts && ctx.Err() == nil {
+		conflicts, err := s.conflicts(ctx, res)
+		if err == nil {
+			v.Conflicts = conflicts
+
+			if events.Conflicts != nil {
+				if err := events.Conflicts(conflicts); err != nil {
+					return v, err
+				}
 			}
 		}
 	}

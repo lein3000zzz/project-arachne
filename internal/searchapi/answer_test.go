@@ -36,7 +36,12 @@ func (f *fakeAnswerer) Verify(_ context.Context, res answer.Result, events answe
 		_ = events.Claim(0, claims[0])
 	}
 
-	return answer.Verification{Parts: parts, Claims: claims, Model: "checker"}, nil
+	conflicts := []answer.Conflict{{A: 1, B: 2, About: "speed", QuoteA: "Zig is faster here", QuoteB: "Rust is faster here"}}
+	if events.Conflicts != nil {
+		_ = events.Conflicts(conflicts)
+	}
+
+	return answer.Verification{Parts: parts, Claims: claims, Conflicts: conflicts, Model: "checker"}, nil
 }
 
 func (f *fakeAnswerer) Answer(_ context.Context, req answer.Request, events answer.Events) (answer.Result, error) {
@@ -150,7 +155,8 @@ func eventNames(body string) string {
 
 func TestACheckedAnswerGoesOnAfterDone(t *testing.T) {
 	rec := serveAnswer(&fakeAnswerer{verifying: true}, "/answer/stream?q=goroutines")
-	if got := eventNames(rec.Body.String()); got != "sources,delta,html,delta,delta,html,done,claims,claim,verified" {
+	if got := eventNames(rec.Body.String()); got != "sources,delta,html,delta,delta,html,done,claims,claim,conflicts,verified" ||
+		!strings.Contains(rec.Body.String(), `"quote_b":"Rust is faster here"`) {
 		t.Errorf("events = %s\n%s", got, rec.Body)
 	}
 

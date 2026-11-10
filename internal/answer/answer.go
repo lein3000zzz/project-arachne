@@ -125,6 +125,8 @@ type Result struct {
 
 	// What the model read of each source; claims are checked against it.
 	shown []string
+	// What was asked: sources are compared on what bears on it.
+	question string
 }
 
 // Events lets a caller show progress: the results and the sources as soon as
@@ -179,7 +181,8 @@ func (s *Service) Read(ctx context.Context, req Request) (Result, error) {
 
 	return Result{
 		Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Results: found, Model: llm.ModelOf(ctx, s.chat), Cited: []int{},
-		shown: shown(strings.TrimSpace(req.Query), sources, s.cfg.SourceRunes),
+		shown:    shown(strings.TrimSpace(req.Query), sources, s.cfg.SourceRunes),
+		question: strings.TrimSpace(req.Query),
 	}, nil
 }
 

@@ -112,6 +112,7 @@
     <p id="claimInfo" class="claim-info" aria-live="polite" hidden></p>
     <p id="answerMeta" class="note answer-meta"></p>
     <p id="verifyMeta" class="note answer-meta"></p>
+    <div id="conflicts" class="conflicts" hidden></div>
     <div class="save-answer" id="saveAnswer" hidden></div>
     <ol class="read" id="read"></ol>
   </section>
@@ -493,6 +494,7 @@ function searchAndAnswer(q, web) {
   $("answerText").replaceChildren();
   $("answerMeta").textContent = "";
   $("verifyMeta").textContent = "";
+  $("conflicts").hidden = true;
   $("claimInfo").hidden = true;
   offerSave(null);
   checked = [];
@@ -594,6 +596,19 @@ function searchAndAnswer(q, web) {
     markClaim(i, claim);
     const left = checked.filter((c) => !c.verdict).length;
     $("verifyMeta").textContent = left ? `checking claims… ${checked.length - left}/${checked.length}` : "";
+  });
+
+  // Sources that say different things about one point, each in its own words:
+  // the answer may have taken one side without knowing.
+  stream.addEventListener("conflicts", (e) => {
+    const list = JSON.parse(e.data) || [];
+    $("conflicts").hidden = list.length === 0;
+    const cite = (n) => el("a", { href: "#src-" + n, onclick: (ev) => { ev.preventDefault(); flash(n); } }, "[" + n + "]");
+    $("conflicts").replaceChildren(
+      el("p", { class: "conflicts-head" }, list.length === 1 ? "Two sources disagree" : `Sources disagree on ${list.length} points`),
+      el("ul", {}, list.map((c) => el("li", {},
+        el("span", { class: "note" }, "on " + c.about + ": "),
+        cite(c.a), " ", el("q", {}, c.quote_a), el("span", { class: "note" }, " — but "), cite(c.b), " ", el("q", {}, c.quote_b)))));
   });
 
   // The server ends the stream here; EventSource would otherwise reconnect

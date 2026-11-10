@@ -163,6 +163,8 @@ type Verify struct {
 	MaxClaims int      `yaml:"max_claims"`
 	MaxTokens int      `yaml:"max_tokens"`
 	Timeout   Duration `yaml:"timeout"`
+	// After the claims, one more call asks whether any two sources disagree.
+	Conflicts bool `yaml:"conflicts"`
 }
 
 // Artifacts are the longer works the model builds inside a lab: research
@@ -433,6 +435,7 @@ func Default() Config {
 			MaxClaims: 8,
 			MaxTokens: 100,
 			Timeout:   Duration(3 * time.Minute),
+			Conflicts: true,
 		},
 		WebLookup: WebLookup{
 			Enabled:      true,

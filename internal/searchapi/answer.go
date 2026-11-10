@@ -333,7 +333,8 @@ func (h *answerHandler) stream(w http.ResponseWriter, r *http.Request, timeout t
 		Claims: func(parts []answer.Part, claims []answer.Claim) error {
 			return send("claims", map[string]any{"parts": parts, "claims": claims, "html": answerHTML(res.Answer, len(res.Sources), claims)})
 		},
-		Claim: func(i int, c answer.Claim) error { return send("claim", map[string]any{"i": i, "claim": c}) },
+		Claim:     func(i int, c answer.Claim) error { return send("claim", map[string]any{"i": i, "claim": c}) },
+		Conflicts: func(c []answer.Conflict) error { return send("conflicts", c) },
 	})
 	if err != nil {
 		h.logger.Warnw("Verifying an answer failed", "error", err)

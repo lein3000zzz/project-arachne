@@ -200,7 +200,8 @@ func TestMCPAskAnswersAsTheTokensUserAndKeepsTheAnswer(t *testing.T) {
 		t.Fatal(text)
 	}
 
-	for _, want := range []string{"Use channels", "[1] Go <https://go.dev/> (shared index)", "Checked 1 claim against what they cite: 1 supported.", "Answer id: "} {
+	for _, want := range []string{"Use channels", "[1] Go <https://go.dev/> (shared index)", "Checked 1 claim against what they cite: 1 supported.", "Answer id: ",
+		`on speed: [1] "Zig is faster here", but [2] "Rust is faster here"`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the answer lacks %q:\n%s", want, text)
 		}

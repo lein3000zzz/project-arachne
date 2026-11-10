@@ -163,6 +163,10 @@ verify:
   max_claims: 8
   max_tokens: 100
   timeout: 3m
+  # then one more call: do any two of the sources disagree on a point? A
+  # disagreement is shown only with each side's own words, found in its
+  # excerpt
+  conflicts: true
 
 weblookup:
   # "Look on the web" on the Look up page, for when the index holds too
