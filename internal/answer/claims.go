@@ -19,6 +19,9 @@ type Claim struct {
 	Quote string `json:"quote,omitempty"`
 	// Why there is no verdict from the model, when there is not.
 	Note string `json:"note,omitempty"`
+	// Pages of the labs that state what its quote says, by the ledger; 0
+	// when not known.
+	Agree int `json:"agree,omitempty"`
 }
 
 // Part is a piece of the answer, in order: together the parts are the answer.

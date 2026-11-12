@@ -94,6 +94,7 @@ func (s *Service) Verify(ctx context.Context, res Result, events VerifyEvents) (
 			c.Verdict, c.Note = Unchecked, "out of time"
 		default:
 			c.Verdict, c.Quote, c.Note = s.check(ctx, *c, res.shown)
+			c.Agree = agreement(*c, res.facts)
 		}
 
 		if events.Claim != nil {
@@ -103,16 +104,28 @@ func (s *Service) Verify(ctx context.Context, res Result, events VerifyEvents) (
 		}
 	}
 
-	// Within the check's time: a model too slow for both checks the claims.
-	if s.verifyCfg.Conflicts && ctx.Err() == nil {
-		conflicts, err := s.conflicts(ctx, res)
-		if err == nil {
-			v.Conflicts = conflicts
+	// Contradictions the ledger found while indexing cost nothing to show;
+	// the model looks for others within the check's time - a model too slow
+	// for both checks the claims.
+	known := knownConflicts(res)
+	found := known
 
-			if events.Conflicts != nil {
-				if err := events.Conflicts(conflicts); err != nil {
-					return v, err
+	if s.verifyCfg.Conflicts && ctx.Err() == nil {
+		if asked, err := s.conflicts(ctx, res); err == nil {
+			for _, c := range asked {
+				if !slices.ContainsFunc(found, func(k Conflict) bool { return k.A == c.A && k.B == c.B || k.A == c.B && k.B == c.A }) {
+					found = append(found, c)
 				}
+			}
+		}
+	}
+
+	if s.verifyCfg.Conflicts || len(known) > 0 {
+		v.Conflicts = found
+
+		if events.Conflicts != nil {
+			if err := events.Conflicts(found); err != nil {
+				return v, err
 			}
 		}
 	}

@@ -392,6 +392,7 @@ function markClaim(i, claim) {
   mark.textContent = verdictMarks[claim.verdict] || "?";
   mark.setAttribute("aria-label", verdictNames[claim.verdict] || claim.verdict);
   mark.title = verdictNames[claim.verdict] || claim.verdict;
+  agreeMark(mark, claim);
 }
 
 $("answerText").addEventListener("click", (e) => {
@@ -420,6 +421,7 @@ function showClaim(i, mark) {
   // replaceChildren would print a null as "null".
   info.replaceChildren(...[
     el("span", { class: "verdict " + c.verdict }, (verdictMarks[c.verdict] || "") + " " + (verdictNames[c.verdict] || c.verdict)),
+    agreeNote(c),
     el("span", {}, c.text),
     c.quote ? el("q", {}, c.quote) : null,
     c.quote && c.cites.length ? " " + c.cites.map((n) => "[" + n + "]").join("") : null,
@@ -605,6 +607,7 @@ function searchAndAnswer(q, web) {
     $("answerMeta").textContent = (done.weak ? "nothing clearly relevant found · " : "") +
       `${fromWeb.size ? sourceCounts(sources, fromWeb) : scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited`;
     measure("answer", `answered by ${done.model} · ${done.usage.output_tokens} tokens · first word ${wait} s · ${total} s`);
+    if (done.read) measure("read", `read ${plural(done.read.facts, "fact")}` + (done.read.excerpts ? ` and ${plural(done.read.excerpts, "excerpt")} not yet digested` : ""));
     $("go").disabled = false;
     checking = done.verifying;
     answerID = done.id;

@@ -796,3 +796,4 @@ body.asked #search .hero .base-stats { display: none; }
 .fact-others .fact-claim, .fact-against .fact-claim { font-size: 0.85rem; }
 #factsSummary > span { display: block; }
 #factsSummary .facts-how { font-size: 0.78rem; opacity: 0.8; margin-top: 0.2rem; }
+.agree-note { color: var(--ok); font-size: 0.78rem; }

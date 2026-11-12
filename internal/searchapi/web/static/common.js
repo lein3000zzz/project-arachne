@@ -137,6 +137,17 @@ async function uploadFiles(labID, files) {
 }
 
 // A checked claim's mark and what it means: answers and artifacts alike.
+// agreeMark adds to a claim's mark how many pages state what bears it out,
+// where the ledger knows: "✓3".
+function agreeMark(mark, claim) {
+  if (!mark || !(claim.agree > 1)) return;
+  mark.textContent = (verdictMarks[claim.verdict] || "?") + claim.agree;
+  mark.title = `${verdictNames[claim.verdict] || claim.verdict} · stated by ${claim.agree} pages`;
+}
+
+// agreeNote is the same, said in the verdict box.
+const agreeNote = (claim) => (claim.agree > 1 ? el("span", { class: "agree-note" }, `stated by ${claim.agree} pages of your labs`) : null);
+
 const verdictMarks = { supported: "✓", partly: "~", unsupported: "✗", unchecked: "?" };
 const verdictNames = {
   supported: "supported by the cited excerpts", partly: "partly supported: some of it is not in the cited excerpts",

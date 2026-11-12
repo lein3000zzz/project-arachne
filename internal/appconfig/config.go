@@ -53,6 +53,9 @@ type Facts struct {
 	Shortlist float64 `yaml:"shortlist"`
 	// Pairs compared per sweep; digesting goes on between.
 	PairsPerSweep int `yaml:"pairs_per_sweep"`
+	// Answers read the sentences of a page's facts instead of its passages
+	// where the ledger has them; off reads passages as before, for comparing.
+	Answers bool `yaml:"answers"`
 }
 
 type UI struct {
@@ -476,6 +479,7 @@ func Default() Config {
 			Every:         Duration(30 * time.Second),
 			Shortlist:     0.70,
 			PairsPerSweep: 40,
+			Answers:       true,
 		},
 		Endpoints: Endpoints{
 			Enabled:     true,

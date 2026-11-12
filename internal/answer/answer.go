@@ -51,6 +51,8 @@ type Service struct {
 
 	verifier  llm.Client
 	verifyCfg VerifyConfig
+
+	ledger Ledger
 }
 
 func New(search Searcher, chat llm.Client, cfg Config) (*Service, error) {
@@ -139,9 +141,15 @@ type Result struct {
 	Cited   []int     `json:"cited"`
 	Model   string    `json:"model"`
 	Usage   llm.Usage `json:"usage"`
+	// How the sources were read; nil when the ledger was not asked.
+	Read *Read `json:"read,omitempty"`
 
 	// What the model read of each source; claims are checked against it.
 	shown []string
+	// shown with what the ledger knows of each sentence, as the model reads it.
+	prompted []string
+	// The facts read, and the source each was read as.
+	facts []readFact
 	// What was asked: sources are compared on what bears on it.
 	question string
 }
@@ -196,11 +204,26 @@ func (s *Service) Read(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 
-	return Result{
+	res := Result{
 		Scope: scopeOf(sources, req.LabURLs != nil), Weak: weak, Sources: sources, Results: found, Model: llm.ModelOf(ctx, s.chat), Cited: []int{},
 		shown:    shown(strings.TrimSpace(req.Query), sources, s.cfg.SourceRunes),
 		question: strings.TrimSpace(req.Query),
-	}, nil
+	}
+
+	if s.ledger != nil && len(sources) > 0 {
+		s.readFacts(ctx, &res, req.LabURLs, strings.TrimSpace(req.Query))
+	}
+
+	return res, nil
+}
+
+// read is what the model reads of each source.
+func (r Result) read() []string {
+	if r.prompted != nil {
+		return r.prompted
+	}
+
+	return r.shown
 }
 
 // Write has the model answer from what Read picked - or write what
@@ -213,7 +236,7 @@ func (s *Service) Write(ctx context.Context, req Request, res Result, onDelta fu
 
 	resp, err := s.chat.Stream(ctx, llm.Request{
 		System:      system,
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(res.Sources, res.shown, res.Weak, task)}},
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt(res.Sources, res.read(), res.Weak, task)}},
 		MaxTokens:   maxTokens,
 		Temperature: s.cfg.Temperature,
 	}, onDelta)

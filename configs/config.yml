@@ -204,6 +204,10 @@ facts:
   shortlist: 0.70
   # pairs compared per sweep (two short calls each, ~1 s on CPU)
   pairs_per_sweep: 40
+  # answers read the sentences of a page's facts instead of whole passages
+  # where the ledger has them (passages without facts are read as before);
+  # false reads passages only - the baseline to compare against
+  answers: true
 
 mcp:
   # an MCP server at /mcp for agents (Claude Code and the like), signed in

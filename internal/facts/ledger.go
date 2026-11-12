@@ -25,6 +25,8 @@ type LabFact struct {
 	Agree int    `json:"agree"`
 	// The facts of the lab that cannot be true along with this one.
 	Contested []string `json:"contested,omitempty"`
+	// Read for an answer: the facts it is a restatement of.
+	Same []string `json:"-"`
 }
 
 // Ledger is a lab's facts and how far digesting its pages has come.

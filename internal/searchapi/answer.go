@@ -325,7 +325,7 @@ func (h *answerHandler) stream(w http.ResponseWriter, r *http.Request, timeout t
 	}
 
 	if err := send("done", map[string]any{"cited": res.Cited, "scope": res.Scope, "weak": res.Weak, "model": res.Model, "usage": res.Usage,
-		"verifying": verify, "id": id, "web": before != nil}); err != nil || !verify {
+		"verifying": verify, "id": id, "web": before != nil, "read": res.Read}); err != nil || !verify {
 		return
 	}
 

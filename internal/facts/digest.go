@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 	"web-crawler/internal/vectorstore"
 
@@ -49,6 +50,8 @@ type Digester struct {
 type want struct {
 	url      string
 	ordinals []int
+	// Passages an answer read, when it knows their text and not their numbers.
+	texts []string
 }
 
 // Pages looked at per sweep; due pages beyond wait for the next.
@@ -75,7 +78,16 @@ func (d *Digester) WithRelater(r *Relater) *Digester {
 // It never blocks: when too much is wanted already, the sweep gets to it.
 func (d *Digester) Want(url string, ordinals []int) {
 	select {
-	case d.wanted <- want{url, ordinals}:
+	case d.wanted <- want{url: url, ordinals: ordinals}:
+	default:
+	}
+}
+
+// WantPassages asks for the chunks holding the passages an answer read and
+// found no facts in; they are digested before anything else.
+func (d *Digester) WantPassages(url string, passages []string) {
+	select {
+	case d.wanted <- want{url: url, texts: passages}:
 	default:
 	}
 }
@@ -112,7 +124,7 @@ func (d *Digester) lead(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case w := <-d.wanted:
-			err = d.chunksOf(ctx, Due{URL: w.url}, w.ordinals)
+			err = d.chunksOf(ctx, Due{URL: w.url}, w.ordinals, w.texts)
 		case <-timer.C:
 			err = d.round(ctx)
 		}
@@ -148,7 +160,12 @@ func (d *Digester) Sweep(ctx context.Context) error {
 	}
 
 	for _, page := range due {
-		if err := d.chunksOf(ctx, page, nil); err != nil {
+		// What an answer wants goes first: the sweep resumes where it left.
+		if len(d.wanted) > 0 {
+			return nil
+		}
+
+		if err := d.chunksOf(ctx, page, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -159,7 +176,7 @@ func (d *Digester) Sweep(ctx context.Context) error {
 // chunksOf records the page's indexed version and digests the chunks given,
 // or its planned ones when none are. A page whose new version is reviewed but
 // not indexed yet is left for a later sweep.
-func (d *Digester) chunksOf(ctx context.Context, page Due, ordinals []int) error {
+func (d *Digester) chunksOf(ctx context.Context, page Due, ordinals []int, passages []string) error {
 	rows, err := d.chunks.Chunks(ctx, page.URL)
 	if err != nil {
 		return err
@@ -189,7 +206,13 @@ func (d *Digester) chunksOf(ctx context.Context, page Due, ordinals []int) error
 		}
 	}
 
-	if ordinals == nil {
+	for _, p := range passages {
+		if n := holding(rows, p); n >= 0 && !slices.Contains(ordinals, n) {
+			ordinals = append(ordinals, n)
+		}
+	}
+
+	if ordinals == nil && passages == nil {
 		ordinals = Plan(len(rows), d.cfg.MaxChunks)
 	}
 
@@ -199,6 +222,10 @@ func (d *Digester) chunksOf(ctx context.Context, page Due, ordinals []int) error
 	}
 
 	for _, n := range todo {
+		if page.ReviewHash != "" && len(d.wanted) > 0 {
+			return nil
+		}
+
 		i := slices.IndexFunc(rows, func(r vectorstore.Row) bool { return int(r.Ordinal) == n })
 		if i < 0 {
 			continue
@@ -228,6 +255,27 @@ func (d *Digester) digest(ctx context.Context, url, indexHash string, row vector
 	}
 
 	return d.store.SaveChunk(ctx, url, indexHash, dg)
+}
+
+// holding is the chunk whose text holds the passage, or -1. A passage search
+// found is a chunk's text, maybe without the title the index put before it.
+func holding(rows []vectorstore.Row, passage string) int {
+	p := Normalize(passage)
+	if r := []rune(p); len(r) > 200 {
+		p = string(r[:200])
+	}
+
+	if p == "" {
+		return -1
+	}
+
+	for _, r := range rows {
+		if strings.Contains(Normalize(r.Text), p) {
+			return int(r.Ordinal)
+		}
+	}
+
+	return -1
 }
 
 // Plan picks which of a page's chunks are digested at once: all of a short

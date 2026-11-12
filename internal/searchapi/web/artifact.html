@@ -138,6 +138,7 @@ function render(data) {
 
   claims = {};
   v.sections.forEach((s, i) => (s.claims || []).forEach((c, j) => { claims[`${i}-${j}`] = c; }));
+  for (const [id, c] of Object.entries(claims)) agreeMark(document.querySelector(`#body .mark[data-claim="${id}"]`), c);
   summarize(Object.values(claims));
 
   $("rebuild").hidden = a.kind !== "report";
@@ -190,6 +191,7 @@ function showClaim(id, mark) {
   // replaceChildren would print a null as "null".
   info.replaceChildren(...[
     el("span", { class: "verdict " + c.verdict }, (verdictMarks[c.verdict] || "") + " " + (verdictNames[c.verdict] || c.verdict)),
+    agreeNote(c),
     el("span", {}, c.text),
     c.quote ? el("q", {}, c.quote) : null,
     c.note ? el("span", { class: "note" }, c.note) : null,

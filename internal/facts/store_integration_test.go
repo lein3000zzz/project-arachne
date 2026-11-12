@@ -224,6 +224,16 @@ func TestAgreementAndContestAreReadFromThePairsCompared(t *testing.T) {
 		t.Errorf("ledger %+v", ledger)
 	}
 
+	read, err := store.PageFacts(ctx, []string{"https://a.dev/"}, []string{"https://a.dev/", "https://b.dev/", "https://c.dev/"})
+	if err != nil || len(read) != 1 || read[0].Agree != 2 || !slices.Equal(read[0].Same, []string{b}) || !slices.Equal(read[0].Contested, []string{c}) {
+		t.Errorf("read for an answer: %+v, %v", read, err)
+	}
+
+	// Counted among the pages asked about alone.
+	if read, _ := store.PageFacts(ctx, []string{"https://a.dev/"}, []string{"https://a.dev/"}); len(read) != 1 || read[0].Agree != 1 || len(read[0].Contested) != 0 {
+		t.Errorf("among a.dev alone: %+v", read)
+	}
+
 	// A fact going stale leaves its group and stops contesting.
 	_, _ = pool.Exec(ctx, `UPDATE facts SET stale_at = now() WHERE id = $1`, b)
 

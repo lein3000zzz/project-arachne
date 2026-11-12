@@ -111,6 +111,21 @@ func main() {
 		chat = endpoints.NewRouter(ownEndpoints, serverChat)
 	}
 
+	// The ledger digests lab pages with the server's model, never a user's.
+	factStore := facts.NewPostgresStore(db)
+
+	var digester *facts.Digester
+
+	if cfg.Facts.Enabled && serverChat != nil {
+		digester = facts.NewDigester(logger, factStore, store, facts.NewExtractor(serverChat), facts.DigestConfig{
+			MaxChunks: cfg.Facts.MaxChunks,
+			Every:     cfg.Facts.Every.Std(),
+		}).WithRelater(facts.NewRelater(logger, factStore, embedder, serverChat, review.NewPostgresStore(db), facts.RelateConfig{
+			Shortlist:     cfg.Facts.Shortlist,
+			PairsPerSweep: cfg.Facts.PairsPerSweep,
+		}))
+	}
+
 	if chat != nil {
 		service, err := answer.New(retriever, chat, answer.Config{
 			Sources:       cfg.Chat.ContextChunks,
@@ -125,6 +140,10 @@ func main() {
 		}
 
 		service.ComparesPages(review.NewPostgresStore(db))
+
+		if cfg.Facts.Enabled && cfg.Facts.Answers {
+			service.ReadsFacts(facts.NewAnswerLedger(factStore, digester))
+		}
 
 		if cfg.Verify.Enabled {
 			// A user's own endpoint checks their answers too; the rest get the
@@ -249,7 +268,6 @@ func main() {
 	artifactService.Recover(context.Background())
 	services.Artifacts = artifactService
 
-	factStore := facts.NewPostgresStore(db)
 	if cfg.Facts.Enabled {
 		services.Facts = facts.NewLedgerService(factStore)
 	}
@@ -292,19 +310,10 @@ func main() {
 		copies.Backfill(ctx, logger, review.NewPostgresStore(db), store)
 	}()
 
-	// The ledger digests lab pages with the server's model, never a user's.
-	if cfg.Facts.Enabled && serverChat != nil {
-		digester := facts.NewDigester(logger, factStore, store, facts.NewExtractor(serverChat), facts.DigestConfig{
-			MaxChunks: cfg.Facts.MaxChunks,
-			Every:     cfg.Facts.Every.Std(),
-		}).WithRelater(facts.NewRelater(logger, factStore, embedder, serverChat, review.NewPostgresStore(db), facts.RelateConfig{
-			Shortlist:     cfg.Facts.Shortlist,
-			PairsPerSweep: cfg.Facts.PairsPerSweep,
-		}))
-
+	if digester != nil {
 		go digester.Run(ctx)
 
-		logger.Infow("Digesting lab pages into facts", "maxChunks", cfg.Facts.MaxChunks, "model", serverChat.Model())
+		logger.Infow("Digesting lab pages into facts", "maxChunks", cfg.Facts.MaxChunks, "model", serverChat.Model(), "answersReadFacts", cfg.Facts.Answers)
 	}
 
 	<-ctx.Done()
