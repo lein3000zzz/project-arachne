@@ -402,25 +402,65 @@ async function loadPages() {
 }
 
 // ---- facts: what the lab's pages assert, each on the page's own sentences ----
+// A row is a group: facts of different pages saying the same, the first as
+// its face. What contradicts any of them shows under it.
 let ledger = null;
+const openGroups = new Set();
 
-function factItem(f) {
-  return el("li", { class: "fact" + (f.stale ? " stale" : "") },
-    el("p", { class: "fact-claim" }, f.claim, f.stale ? el("span", { class: "tag", title: "A later version of the page no longer has these sentences" }, "page changed") : null),
+function factSource(f) {
+  return el("div", { class: "work-meta" },
+    el("a", { href: pageHref(f.url), target: "_blank", rel: "noopener noreferrer" }, f.title || host(f.url)),
+    f.about ? " · " + f.about : "");
+}
+
+function groupItem(g) {
+  const f = g.facts[0], others = g.facts.slice(1);
+  const open = openGroups.has(f.id);
+  const toggle = el("button", { type: "button", class: "agree", "aria-expanded": String(open),
+    onclick: () => { open ? openGroups.delete(f.id) : openGroups.add(f.id); factList.redraw(); } },
+    `${g.pages} pages agree`);
+  return el("li", { class: "fact" + (f.stale ? " stale" : "") + (g.against.length ? " contested" : "") },
+    el("p", { class: "fact-claim" }, f.claim,
+      g.pages > 1 ? toggle : null,
+      g.against.length ? el("span", { class: "tag bad" }, "contested") : null,
+      f.stale ? el("span", { class: "tag", title: "A later version of the page no longer has these sentences" }, "page changed") : null),
     el("blockquote", { class: "fact-quote" }, f.quote),
-    el("div", { class: "work-meta" },
-      el("a", { href: pageHref(f.url), target: "_blank", rel: "noopener noreferrer" }, f.title || host(f.url)),
-      f.about ? " · " + f.about : ""));
+    factSource(f),
+    open ? el("ul", { class: "fact-others" }, others.map((o) => el("li", {},
+      el("p", { class: "fact-claim" }, o.claim), el("blockquote", { class: "fact-quote" }, o.quote), factSource(o)))) : null,
+    g.against.length ? el("ul", { class: "fact-against" }, g.against.map((o) => el("li", {},
+      el("p", { class: "fact-claim" }, el("span", { class: "note" }, "but "), o.claim),
+      el("blockquote", { class: "fact-quote" }, o.quote), factSource(o)))) : null);
+}
+
+function groupsOfFacts(facts) {
+  const byID = new Map(facts.map((f) => [f.id, f]));
+  const groups = new Map();
+  for (const f of facts) {
+    const g = groups.get(f.group) || { facts: [], pages: f.agree, against: [] };
+    g.facts.push(f);
+    groups.set(f.group, g);
+  }
+  for (const g of groups.values()) {
+    const mine = new Set(g.facts.map((f) => f.id));
+    const seen = new Set();
+    for (const f of g.facts) for (const id of f.contested || []) {
+      if (!mine.has(id) && !seen.has(id) && byID.has(id)) { seen.add(id); g.against.push(byID.get(id)); }
+    }
+  }
+  return [...groups.values()];
 }
 
 const factList = listView({
   filters: [
-    ["live", "current", (f) => !f.stale],
-    ["stale", "changed since", (f) => f.stale],
+    ["live", "current", (g) => !g.facts[0].stale],
+    ["agreed", "agreed by 2+", (g) => g.pages > 1],
+    ["contested", "contested", (g) => g.against.length > 0],
+    ["stale", "changed since", (g) => g.facts[0].stale],
     ["all", "all", () => true],
   ],
-  text: (f) => [f.claim, f.quote, f.about, f.title, f.url].join(" "),
-  row: factItem,
+  text: (g) => g.facts.map((f) => [f.claim, f.quote, f.about, f.title, f.url].join(" ")).join(" "),
+  row: groupItem,
   empty: "No facts yet: the lab's pages are digested in the background once they are indexed.",
   wrap: (rows) => el("ol", { class: "facts" }, rows),
 });
@@ -449,13 +489,19 @@ async function loadFacts() {
   const digesting = ledger.digested < ledger.pages;
   $("tabFacts").hidden = false;
   $("countFacts").textContent = live || "";
-  factList.set(ledger.facts);
-  $("factsSummary").textContent = [
-    `${plural(live, "fact")} from ${ledger.digested} of ${plural(ledger.pages, "page")} digested`,
+  factList.set(groupsOfFacts(ledger.facts));
+  const said = [
+    `${plural(live, "fact")} from ${ledger.digested} of ${plural(ledger.pages, "page")}`,
+    ledger.agreed ? `${ledger.agreed} stated by two pages or more` : (live ? "none stated by two pages yet" : null),
+    ledger.contested ? `${ledger.contested} contested by another page` : null,
+  ];
+  const how = [
     digesting ? `the rest are being digested in the background${ledger.seconds_per_chunk ? `, about ${Math.round(ledger.seconds_per_chunk)} s a passage` : ""}` : null,
     stale ? `${stale} no longer on their page` : null,
-    ledger.rejected ? `${ledger.rejected} the model offered were not borne out by the sentences it named, and left out` : null,
-  ].filter(Boolean).join(" · ") + ".";
+    ledger.rejected ? `${ledger.rejected} offered by the model were not borne out by their sentences and left out` : null,
+  ].filter(Boolean);
+  $("factsSummary").replaceChildren(el("span", {}, said.filter(Boolean).join(" · ") + "."),
+    how.length ? el("span", { class: "facts-how" }, how.join(" · ") + ".") : null);
 
   // Digesting takes minutes a page: the list catches up while it is looked at.
   if (digesting && current === "facts") factsPolling = setTimeout(loadFacts, 15000);
@@ -664,6 +710,8 @@ function renderOverview() {
     cards.push(card("facts", "Facts", live, [
       [`from ${ledger.digested} of ${plural(ledger.pages, "page")}`],
       ledger.digested < ledger.pages ? ["digesting the rest…"] : null,
+      ledger.agreed ? [`${ledger.agreed} agreed by 2+ pages`, () => { showTab("facts"); factList.show("agreed"); }] : null,
+      ledger.contested ? [`${ledger.contested} contested`, () => { showTab("facts"); factList.show("contested"); }] : null,
       stale ? [`${stale} no longer on their page`, () => { showTab("facts"); factList.show("stale"); }] : null,
     ]));
   }

@@ -198,6 +198,12 @@ facts:
   # and between); the rest when an answer reads them. ~5-20 s a chunk on CPU
   max_chunks: 12
   every: 30s
+  # facts of different pages at least this similar (cosine, instructed
+  # embedding) are compared by the model: the same, contradicting or neither.
+  # On a labelled set restatements scored >= 0.77, different facts <= 0.75
+  shortlist: 0.70
+  # pairs compared per sweep (two short calls each, ~1 s on CPU)
+  pairs_per_sweep: 40
 
 mcp:
   # an MCP server at /mcp for agents (Claude Code and the like), signed in

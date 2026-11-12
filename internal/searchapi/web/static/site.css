@@ -784,3 +784,15 @@ body.asked #search .hero .base-stats { display: none; }
 }
 .fact.stale .fact-claim { color: var(--muted); }
 #factsSummary { max-width: 80ch; }
+/* Agreement opens the other pages' words; a contest shows the other side. */
+.agree {
+  font: inherit; font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; vertical-align: 0.15em; margin-left: 0.5rem;
+  border: 1px solid var(--ok); color: var(--ok); background: none; border-radius: 999px; padding: 0 0.5rem; cursor: pointer;
+}
+.agree[aria-expanded="true"] { background: var(--ok); color: var(--bg); }
+.fact-others, .fact-against { list-style: none; margin: 0.6rem 0 0; padding: 0 0 0 0.9rem; display: grid; gap: 0.6rem; }
+.fact-others { border-left: 2px solid var(--ok); }
+.fact-against { border-left: 2px solid var(--bad); }
+.fact-others .fact-claim, .fact-against .fact-claim { font-size: 0.85rem; }
+#factsSummary > span { display: block; }
+#factsSummary .facts-how { font-size: 0.78rem; opacity: 0.8; margin-top: 0.2rem; }

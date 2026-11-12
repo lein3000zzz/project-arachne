@@ -19,6 +19,12 @@ type LabFact struct {
 	Title   string `json:"title"`
 	Ordinal int    `json:"ordinal"`
 	Stale   bool   `json:"stale"`
+	// Facts of other pages that say the same share a group; Agree is how many
+	// pages its group spans, itself included.
+	Group string `json:"group"`
+	Agree int    `json:"agree"`
+	// The facts of the lab that cannot be true along with this one.
+	Contested []string `json:"contested,omitempty"`
 }
 
 // Ledger is a lab's facts and how far digesting its pages has come.
@@ -31,6 +37,9 @@ type Ledger struct {
 	// Offered by the model and not borne out by the sentences it named.
 	Rejected int     `json:"rejected"`
 	Seconds  float64 `json:"seconds_per_chunk"`
+	// Groups that two or more pages state, and facts something contests.
+	Agreed    int `json:"agreed"`
+	Contested int `json:"contested"`
 }
 
 // Most facts a lab shows at once.
@@ -75,6 +84,10 @@ func (s *PostgresStore) Ledger(ctx context.Context, ownerID, labID string) (Ledg
 		return Ledger{}, err
 	}
 
+	if err := s.relateLedger(ctx, &l); err != nil {
+		return Ledger{}, err
+	}
+
 	var seconds *float64
 
 	err = s.pool.QueryRow(ctx, `
@@ -97,6 +110,89 @@ func (s *PostgresStore) Ledger(ctx context.Context, ownerID, labID string) (Ledg
 	}
 
 	return l, nil
+}
+
+// relateLedger groups the live facts that say the same and marks those
+// something contradicts, from the pairs compared.
+func (s *PostgresStore) relateLedger(ctx context.Context, l *Ledger) error {
+	index := map[string]int{}
+	var ids []string
+
+	for i, f := range l.Facts {
+		l.Facts[i].Group, l.Facts[i].Agree = f.ID, 1
+		if !f.Stale {
+			index[f.ID] = i
+			ids = append(ids, f.ID)
+		}
+	}
+
+	rows, err := s.pool.Query(ctx, `SELECT a, b, relation FROM fact_links WHERE relation <> 'different' AND a = ANY($1) AND b = ANY($1)`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	parent := make([]int, len(l.Facts))
+	for i := range parent {
+		parent[i] = i
+	}
+
+	find := func(i int) int {
+		for parent[i] != i {
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		}
+
+		return i
+	}
+
+	for rows.Next() {
+		var a, b, relation string
+		if err := rows.Scan(&a, &b, &relation); err != nil {
+			return err
+		}
+
+		i, j := index[a], index[b]
+
+		switch relation {
+		case Same:
+			parent[find(i)] = find(j)
+		case Contradict:
+			l.Facts[i].Contested = append(l.Facts[i].Contested, b)
+			l.Facts[j].Contested = append(l.Facts[j].Contested, a)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	pages := map[int]map[string]bool{}
+	for i := range l.Facts {
+		root := find(i)
+		if pages[root] == nil {
+			pages[root] = map[string]bool{}
+		}
+
+		pages[root][l.Facts[i].URL] = true
+	}
+
+	for i := range l.Facts {
+		root := find(i)
+		l.Facts[i].Group, l.Facts[i].Agree = l.Facts[root].ID, len(pages[root])
+
+		if len(l.Facts[i].Contested) > 0 {
+			l.Contested++
+		}
+	}
+
+	for root, urls := range pages {
+		if find(root) == root && len(urls) > 1 {
+			l.Agreed++
+		}
+	}
+
+	return nil
 }
 
 // LedgerService gives labs their ledgers.

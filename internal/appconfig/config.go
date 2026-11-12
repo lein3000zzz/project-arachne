@@ -48,6 +48,11 @@ type Facts struct {
 	MaxChunks int `yaml:"max_chunks"`
 	// How often pages due for digesting are looked for.
 	Every Duration `yaml:"every"`
+	// Facts of different pages at least this similar are compared by the
+	// model: the same, contradicting, or different.
+	Shortlist float64 `yaml:"shortlist"`
+	// Pairs compared per sweep; digesting goes on between.
+	PairsPerSweep int `yaml:"pairs_per_sweep"`
 }
 
 type UI struct {
@@ -466,9 +471,11 @@ func Default() Config {
 		MCP: MCP{Enabled: true},
 		UI:  UI{ListSize: 15},
 		Facts: Facts{
-			Enabled:   true,
-			MaxChunks: 12,
-			Every:     Duration(30 * time.Second),
+			Enabled:       true,
+			MaxChunks:     12,
+			Every:         Duration(30 * time.Second),
+			Shortlist:     0.70,
+			PairsPerSweep: 40,
 		},
 		Endpoints: Endpoints{
 			Enabled:     true,
@@ -603,6 +610,7 @@ func (c *Config) Validate() error {
 		{"verify.max_claims", c.Verify.MaxClaims},
 		{"ui.list_size", c.UI.ListSize},
 		{"facts.max_chunks", c.Facts.MaxChunks},
+		{"facts.pairs_per_sweep", c.Facts.PairsPerSweep},
 		{"verify.max_tokens", c.Verify.MaxTokens},
 		{"artifacts.max_sections", c.Artifacts.MaxSections},
 		{"weblookup.results", c.WebLookup.Results},
@@ -749,6 +757,10 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("%w: chat.provider %q must be %q, %q or %q", ErrInvalidConfig, c.Chat.Provider,
 			ChatProviderOpenAICompatible, ChatProviderOpenAI, ChatProviderAnthropic)
+	}
+
+	if c.Facts.Shortlist <= 0 || c.Facts.Shortlist >= 1 {
+		return fmt.Errorf("%w: facts.shortlist must be in (0, 1)", ErrInvalidConfig)
 	}
 
 	if c.Retrieval.PageRankWeight < 0 || c.Retrieval.SiteRankWeight < 0 {

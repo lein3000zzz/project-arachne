@@ -137,3 +137,97 @@ func TestTheLedgerFollowsAPageThroughItsVersions(t *testing.T) {
 		r()
 	}
 }
+
+func TestAgreementAndContestAreReadFromThePairsCompared(t *testing.T) {
+	pool := dbtest.NewPool(t)
+	store := NewPostgresStore(pool)
+	ctx := context.Background()
+
+	var owner, lab string
+	if err := pool.QueryRow(ctx, `
+		WITH u AS (INSERT INTO users (username, password_hash) VALUES ('lein', 'x') RETURNING id)
+		INSERT INTO labs (owner_id, name) SELECT id, 'chiefs' FROM u RETURNING owner_id, id`).Scan(&owner, &lab); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, u := range []string{"https://a.dev/", "https://b.dev/", "https://c.dev/"} {
+		if _, err := pool.Exec(ctx, `
+			WITH s AS (INSERT INTO sources (lab_id, kind, url, max_depth, max_links) VALUES ($1, 'research', $2, 1, 1) RETURNING id),
+			p AS (INSERT INTO pages (url, host, status) VALUES ($2, 'h', 200) RETURNING id)
+			INSERT INTO source_pages (source_id, page_id) SELECT s.id, p.id FROM s, p`, lab, u); err != nil {
+			t.Fatal(err)
+		}
+
+		_ = store.SaveChunk(ctx, u, "i1", Digested{Ordinal: 0, TextHash: "t", Model: "m", Facts: []Fact{{Claim: "Chiefs compete on " + u, Quote: "q " + u}}})
+	}
+
+	claims, err := store.Unembedded(ctx, "e", 10)
+	if err != nil || len(claims) != 3 {
+		t.Fatalf("unembedded %+v, %v", claims, err)
+	}
+
+	for i := range claims {
+		claims[i].Vector = []float32{1, float32(i), 0}
+	}
+
+	if err := store.SaveEmbeddings(ctx, "e", claims); err != nil {
+		t.Fatal(err)
+	}
+
+	if more, _ := store.Unembedded(ctx, "e", 10); len(more) != 0 {
+		t.Errorf("still unembedded: %+v", more)
+	}
+
+	if again, _ := store.Unembedded(ctx, "a new embedder", 10); len(again) != 3 {
+		t.Errorf("a new embedder embeds again: %d", len(again))
+	}
+
+	labs, err := store.LabsToRelate(ctx, "e")
+	if err != nil || len(labs) != 1 || labs[lab] == "" {
+		t.Fatalf("labs to relate %v, %v", labs, err)
+	}
+
+	got, err := store.LabClaims(ctx, lab, "e")
+	if err != nil || len(got) != 3 || len(got[0].Vector) != 3 {
+		t.Fatalf("lab claims %+v, %v", got, err)
+	}
+
+	a, b, c := got[0].ID, got[1].ID, got[2].ID
+	_ = store.SaveLink(ctx, b, a, Same, 0.9, "m")
+	_ = store.SaveLink(ctx, a, b, Different, 0.9, "m")
+	_ = store.SaveLink(ctx, a, c, Contradict, 0.8, "m")
+
+	if compared, _ := store.Compared(ctx, []string{a, b, c}); len(compared) != 2 || !compared[key(a, b)] {
+		t.Errorf("compared %v: the first verdict on a pair stands", compared)
+	}
+
+	if err := store.SetLabState(ctx, lab, labs[lab]); err != nil {
+		t.Fatal(err)
+	}
+
+	if again, _ := store.LabsToRelate(ctx, "e"); len(again) != 0 {
+		t.Errorf("related already, due again: %v", again)
+	}
+
+	ledger, err := store.Ledger(ctx, owner, lab)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID := map[string]LabFact{}
+	for _, f := range ledger.Facts {
+		byID[f.ID] = f
+	}
+
+	if byID[a].Agree != 2 || byID[b].Agree != 2 || byID[a].Group != byID[b].Group || byID[c].Agree != 1 ||
+		!slices.Equal(byID[a].Contested, []string{c}) || !slices.Equal(byID[c].Contested, []string{a}) || ledger.Agreed != 1 || ledger.Contested != 2 {
+		t.Errorf("ledger %+v", ledger)
+	}
+
+	// A fact going stale leaves its group and stops contesting.
+	_, _ = pool.Exec(ctx, `UPDATE facts SET stale_at = now() WHERE id = $1`, b)
+
+	if l, _ := store.Ledger(ctx, owner, lab); l.Agreed != 0 {
+		t.Errorf("a stale fact still agrees: %+v", l)
+	}
+}

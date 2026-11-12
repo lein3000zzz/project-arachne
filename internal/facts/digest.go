@@ -43,6 +43,7 @@ type Digester struct {
 	extract *Extractor
 	cfg     DigestConfig
 	wanted  chan want
+	relater *Relater
 }
 
 type want struct {
@@ -61,6 +62,13 @@ func NewDigester(logger *zap.SugaredLogger, store Store, chunks Chunks, extract 
 	cfg.Every = cmp.Or(cfg.Every, 30*time.Second)
 
 	return &Digester{logger: logger, store: store, chunks: chunks, extract: extract, cfg: cfg, wanted: make(chan want, 64)}
+}
+
+// WithRelater has the digester also relate the facts it digested, after
+// each sweep: which say the same thing, which cannot both be true.
+func (d *Digester) WithRelater(r *Relater) *Digester {
+	d.relater = r
+	return d
 }
 
 // Want asks for chunks of a page an answer is reading, ahead of the sweep.
@@ -106,7 +114,7 @@ func (d *Digester) lead(ctx context.Context) {
 		case w := <-d.wanted:
 			err = d.chunksOf(ctx, Due{URL: w.url}, w.ordinals)
 		case <-timer.C:
-			err = d.Sweep(ctx)
+			err = d.round(ctx)
 		}
 
 		wait := d.cfg.Every
@@ -117,6 +125,19 @@ func (d *Digester) lead(ctx context.Context) {
 
 		timer.Reset(wait)
 	}
+}
+
+// round digests what is due, then embeds and relates what that gave.
+func (d *Digester) round(ctx context.Context) error {
+	if err := d.Sweep(ctx); err != nil || d.relater == nil {
+		return err
+	}
+
+	if err := d.relater.Embed(ctx); err != nil {
+		return err
+	}
+
+	return d.relater.Relate(ctx)
 }
 
 // Sweep digests the due pages it finds, as far as their planned chunks.

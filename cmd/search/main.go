@@ -297,7 +297,10 @@ func main() {
 		digester := facts.NewDigester(logger, factStore, store, facts.NewExtractor(serverChat), facts.DigestConfig{
 			MaxChunks: cfg.Facts.MaxChunks,
 			Every:     cfg.Facts.Every.Std(),
-		})
+		}).WithRelater(facts.NewRelater(logger, factStore, embedder, serverChat, review.NewPostgresStore(db), facts.RelateConfig{
+			Shortlist:     cfg.Facts.Shortlist,
+			PairsPerSweep: cfg.Facts.PairsPerSweep,
+		}))
 
 		go digester.Run(ctx)
 
