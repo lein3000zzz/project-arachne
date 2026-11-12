@@ -54,6 +54,7 @@
     <button type="button" class="tab" role="tab" data-tab="overview">Overview</button>
     <button type="button" class="tab" role="tab" data-tab="sources">Sources <span class="count" id="countSources"></span></button>
     <button type="button" class="tab" role="tab" data-tab="research" id="tabResearch" hidden>Research <span class="count" id="countResearch"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="facts" id="tabFacts" hidden>Facts <span class="count" id="countFacts"></span></button>
     <button type="button" class="tab" role="tab" data-tab="references" id="tabReferences" hidden>References <span class="count" id="countReferences"></span></button>
     <button type="button" class="tab" role="tab" data-tab="artifacts">Reports <span class="count" id="countArtifacts"></span></button>
     <button type="button" class="tab" role="tab" data-tab="pages">Pages <span class="count" id="countPages"></span></button>
@@ -151,6 +152,11 @@
     </div>
   </section>
 
+  <section class="panel" id="facts" role="tabpanel" hidden>
+    <p class="note" id="factsSummary" aria-live="polite"></p>
+    <div id="factList"></div>
+  </section>
+
   <section class="panel" id="references" role="tabpanel" hidden>
     <p class="note">What this lab's documents link to or cite. None of it is crawled unless you add it: each one becomes a
       source of its own, that page alone, reviewed like any other page.</p>
@@ -228,7 +234,7 @@ let polling = null;
 let lab = null;
 
 // ---- tabs: one part of the lab at a time; the address names it ----
-const tabs = ["overview", "sources", "research", "references", "artifacts", "pages", "settings"];
+const tabs = ["overview", "sources", "research", "facts", "references", "artifacts", "pages", "settings"];
 const tabAliases = { web: "research", reports: "artifacts" };
 let current = "overview";
 
@@ -243,6 +249,7 @@ function showTab(name, focus) {
   }
   history.replaceState(null, "", location.pathname + location.search + (name === "overview" ? "" : "#" + name));
   if (focus) $(focus).focus();
+  if (name === "facts" && ledger && ledger.digested < ledger.pages) loadFacts();
 }
 
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -394,6 +401,67 @@ async function loadPages() {
   }
 }
 
+// ---- facts: what the lab's pages assert, each on the page's own sentences ----
+let ledger = null;
+
+function factItem(f) {
+  return el("li", { class: "fact" + (f.stale ? " stale" : "") },
+    el("p", { class: "fact-claim" }, f.claim, f.stale ? el("span", { class: "tag", title: "A later version of the page no longer has these sentences" }, "page changed") : null),
+    el("blockquote", { class: "fact-quote" }, f.quote),
+    el("div", { class: "work-meta" },
+      el("a", { href: pageHref(f.url), target: "_blank", rel: "noopener noreferrer" }, f.title || host(f.url)),
+      f.about ? " · " + f.about : ""));
+}
+
+const factList = listView({
+  filters: [
+    ["live", "current", (f) => !f.stale],
+    ["stale", "changed since", (f) => f.stale],
+    ["all", "all", () => true],
+  ],
+  text: (f) => [f.claim, f.quote, f.about, f.title, f.url].join(" "),
+  row: factItem,
+  empty: "No facts yet: the lab's pages are digested in the background once they are indexed.",
+  wrap: (rows) => el("ol", { class: "facts" }, rows),
+});
+$("factList").append(factList.el);
+
+let factsPolling = null;
+
+// Returns whether pages are still being digested.
+async function loadFacts() {
+  clearTimeout(factsPolling);
+  try {
+    const res = await call(`${base}/facts`);
+    if (res.status === 503) {
+      $("tabFacts").hidden = true;
+      return false;
+    }
+    const l = await res.json();
+    if (!res.ok) throw new Error(l.error || res.statusText);
+    ledger = l;
+  } catch (err) {
+    $("factsSummary").replaceChildren(el("span", { class: "error" }, err.message));
+    return false;
+  }
+
+  const live = ledger.facts.filter((f) => !f.stale).length, stale = ledger.facts.length - live;
+  const digesting = ledger.digested < ledger.pages;
+  $("tabFacts").hidden = false;
+  $("countFacts").textContent = live || "";
+  factList.set(ledger.facts);
+  $("factsSummary").textContent = [
+    `${plural(live, "fact")} from ${ledger.digested} of ${plural(ledger.pages, "page")} digested`,
+    digesting ? `the rest are being digested in the background${ledger.seconds_per_chunk ? `, about ${Math.round(ledger.seconds_per_chunk)} s a passage` : ""}` : null,
+    stale ? `${stale} no longer on their page` : null,
+    ledger.rejected ? `${ledger.rejected} the model offered were not borne out by the sentences it named, and left out` : null,
+  ].filter(Boolean).join(" · ") + ".";
+
+  // Digesting takes minutes a page: the list catches up while it is looked at.
+  if (digesting && current === "facts") factsPolling = setTimeout(loadFacts, 15000);
+  return digesting;
+}
+
 // ---- quality: how good the lab's material is, before an answer leans on it ----
 let quality = null;
 
@@ -476,7 +544,7 @@ async function load() {
   sources.set(lab.sources);
   renderEngines(lab.engines);
 
-  const [researching, building] = await Promise.all([loadResearch(), loadArtifacts(), loadPages(), loadReferences(), loadQuality()]);
+  const [researching, building] = await Promise.all([loadResearch(), loadArtifacts(), loadPages(), loadReferences(), loadQuality(), loadFacts()]);
   renderOverview();
   if (researching || building || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
 }
@@ -588,6 +656,15 @@ function renderOverview() {
       c.works ? [`${c.works} found · ${c.in} in the index`] : null,
       c.pending ? [`${c.pending} not yet judged`, goGroup("pending")] : null,
       c.estimate ? [`about ${Math.round(c.estimate.share * 100)}% of what exists found`] : null,
+    ]));
+  }
+
+  if (ledger) {
+    const live = ledger.facts.filter((f) => !f.stale).length, stale = ledger.facts.length - live;
+    cards.push(card("facts", "Facts", live, [
+      [`from ${ledger.digested} of ${plural(ledger.pages, "page")}`],
+      ledger.digested < ledger.pages ? ["digesting the rest…"] : null,
+      stale ? [`${stale} no longer on their page`, () => { showTab("facts"); factList.show("stale"); }] : null,
     ]));
   }
 

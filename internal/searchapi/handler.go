@@ -72,6 +72,7 @@ type Services struct {
 	Tokens    TokenService
 	Research  ResearchService
 	Base      BaseStats
+	Facts     FactService
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -113,6 +114,8 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /api/base", signIn.api((&baseHandler{logger: logger, stats: services.Base}).get))
 
 	researchAPI := &researchHandler{logger: logger, service: services.Research, labs: labsAPI}
+	factsAPI := &factsHandler{service: services.Facts, labs: labsAPI}
+	mux.Handle("GET /api/labs/{id}/facts", signIn.api(factsAPI.ledger))
 	mux.Handle("POST /api/labs/{id}/research", signIn.api(researchAPI.start))
 	mux.Handle("GET /api/labs/{id}/research", signIn.api(researchAPI.researchMap))
 	mux.Handle("PUT /api/labs/{id}/research/works/{work}", signIn.api(researchAPI.setVerdict))

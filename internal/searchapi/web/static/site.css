@@ -770,3 +770,17 @@ body.asked #search .hero .base-stats { display: none; }
 .sub-merge select { width: auto; min-width: 12rem; }
 .sub-merge p { flex-basis: 100%; margin: 0; }
 #renameForm { margin: 0.6rem 0 0.4rem; }
+
+/* The ledger: a claim, the page's own sentences under it, the page. */
+.facts { list-style: none; margin: 0.4rem 0 0; padding: 0; max-width: 80ch; }
+.fact { padding: 0.8rem 0; border-bottom: 1px solid var(--line); }
+.fact:last-child { border-bottom: 0; }
+.fact-claim { margin: 0 0 0.35rem; font-size: 0.92rem; overflow-wrap: anywhere; }
+.fact-quote, .fact .work-meta { overflow-wrap: anywhere; }
+.fact-quote {
+  margin: 0 0 0.35rem; padding: 0.1rem 0 0.1rem 0.8rem; border-left: 2px solid var(--line);
+  font-family: var(--mono); font-size: 0.78rem; color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.fact.stale .fact-claim { color: var(--muted); }
+#factsSummary { max-width: 80ch; }

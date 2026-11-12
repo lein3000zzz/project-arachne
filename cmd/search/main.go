@@ -11,6 +11,7 @@ import (
 	"web-crawler/internal/artifacts"
 	"web-crawler/internal/copies"
 	"web-crawler/internal/endpoints"
+	"web-crawler/internal/facts"
 	"web-crawler/internal/labs"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/pages"
@@ -248,6 +249,11 @@ func main() {
 	artifactService.Recover(context.Background())
 	services.Artifacts = artifactService
 
+	factStore := facts.NewPostgresStore(db)
+	if cfg.Facts.Enabled {
+		services.Facts = facts.NewLedgerService(factStore)
+	}
+
 	handler := searchapi.NewHandler(logger, services, searchapi.Config{
 		ServerModel:      serverModel,
 		WebLookupTimeout: cfg.WebLookup.Timeout.Std(),
@@ -285,6 +291,18 @@ func main() {
 		defer close(sketched)
 		copies.Backfill(ctx, logger, review.NewPostgresStore(db), store)
 	}()
+
+	// The ledger digests lab pages with the server's model, never a user's.
+	if cfg.Facts.Enabled && serverChat != nil {
+		digester := facts.NewDigester(logger, factStore, store, facts.NewExtractor(serverChat), facts.DigestConfig{
+			MaxChunks: cfg.Facts.MaxChunks,
+			Every:     cfg.Facts.Every.Std(),
+		})
+
+		go digester.Run(ctx)
+
+		logger.Infow("Digesting lab pages into facts", "maxChunks", cfg.Facts.MaxChunks, "model", serverChat.Model())
+	}
 
 	<-ctx.Done()
 

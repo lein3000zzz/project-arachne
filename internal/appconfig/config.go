@@ -32,10 +32,22 @@ type Config struct {
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
 	Research    Research    `yaml:"research"`
+	Facts       Facts       `yaml:"facts"`
 	Cache       Cache       `yaml:"cache"`
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
 	Shutdown    Shutdown    `yaml:"shutdown"`
+}
+
+// Facts is the ledger: the pages of labs digested into short claims, each
+// resting on sentences of its page, by the server's chat model.
+type Facts struct {
+	Enabled bool `yaml:"enabled"`
+	// Chunks of a page digested as soon as it is indexed; the rest when an
+	// answer reads them.
+	MaxChunks int `yaml:"max_chunks"`
+	// How often pages due for digesting are looked for.
+	Every Duration `yaml:"every"`
 }
 
 type UI struct {
@@ -453,6 +465,11 @@ func Default() Config {
 		},
 		MCP: MCP{Enabled: true},
 		UI:  UI{ListSize: 15},
+		Facts: Facts{
+			Enabled:   true,
+			MaxChunks: 12,
+			Every:     Duration(30 * time.Second),
+		},
 		Endpoints: Endpoints{
 			Enabled:     true,
 			TestTimeout: Duration(30 * time.Second),
@@ -585,6 +602,7 @@ func (c *Config) Validate() error {
 		{"review.max_tokens", c.Review.MaxTokens},
 		{"verify.max_claims", c.Verify.MaxClaims},
 		{"ui.list_size", c.UI.ListSize},
+		{"facts.max_chunks", c.Facts.MaxChunks},
 		{"verify.max_tokens", c.Verify.MaxTokens},
 		{"artifacts.max_sections", c.Artifacts.MaxSections},
 		{"weblookup.results", c.WebLookup.Results},
@@ -642,6 +660,7 @@ func (c *Config) Validate() error {
 		{"endpoints.test_timeout", c.Endpoints.TestTimeout},
 		{"weblookup.fresh_for", c.WebLookup.FreshFor},
 		{"weblookup.timeout", c.WebLookup.Timeout},
+		{"facts.every", c.Facts.Every},
 		{"websearch.request_timeout", c.WebSearch.RequestTimeout},
 		{"research.round_wait", c.Research.RoundWait},
 		{"research.timeout", c.Research.Timeout},

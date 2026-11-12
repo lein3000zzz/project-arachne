@@ -190,6 +190,15 @@ ui:
   # at a time; the rest is a page further
   list_size: 15
 
+facts:
+  # the ledger: the pages of labs digested into short claims, each resting on
+  # sentences of its page, by the server's chat model, in the background
+  enabled: true
+  # chunks of a page digested as soon as it is indexed (its start, its end
+  # and between); the rest when an answer reads them. ~5-20 s a chunk on CPU
+  max_chunks: 12
+  every: 30s
+
 mcp:
   # an MCP server at /mcp for agents (Claude Code and the like), signed in
   # with an API token each user makes on their settings page. It does what
