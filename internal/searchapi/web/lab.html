@@ -673,6 +673,12 @@ function nextStep() {
   if (c && c.pending && !(run && run.status === "running")) {
     return [`${plural(c.pending, "work")} found by research still wait for a verdict.`, act("Judge them", goGroup("pending"))];
   }
+  const stale = artifactList.filter((a) => a.drifted);
+  if (stale.length) {
+    return [`${plural(stale.length, "report")} ${stale.length === 1 ? "rests" : "rest"} on pages that changed after ${stale.length === 1 ? "it was" : "they were"} written: rebuild to write from what the lab holds now.`,
+      el("a", { class: "action small", href: `/labs/${labID}/artifacts/${stale[0].id}` }, stale.length === 1 ? "Open it" : "Open the first")];
+  }
+
   if (!artifactList.length) {
     return ["Ready: look something up with this lab, or have a report written from it.",
       el("a", { class: "action small primary", href: "/?labs=" + lab.id }, "Look up"),
@@ -719,6 +725,7 @@ function renderOverview() {
   const writing = artifactList.filter((a) => a.latest.status === "running").length;
   cards.push(card("artifacts", "Reports", artifactList.length, [
     writing ? [`${writing} being written`] : null,
+    artifactList.some((a) => a.drifted) ? [`${artifactList.filter((a) => a.drifted).length} with changed sources`, () => showTab("artifacts")] : null,
     artifactList[0] ? ["latest: " + artifactList[0].title, () => location.assign(`/labs/${labID}/artifacts/${artifactList[0].id}`)] : ["none yet"],
   ]));
 
@@ -842,7 +849,9 @@ function artifactRow(a) {
     el("a", { href: `/labs/${labID}/artifacts/${a.id}` }, a.title),
     el("span", { class: "tag" }, a.kind === "answer" ? "answer" : "report"),
     status,
-    v.status === "running" ? el("span", { class: "note" }, `${done} of ${v.sections.length} sections written`) : null);
+    v.status === "running" ? el("span", { class: "note" }, `${done} of ${v.sections.length} sections written`) : null,
+    a.drifted ? el("span", { class: "error", title: "Pages it cites changed after it was written and no longer have these claims' words" },
+      `${plural(a.drifted, "claim")} lost ${a.drifted === 1 ? "its" : "their"} words on a changed page`) : null);
 }
 
 // Returns whether a report is being built, so the page keeps polling.

@@ -1,9 +1,11 @@
 package artifacts
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"web-crawler/internal/labs"
 
 	"github.com/jackc/pgx/v5"
@@ -118,7 +120,9 @@ const artifactColumns = `a.id, a.lab_id, a.kind, a.title, a.request, a.created_a
 const latestColumns = `
 	v.version, v.status, v.outline, v.error, v.model, v.seconds, v.started_at, v.finished_at,
 	coalesce((SELECT jsonb_agg(jsonb_build_object('heading', e->>'heading', 'state', e->>'state'))
-	          FROM jsonb_array_elements(v.sections) e), '[]')`
+	          FROM jsonb_array_elements(v.sections) e), '[]'),
+	(SELECT coalesce(sum(jsonb_array_length(c.missing)), 0) FROM artifact_checks c
+	 WHERE c.artifact_id = v.artifact_id AND c.version = v.version)`
 
 func (s *PostgresStore) List(ctx context.Context, ownerID, labID string) ([]Artifact, error) {
 	rows, err := s.pool.Query(ctx, `
@@ -141,7 +145,7 @@ func scanListed(row pgx.CollectableRow) (Artifact, error) {
 	)
 
 	err := row.Scan(&a.ID, &a.LabID, &a.Kind, &a.Title, &a.Request, &a.CreatedAt, &a.UpdatedAt,
-		&v.Number, &v.Status, &v.Outline, &v.Error, &v.Model, &v.Seconds, &v.StartedAt, &v.FinishedAt, &v.Sections)
+		&v.Number, &v.Status, &v.Outline, &v.Error, &v.Model, &v.Seconds, &v.StartedAt, &v.FinishedAt, &v.Sections, &a.Drifted)
 	a.Latest = &v
 
 	return a, err
@@ -180,7 +184,24 @@ func (s *PostgresStore) Version(ctx context.Context, ownerID, artifactID string,
 		return Version{}, ErrNotFound
 	}
 
-	return v, err
+	if err != nil {
+		return Version{}, err
+	}
+
+	checks, err := s.Checks(ctx, artifactID, v.Number)
+	if err != nil {
+		return Version{}, err
+	}
+
+	for _, c := range checks {
+		for _, k := range c.Missing {
+			v.Drift = append(v.Drift, Drift{Section: k[0], Claim: k[1], URL: c.URL, Gone: c.Gone, ChangedAt: c.ChangedAt})
+		}
+	}
+
+	slices.SortFunc(v.Drift, func(a, b Drift) int { return cmp.Or(a.Section-b.Section, a.Claim-b.Claim) })
+
+	return v, nil
 }
 
 func (s *PostgresStore) Versions(ctx context.Context, ownerID, artifactID string) ([]int, error) {
@@ -211,4 +232,99 @@ func (s *PostgresStore) Interrupt(ctx context.Context) (int64, error) {
 		WHERE status = 'running'`)
 
 	return tag.RowsAffected(), err
+}
+
+func (s *PostgresStore) ToCheck(ctx context.Context, limit int) ([]Watched, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH newest AS (
+			SELECT DISTINCT ON (artifact_id) artifact_id, version, status, sections, sources
+			FROM artifact_versions ORDER BY artifact_id, version DESC)
+		SELECT n.artifact_id, n.version, n.sections, n.sources FROM newest n
+		WHERE n.status = 'done' AND (
+			(jsonb_array_length(n.sources) = 0 AND NOT EXISTS (
+				SELECT 1 FROM artifact_checks c WHERE c.artifact_id = n.artifact_id AND c.version = n.version))
+			OR EXISTS (
+				SELECT 1 FROM jsonb_array_elements(n.sources) src
+				WHERE NOT EXISTS (SELECT 1 FROM artifact_checks c
+				                  WHERE c.artifact_id = n.artifact_id AND c.version = n.version AND c.url = src->>'url'))
+			OR EXISTS (
+				SELECT 1 FROM artifact_checks c LEFT JOIN page_reviews r ON r.url = c.url
+				WHERE c.artifact_id = n.artifact_id AND c.version = n.version AND c.url <> ''
+				  AND coalesce(r.content_hash, '') <> c.review_hash))
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Watched, error) {
+		var w Watched
+		err := row.Scan(&w.ArtifactID, &w.Version, &w.Sections, &w.Sources)
+
+		return w, err
+	})
+}
+
+// ReviewHashes is the reviewed version of each page that has one.
+func (s *PostgresStore) ReviewHashes(ctx context.Context, urls []string) (map[string]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT url, content_hash FROM page_reviews WHERE url = ANY($1)`, urls)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]string{}
+
+	for rows.Next() {
+		var url, hash string
+		if err := rows.Scan(&url, &hash); err != nil {
+			return nil, err
+		}
+
+		out[url] = hash
+	}
+
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) Checks(ctx context.Context, artifactID string, version int) (map[string]Check, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT url, review_hash, held, missing, gone, changed_at FROM artifact_checks
+		WHERE artifact_id = $1 AND version = $2 AND url <> ''`, artifactID, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]Check{}
+
+	for rows.Next() {
+		var c Check
+		if err := rows.Scan(&c.URL, &c.ReviewHash, &c.Held, &c.Missing, &c.Gone, &c.ChangedAt); err != nil {
+			return nil, err
+		}
+
+		out[c.URL] = c
+	}
+
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) SaveCheck(ctx context.Context, artifactID string, version int, c Check) error {
+	held, missing := c.Held, c.Missing
+	if held == nil {
+		held = [][2]int{}
+	}
+
+	if missing == nil {
+		missing = [][2]int{}
+	}
+
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO artifact_checks (artifact_id, version, url, review_hash, held, missing, gone, changed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (artifact_id, version, url) DO UPDATE SET review_hash = $4, held = $5, missing = $6, gone = $7,
+			changed_at = $8, checked_at = now()`,
+		artifactID, version, c.URL, c.ReviewHash, held, missing, c.Gone, c.ChangedAt)
+
+	return err
 }

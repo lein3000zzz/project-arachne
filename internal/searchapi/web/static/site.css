@@ -797,3 +797,9 @@ body.asked #search .hero .base-stats { display: none; }
 #factsSummary > span { display: block; }
 #factsSummary .facts-how { font-size: 0.78rem; opacity: 0.8; margin-top: 0.2rem; }
 .agree-note { color: var(--ok); font-size: 0.78rem; }
+
+/* A claim whose page changed under it: outlined, said above the report. */
+.mark.drifted { outline: 1px dashed var(--bad); border-radius: 2px; }
+.drift-note { border: 1px solid var(--line); border-left: 2px solid var(--bad); background: var(--raised); padding: 0.7rem 0.9rem; margin: 0.4rem 0 0.8rem; font-size: 0.85rem; }
+.drift-note p { margin: 0 0 0.5rem; }
+.drift-line { color: var(--bad); font-size: 0.8rem; }

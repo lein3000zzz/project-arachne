@@ -310,6 +310,9 @@ func main() {
 		copies.Backfill(ctx, logger, review.NewPostgresStore(db), store)
 	}()
 
+	// Reports are checked against the pages they cite whenever one changes.
+	go artifacts.Watch(ctx, logger, artifacts.NewPostgresStore(db), store, time.Minute)
+
 	if digester != nil {
 		go digester.Run(ctx)
 

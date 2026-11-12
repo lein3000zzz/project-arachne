@@ -53,6 +53,7 @@
       </div>
       <p class="note" id="actionNote" aria-live="polite"></p>
       <p class="note answer-meta" id="checks"></p>
+      <div class="drift-note" id="driftNote" role="status" hidden></div>
       <p id="claimInfo" class="claim-info" aria-live="polite" hidden></p>
       <div class="report-body md" id="body"></div>
 
@@ -138,6 +139,7 @@ function render(data) {
 
   claims = {};
   v.sections.forEach((s, i) => (s.claims || []).forEach((c, j) => { claims[`${i}-${j}`] = c; }));
+  showDrift(v, newest);
   for (const [id, c] of Object.entries(claims)) agreeMark(document.querySelector(`#body .mark[data-claim="${id}"]`), c);
   summarize(Object.values(claims));
 
@@ -179,6 +181,30 @@ function jump(verdict) {
 }
 
 // The verdict opens under the block that holds the claim, where the eye is.
+// Claims whose words their pages no longer have: the pages changed after
+// this version was written. Marked, said once above, and in each one's box.
+let drifted = new Map(), sources = [];
+
+function showDrift(v, newest) {
+  sources = v.sources || [];
+  drifted = new Map((v.drift || []).map((d) => [`${d.section}-${d.claim}`, d]));
+  for (const id of drifted.keys()) {
+    const mark = document.querySelector(`#body .mark[data-claim="${id}"]`);
+    if (mark) mark.classList.add("drifted");
+  }
+  const box = $("driftNote");
+  box.hidden = drifted.size === 0;
+  if (!drifted.size) return;
+  const gone = [...drifted.values()].filter((d) => d.gone).length;
+  box.replaceChildren(
+    el("p", {}, `${plural(drifted.size, "claim")} ${drifted.size === 1 ? "rests" : "rest"} on words ${drifted.size === 1 ? "its page no longer has" : "their pages no longer have"}` +
+      (gone ? `, ${gone === drifted.size ? "their pages gone from the lab" : `${gone} of them on pages gone from the lab`}` : "") +
+      `: ${drifted.size === 1 ? "the page" : "the pages"} changed after this version was written.`),
+    el("div", { class: "buttons" },
+      el("button", { type: "button", class: "jump drifted", onclick: () => jump("drifted") }, "see them ›"),
+      newest ? el("button", { type: "button", class: "action small primary", onclick: () => $("rebuild").click() }, "Rebuild from the lab as it is now") : null));
+}
+
 function showClaim(id, mark) {
   const c = claims[id];
   if (!c) return;
@@ -195,7 +221,16 @@ function showClaim(id, mark) {
     el("span", {}, c.text),
     c.quote ? el("q", {}, c.quote) : null,
     c.note ? el("span", { class: "note" }, c.note) : null,
+    driftLine(drifted.get(id)),
   ].filter(Boolean));
+}
+
+function driftLine(d) {
+  if (!d) return null;
+  const src = sources.find((s) => s.url === d.url);
+  const which = src ? `[${src.n}]` : "its page";
+  return el("span", { class: "drift-line" }, d.gone ? `${which} is gone from the lab: these words can no longer be checked.`
+    : `${which} changed${d.changed_at ? " " + ago(d.changed_at) : ""} and no longer has these words.`);
 }
 
 $("body").addEventListener("click", async (e) => {

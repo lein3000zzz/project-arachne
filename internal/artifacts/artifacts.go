@@ -68,6 +68,8 @@ type Artifact struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// The newest version, without its text.
 	Latest *Version `json:"latest,omitempty"`
+	// Claims of the newest version whose words their pages no longer have.
+	Drifted int `json:"drifted,omitempty"`
 }
 
 // Outline is what a report is to cover, as the model drafted it and the user
@@ -98,6 +100,8 @@ type Version struct {
 	Seconds    float64    `json:"seconds,omitempty"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	// Claims whose words their pages no longer have, found after the build.
+	Drift []Drift `json:"drift,omitempty"`
 }
 
 // Section is a section as built.
