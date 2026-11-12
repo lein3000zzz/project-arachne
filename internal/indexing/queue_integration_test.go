@@ -65,7 +65,7 @@ func TestPostgresQueueHandsPagesOutInTurn(t *testing.T) {
 		t.Errorf("waiting %d, %v; dead pages are not waiting", n, err)
 	}
 
-	for _, id := range []int64{next.ID, second.ID} {
+	for _, id := range []string{next.ID, second.ID} {
 		if err := q.Done(ctx, id); err != nil {
 			t.Fatal(err)
 		}
@@ -128,7 +128,7 @@ func TestPostgresQueueGivesEachPageToOneWorker(t *testing.T) {
 
 	var (
 		mu   sync.Mutex
-		seen = map[int64]int{}
+		seen = map[string]int{}
 		wg   sync.WaitGroup
 	)
 
@@ -164,7 +164,7 @@ func TestPostgresQueueGivesEachPageToOneWorker(t *testing.T) {
 
 	for id, n := range seen {
 		if n != 1 {
-			t.Errorf("page %d handed out %d times", id, n)
+			t.Errorf("page %s handed out %d times", id, n)
 		}
 	}
 }

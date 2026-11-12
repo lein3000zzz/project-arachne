@@ -18,15 +18,15 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func (f *fakeArtifacts) List(_ context.Context, owner, lab int64) ([]artifacts.Artifact, error) {
+func (f *fakeArtifacts) List(_ context.Context, owner, lab string) ([]artifacts.Artifact, error) {
 	f.owner, f.lab = owner, lab
-	return []artifacts.Artifact{{ID: 9, LabID: lab, Kind: artifacts.KindReport, Title: "Channels",
+	return []artifacts.Artifact{{ID: tid(9), LabID: lab, Kind: artifacts.KindReport, Title: "Channels",
 		Latest: &artifacts.Version{Number: 1, Status: artifacts.StatusRunning}}}, nil
 }
 
-func (f *fakeLabs) AddSources(_ context.Context, owner, lab int64, sources []labs.SourceRequest) (labs.Detail, error) {
-	f.owner, f.labIDs, f.created.Sources = owner, []int64{lab}, sources
-	return labs.Detail{Lab: labs.Lab{ID: lab}, Sources: []labs.SourceStatus{{Source: labs.Source{ID: 1, URL: sources[0].URL}}}}, f.err
+func (f *fakeLabs) AddSources(_ context.Context, owner, lab string, sources []labs.SourceRequest) (labs.Detail, error) {
+	f.owner, f.labIDs, f.created.Sources = owner, []string{lab}, sources
+	return labs.Detail{Lab: labs.Lab{ID: lab}, Sources: []labs.SourceStatus{{Source: labs.Source{ID: tid(1), URL: sources[0].URL}}}}, f.err
 }
 
 type bearer string
@@ -195,7 +195,7 @@ func TestMCPAskAnswersAsTheTokensUserAndKeepsTheAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, text := call(t, session, "ask", map[string]any{"question": "how do goroutines talk?", "labs": []int{4}}, true)
+	res, text := call(t, session, "ask", map[string]any{"question": "how do goroutines talk?", "labs": []string{tid(4)}}, true)
 	if res.IsError {
 		t.Fatal(text)
 	}
@@ -208,7 +208,7 @@ func TestMCPAskAnswersAsTheTokensUserAndKeepsTheAnswer(t *testing.T) {
 	}
 
 	if !slices.Equal(answerer.got.LabURLs, []string{"https://go.dev/doc/"}) || labService.owner != testUser.ID || answerer.got.Fresh {
-		t.Errorf("asked %+v, labs of user %d", answerer.got, labService.owner)
+		t.Errorf("asked %+v, labs of user %s", answerer.got, labService.owner)
 	}
 
 	if !progress.has("checked 1 claim") || !progress.has("writing the answer from 1 source") {
@@ -217,12 +217,12 @@ func TestMCPAskAnswersAsTheTokensUserAndKeepsTheAnswer(t *testing.T) {
 
 	id := strings.TrimSpace(strings.Fields(text[strings.Index(text, "Answer id: ")+len("Answer id: "):])[0])
 
-	res, text = call(t, session, "save_answer", map[string]any{"lab": 3, "answer_id": id}, false)
-	if res.IsError || reports.saved.Text != "Use channels\n[1]." || reports.lab != 3 || reports.owner != testUser.ID {
+	res, text = call(t, session, "save_answer", map[string]any{"lab": tid(3), "answer_id": id}, false)
+	if res.IsError || reports.saved.Text != "Use channels\n[1]." || reports.lab != tid(3) || reports.owner != testUser.ID {
 		t.Errorf("saved %+v: %s", reports.saved, text)
 	}
 
-	if res, text = call(t, session, "save_answer", map[string]any{"lab": 3, "answer_id": "nope"}, false); !res.IsError || !strings.Contains(text, "no longer kept") {
+	if res, text = call(t, session, "save_answer", map[string]any{"lab": tid(3), "answer_id": "nope"}, false); !res.IsError || !strings.Contains(text, "no longer kept") {
 		t.Errorf("an unknown answer: %s", text)
 	}
 }
@@ -260,65 +260,70 @@ func TestMCPAskReadsTheWebFirst(t *testing.T) {
 }
 
 func TestMCPLabsAndReports(t *testing.T) {
-	labService, reports, researcher := &fakeLabs{}, &fakeArtifacts{}, &fakeResearch{run: &research.Run{ID: 4, Status: research.StatusDone, Stopped: research.StopSaturated}}
+	labService, reports, researcher := &fakeLabs{}, &fakeArtifacts{}, &fakeResearch{run: &research.Run{ID: tid(4), Status: research.StatusDone, Stopped: research.StopSaturated}}
 
 	session, _, err := connect(t, mcpServer(t, Services{Labs: labService, Artifacts: reports, Research: researcher}), testToken)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res, text := call(t, session, "get_lab", map[string]any{"lab": 4}, false)
-	if res.IsError || !strings.Contains(text, `"reports":[{"id":9`) || !strings.Contains(text, `"status":"done","stopped":"saturated","works":1}`) || !strings.Contains(text, `"verdict":"mixed"`) {
+	res, text := call(t, session, "get_lab", map[string]any{"lab": tid(4)}, false)
+	if res.IsError || !strings.Contains(text, `"reports":[{"id":"`+tid(9)+`"`) || !strings.Contains(text, `"status":"done","stopped":"saturated","works":1}`) || !strings.Contains(text, `"verdict":"mixed"`) {
 		t.Errorf("get_lab: %s", text)
 	}
 
-	if res, text = call(t, session, "add_sources", map[string]any{"lab": 4, "urls": []string{" https://go.dev/ref/mem "}}, false); res.IsError ||
+	if res, text = call(t, session, "add_sources", map[string]any{"lab": tid(4), "urls": []string{" https://go.dev/ref/mem "}}, false); res.IsError ||
 		labService.created.Sources[0].URL != "https://go.dev/ref/mem" {
 		t.Errorf("add_sources: %s", text)
 	}
 
-	if res, text = call(t, session, "research", map[string]any{"lab": 4, "request": "the memory model", "found": 50}, false); res.IsError ||
+	if res, text = call(t, session, "research", map[string]any{"lab": tid(4), "request": "the memory model", "found": 50}, false); res.IsError ||
 		researcher.request != "the memory model" || *researcher.ask.Found != 50 || researcher.ask.Read != nil || !strings.Contains(text, `"budget":{"found":50`) {
 		t.Errorf("research: %s", text)
 	}
 
-	if res, text = call(t, session, "read_map", map[string]any{"lab": 4}, false); res.IsError || !strings.Contains(text, "## 1. Blocks (subtopic 1): 1 kept") || !strings.Contains(text, "work 2, paper") ||
+	if res, text = call(t, session, "read_map", map[string]any{"lab": tid(4)}, false); res.IsError || !strings.Contains(text, "## 1. Blocks (subtopic "+tid(1)+"): 1 kept") || !strings.Contains(text, "work "+tid(2)+", paper") ||
 		!strings.Contains(text, "[ResNet](<https://arxiv.org/abs/1512.03385>)") || !strings.Contains(text, "stopped: new rounds found little new") {
 		t.Errorf("read_map:\n%s", text)
 	}
 
-	if res, text = call(t, session, "research", map[string]any{"lab": 4, "work": 2}, false); res.IsError || researcher.ask.Focus.Work != 2 {
+	if res, text = call(t, session, "research", map[string]any{"lab": tid(4), "work": tid(2)}, false); res.IsError || researcher.ask.Focus.Work != tid(2) {
 		t.Errorf("research one work: %s", text)
 	}
 
-	if res, text = call(t, session, "set_work", map[string]any{"lab": 4, "work": 2, "verdict": "drop", "read": true}, false); res.IsError ||
+	if res, text = call(t, session, "set_work", map[string]any{"lab": tid(4), "work": tid(2), "verdict": "drop", "read": true}, false); res.IsError ||
 		!strings.Contains(text, `"read":"reading"`) {
 		t.Errorf("set_work: %s", text)
 	}
 
-	if res, text = call(t, session, "set_work", map[string]any{"lab": 4, "work": 2}, false); !res.IsError {
+	if res, text = call(t, session, "set_work", map[string]any{"lab": tid(4), "work": tid(2)}, false); !res.IsError {
 		t.Errorf("set_work with nothing to do: %s", text)
 	}
 
 	// No sections: the outline is drafted, then written.
-	if res, text = call(t, session, "write_report", map[string]any{"lab": 4, "request": "channels"}, false); res.IsError ||
-		reports.outline.Title != "channels" || len(reports.outline.Sections) != 1 || !strings.Contains(text, `"id":9`) {
+	if res, text = call(t, session, "write_report", map[string]any{"lab": tid(4), "request": "channels"}, false); res.IsError ||
+		reports.outline.Title != "channels" || len(reports.outline.Sections) != 1 || !strings.Contains(text, `"id":"`+tid(9)+`"`) {
 		t.Errorf("write_report: %+v %s", reports.outline, text)
 	}
 
-	call(t, session, "write_report", map[string]any{"lab": 4, "request": "channels", "title": "Mine",
+	call(t, session, "write_report", map[string]any{"lab": tid(4), "request": "channels", "title": "Mine",
 		"sections": []map[string]string{{"heading": "B", "focus": "b"}, {"heading": "C", "focus": "c"}}}, false)
 	if reports.outline.Title != "Mine" || len(reports.outline.Sections) != 2 {
 		t.Errorf("the outline given was not written: %+v", reports.outline)
 	}
 
-	if res, text = call(t, session, "read_report", map[string]any{"report": 9}, false); res.IsError || text != "# T\n" {
+	if res, text = call(t, session, "read_report", map[string]any{"report": tid(9)}, false); res.IsError || text != "# T\n" {
 		t.Errorf("read_report: %q", text)
 	}
 
 	labService.err = labs.ErrNotFound
-	if res, text = call(t, session, "get_lab", map[string]any{"lab": 5}, false); !res.IsError || text != labs.ErrNotFound.Error() {
+	if res, text = call(t, session, "get_lab", map[string]any{"lab": tid(5)}, false); !res.IsError || text != labs.ErrNotFound.Error() {
 		t.Errorf("another user's lab: %s", text)
+	}
+
+	labService.err = nil
+	if res, text = call(t, session, "get_lab", map[string]any{"lab": "5"}, false); !res.IsError || text != labs.ErrNotFound.Error() {
+		t.Errorf("a malformed lab: %s", text)
 	}
 
 	labService.err = errors.New("pq: connection refused")
@@ -338,22 +343,22 @@ func TestAReportBeingWrittenSaysHowFar(t *testing.T) {
 }
 
 type fakeTokens struct {
-	user  int64
+	user  string
 	names []string
 	err   error
 }
 
-func (f *fakeTokens) AddToken(_ context.Context, user int64, name string) (string, error) {
+func (f *fakeTokens) AddToken(_ context.Context, user, name string) (string, error) {
 	f.user, f.names = user, append(f.names, name)
 	return "arachne_new", f.err
 }
 
-func (f *fakeTokens) Tokens(_ context.Context, user int64) ([]auth.Token, error) {
+func (f *fakeTokens) Tokens(_ context.Context, user string) ([]auth.Token, error) {
 	f.user = user
 	return []auth.Token{{Name: "claude-code"}}, f.err
 }
 
-func (f *fakeTokens) RemoveToken(_ context.Context, user int64, name string) error {
+func (f *fakeTokens) RemoveToken(_ context.Context, user, name string) error {
 	f.user, f.names = user, append(f.names, "-"+name)
 	return f.err
 }

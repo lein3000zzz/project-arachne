@@ -4,8 +4,8 @@ ALTER TABLE labs ADD COLUMN engines text[] NOT NULL DEFAULT '{}';
 -- One run of the model searching the web for a lab, step by step, so the lab
 -- can show what was searched, what was taken and why.
 CREATE TABLE gatherings (
-    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lab_id      bigint      NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
+    id          uuid PRIMARY KEY DEFAULT uuidv7(),
+    lab_id      uuid        NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
     request     text        NOT NULL DEFAULT '',
     engines     text[]      NOT NULL DEFAULT '{}',
     status      text        NOT NULL CHECK (status IN ('running', 'done', 'failed')),
@@ -28,4 +28,4 @@ ALTER TABLE sources
     ADD COLUMN query        text   NOT NULL DEFAULT '',
     ADD COLUMN engines      text[] NOT NULL DEFAULT '{}',
     ADD COLUMN reason       text   NOT NULL DEFAULT '',
-    ADD COLUMN gathering_id bigint REFERENCES gatherings (id) ON DELETE SET NULL;
+    ADD COLUMN gathering_id uuid REFERENCES gatherings (id) ON DELETE SET NULL;

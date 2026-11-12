@@ -22,18 +22,19 @@
 <header class="site">
   <a class="brand" href="/">arachne</a>
   <nav class="nav" aria-label="Main">
-    <a href="/">Look up</a>
-    <a href="/?tab=labs">Labs</a>
+    <a href="/" data-nav="search">Look up</a>
+    <a href="/?tab=labs" data-nav="labs">Labs</a>
   </nav>
-  <span class="who" id="who"></span>
-  <a class="theme" href="/settings" aria-current="page">settings</a>
-  <button type="button" class="theme" id="logout">log out</button>
-  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+  <div class="account">
+    <span class="who" id="who"></span>
+    <a href="/settings" aria-current="page">settings</a>
+    <button type="button" class="link" id="logout">log out</button>
+    <button type="button" class="link" id="theme" aria-live="polite">theme: system</button>
+  </div>
 </header>
 
 <main id="main">
   <section class="hero">
-    <p class="eyebrow">@arachne</p>
     <h1>Settings.</h1>
   </section>
 
@@ -104,7 +105,7 @@
       </div>
     </div>
 
-    <table class="table">
+    <table class="table tokens-table">
       <thead><tr><th>Name</th><th class="num">Made</th><th class="num">Last used</th><th></th></tr></thead>
       <tbody id="tokens"></tbody>
     </table>
@@ -219,7 +220,7 @@ $("modelForm").addEventListener("submit", async (e) => {
 });
 
 $("remove").addEventListener("click", async () => {
-  if (!confirm("Forget your endpoint and its key, and use the server's model again?")) return;
+  if (!(await confirmInline($("remove"), "Forget your endpoint and its key?", "forget"))) return;
   try {
     await send("DELETE", "/api/me/model");
     $("baseURL").value = "";
@@ -245,7 +246,7 @@ function renderTokens(list, max) {
   $("tokens").replaceChildren(...list.map((t) => {
     const revoke = el("button", { type: "button", class: "action small danger" }, "Revoke");
     revoke.addEventListener("click", async () => {
-      if (!confirm(`Revoke "${t.name}"? Whatever signs in with it stops working.`)) return;
+      if (!(await confirmInline(revoke, "Revoke it? Agents using it stop working.", "revoke"))) return;
       try {
         await send("DELETE", "/api/me/tokens/" + encodeURIComponent(t.name));
         $("tokenNew").hidden = true;

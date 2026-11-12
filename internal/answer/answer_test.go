@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"web-crawler/internal/copies"
 	"web-crawler/internal/llm"
 	"web-crawler/internal/retrieval"
 )
@@ -444,5 +445,46 @@ func TestACopyDoesNotTakeASourcesPlace(t *testing.T) {
 		if req.URLs != nil && req.Limit != 6 {
 			t.Errorf("the lab search asked for %d results; spares are needed for copies", req.Limit)
 		}
+	}
+}
+
+type fakeSketches map[string]copies.Sketch
+
+func (f fakeSketches) Sketches(_ context.Context, urls []string) (map[string]copies.Sketch, error) {
+	out := map[string]copies.Sketch{}
+	for _, u := range urls {
+		if s, ok := f[u]; ok {
+			out[u] = s
+		}
+	}
+
+	return out, nil
+}
+
+// A mirror whose search matched another passage than the original's: the
+// excerpts share nothing, the pages are one text.
+func TestAMirrorMatchedOnAnotherPassageIsStillACopy(t *testing.T) {
+	var page strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&page, "w%d ", i)
+	}
+
+	sketch := copies.SketchOf(copies.SetOf(page.String()))
+
+	search := &scopedSearch{lab: []retrieval.Result{
+		reranked("https://github.com/x/bench", 3), reranked("https://codeberg.org/x/bench", 2),
+		reranked("blog", 1), reranked("book", 0.5),
+	}}
+
+	s := labService(t, search, &fakeChat{reply: "x"})
+	s.ComparesPages(fakeSketches{"https://github.com/x/bench": sketch, "https://codeberg.org/x/bench": sketch})
+
+	res, err := s.Answer(context.Background(), Request{Query: "q", LabURLs: []string{"a"}, LabOnly: true}, Events{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := urlsOf(res.Sources); got != "https://github.com/x/bench blog book" {
+		t.Errorf("sources %q; the codeberg mirror is the github page", got)
 	}
 }

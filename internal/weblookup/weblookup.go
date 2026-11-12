@@ -65,11 +65,11 @@ type Service struct {
 	cfg    Config
 
 	mu     sync.Mutex
-	active map[int64]bool
+	active map[string]bool
 }
 
 func New(search Search, runService Runs, pages Pages, chat llm.Client, cfg Config) *Service {
-	return &Service{search: search, runs: runService, pages: pages, chat: chat, cfg: cfg, active: map[int64]bool{}}
+	return &Service{search: search, runs: runService, pages: pages, chat: chat, cfg: cfg, active: map[string]bool{}}
 }
 
 // Found is a search result, and whether it is read.
@@ -102,7 +102,7 @@ const maxQueryRunes = 200
 // into the index, and returns their addresses - those indexed now or before.
 // It returns when every crawl has ended or the time is up: what is indexed by
 // then is read.
-func (s *Service) Look(ctx context.Context, userID int64, question string, ev Events) ([]string, error) {
+func (s *Service) Look(ctx context.Context, userID, question string, ev Events) ([]string, error) {
 	if s.search == nil || s.runs == nil {
 		return nil, ErrUnavailable
 	}
@@ -157,7 +157,7 @@ func (s *Service) Look(ctx context.Context, userID int64, question string, ev Ev
 	return s.read(ctx, userID, found, ev)
 }
 
-func (s *Service) start(userID int64) bool {
+func (s *Service) start(userID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -170,7 +170,7 @@ func (s *Service) start(userID int64) bool {
 	return true
 }
 
-func (s *Service) end(userID int64) {
+func (s *Service) end(userID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -274,7 +274,7 @@ func (s *Service) choose(ctx context.Context, question string, found []Found) []
 
 // read crawls the picked pages the index lacks, follows the crawls to their
 // end, and returns every picked page that is in the index.
-func (s *Service) read(ctx context.Context, userID int64, found []Found, ev Events) ([]string, error) {
+func (s *Service) read(ctx context.Context, userID string, found []Found, ev Events) ([]string, error) {
 	var picked []Found
 
 	for _, f := range found {

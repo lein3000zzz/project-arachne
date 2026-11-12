@@ -60,7 +60,7 @@ func newMCPHandler(signIn *authHandler, tools *mcpTools) http.Handler {
 			return nil, mcpauth.ErrInvalidToken
 		}
 
-		return &mcpauth.TokenInfo{UserID: strconv.FormatInt(user.ID, 10), Extra: map[string]any{mcpUserKey: user}}, nil
+		return &mcpauth.TokenInfo{UserID: user.ID, Extra: map[string]any{mcpUserKey: user}}, nil
 	}
 
 	// API tokens do not expire; revoking one is what ends it.
@@ -192,10 +192,10 @@ func progressOf(ctx context.Context, call *mcp.CallToolRequest) func(string) {
 // ---- search ----
 
 type searchInput struct {
-	Query string  `json:"query" jsonschema:"what to look for"`
-	Labs  []int64 `json:"labs,omitempty" jsonschema:"search only the pages of these labs, by id from list_labs"`
-	Site  string  `json:"site,omitempty" jsonschema:"only pages of this host, e.g. go.dev"`
-	Limit int     `json:"limit,omitempty" jsonschema:"how many results, 10 by default"`
+	Query string   `json:"query" jsonschema:"what to look for"`
+	Labs  []string `json:"labs,omitempty" jsonschema:"search only the pages of these labs, by id from list_labs"`
+	Site  string   `json:"site,omitempty" jsonschema:"only pages of this host, e.g. go.dev"`
+	Limit int      `json:"limit,omitempty" jsonschema:"how many results, 10 by default"`
 }
 
 type searchResult struct {
@@ -254,10 +254,10 @@ func orDefault(v, fallback int) int {
 // ---- ask ----
 
 type askInput struct {
-	Question string  `json:"question" jsonschema:"the question, in plain words"`
-	Labs     []int64 `json:"labs,omitempty" jsonschema:"answer from these labs' pages first, by id from list_labs; the shared index fills in when they hold too little"`
-	Web      bool    `json:"web,omitempty" jsonschema:"search the web and read the best pages into the index before answering; takes minutes"`
-	NoCheck  bool    `json:"no_check,omitempty" jsonschema:"skip checking each claim against its sources: faster, but claims the sources do not bear out go unmarked"`
+	Question string   `json:"question" jsonschema:"the question, in plain words"`
+	Labs     []string `json:"labs,omitempty" jsonschema:"answer from these labs' pages first, by id from list_labs; the shared index fills in when they hold too little"`
+	Web      bool     `json:"web,omitempty" jsonschema:"search the web and read the best pages into the index before answering; takes minutes"`
+	NoCheck  bool     `json:"no_check,omitempty" jsonschema:"skip checking each claim against its sources: faster, but claims the sources do not bear out go unmarked"`
 }
 
 func (t *mcpTools) ask(ctx context.Context, user auth.User, call *mcp.CallToolRequest, in askInput) (string, error) {
@@ -570,11 +570,11 @@ func count(n int, noun string) string {
 // ---- labs ----
 
 type labInput struct {
-	Lab int64 `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Lab string `json:"lab" jsonschema:"the lab's id, from list_labs"`
 }
 
 type labSummary struct {
-	ID      int64  `json:"id"`
+	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Topic   string `json:"topic"`
 	Sources int    `json:"sources"`
@@ -614,7 +614,7 @@ func (t *mcpTools) listLabs(ctx context.Context, user auth.User, _ *mcp.CallTool
 }
 
 type sourceView struct {
-	ID    int64  `json:"id"`
+	ID    string `json:"id"`
 	Kind  string `json:"kind"`
 	URL   string `json:"url"`
 	Pages int    `json:"pages"`
@@ -656,7 +656,7 @@ func researchOf(m research.Map) *researchView {
 }
 
 type reportView struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
 	Title     string    `json:"title"`
 	Status    string    `json:"status,omitempty"`
@@ -698,7 +698,12 @@ func (t *mcpTools) getLab(ctx context.Context, user auth.User, _ *mcp.CallToolRe
 	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
 	defer cancel()
 
-	detail, err := t.labs.service.Get(ctx, user.ID, in.Lab)
+	lab, ok := parseID(in.Lab)
+	if !ok {
+		return labView{}, t.labFailed(labs.ErrNotFound)
+	}
+
+	detail, err := t.labs.service.Get(ctx, user.ID, lab)
 	if err != nil {
 		return labView{}, t.labFailed(err)
 	}
@@ -770,7 +775,7 @@ func (t *mcpTools) createLab(ctx context.Context, user auth.User, _ *mcp.CallToo
 }
 
 type addSourcesInput struct {
-	Lab  int64    `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Lab  string   `json:"lab" jsonschema:"the lab's id, from list_labs"`
 	URLs []string `json:"urls" jsonschema:"pages or sites to crawl"`
 }
 
@@ -782,7 +787,12 @@ func (t *mcpTools) addSources(ctx context.Context, user auth.User, _ *mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
 	defer cancel()
 
-	detail, err := t.labs.service.AddSources(ctx, user.ID, in.Lab, sourceRequests(in.URLs))
+	lab, ok := parseID(in.Lab)
+	if !ok {
+		return labView{}, t.labFailed(labs.ErrNotFound)
+	}
+
+	detail, err := t.labs.service.AddSources(ctx, user.ID, lab, sourceRequests(in.URLs))
 	if err != nil {
 		return labView{}, t.labFailed(err)
 	}
@@ -802,16 +812,16 @@ func sourceRequests(urls []string) []labs.SourceRequest {
 }
 
 type researchInput struct {
-	Lab      int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Lab      string `json:"lab" jsonschema:"the lab's id, from list_labs"`
 	Request  string `json:"request,omitempty" jsonschema:"what to look for, when not the lab's topic as a whole: newer work, another community, benchmarks"`
 	Found    *int   `json:"found,omitempty" jsonschema:"how many works to judge at most; the server's default when absent"`
 	Read     *int   `json:"read,omitempty" jsonschema:"how many kept works to read into the lab at most, 0 to map without reading; the server's default when absent"`
-	Work     int64  `json:"work,omitempty" jsonschema:"follow this one work's citations alone, both ways, by its id from read_map"`
-	Subtopic int64  `json:"subtopic,omitempty" jsonschema:"research this one subtopic further, by its id from read_map"`
+	Work     string `json:"work,omitempty" jsonschema:"follow this one work's citations alone, both ways, by its id from read_map"`
+	Subtopic string `json:"subtopic,omitempty" jsonschema:"research this one subtopic further, by its id from read_map"`
 }
 
 type runView struct {
-	ID     int64           `json:"id"`
+	ID     string          `json:"id"`
 	Status string          `json:"status"`
 	Budget research.Budget `json:"budget"`
 }
@@ -824,8 +834,21 @@ func (t *mcpTools) startResearch(ctx context.Context, user auth.User, _ *mcp.Cal
 	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
 	defer cancel()
 
-	run, err := t.research.service.Start(ctx, user.ID, in.Lab, research.Ask{Request: in.Request, Found: in.Found, Read: in.Read,
-		Focus: research.Focus{Work: in.Work, Subtopic: in.Subtopic}})
+	lab, labOK := parseID(in.Lab)
+	work, workOK := optionalID(in.Work)
+	subtopic, subtopicOK := optionalID(in.Subtopic)
+
+	switch {
+	case !labOK:
+		return runView{}, t.labFailed(labs.ErrNotFound)
+	case !workOK:
+		return runView{}, research.ErrWorkNotFound
+	case !subtopicOK:
+		return runView{}, research.ErrSubtopicNotFound
+	}
+
+	run, err := t.research.service.Start(ctx, user.ID, lab, research.Ask{Request: in.Request, Found: in.Found, Read: in.Read,
+		Focus: research.Focus{Work: work, Subtopic: subtopic}})
 	if err != nil {
 		return runView{}, t.labFailed(err)
 	}
@@ -834,19 +857,19 @@ func (t *mcpTools) startResearch(ctx context.Context, user auth.User, _ *mcp.Cal
 }
 
 type setWorkInput struct {
-	Lab      int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
-	Work     int64  `json:"work" jsonschema:"the work's id, from read_map"`
+	Lab      string `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Work     string `json:"work" jsonschema:"the work's id, from read_map"`
 	Verdict  string `json:"verdict,omitempty" jsonschema:"keep, maybe or drop: stands over the model's verdict, now and in later research"`
-	Subtopic int64  `json:"subtopic,omitempty" jsonschema:"move it to this subtopic, by its id from read_map"`
+	Subtopic string `json:"subtopic,omitempty" jsonschema:"move it to this subtopic, by its id from read_map"`
 	Read     bool   `json:"read,omitempty" jsonschema:"read it into the lab now: crawled, reviewed and indexed in the background"`
 }
 
 type workView struct {
-	ID       int64  `json:"id"`
+	ID       string `json:"id"`
 	Title    string `json:"title"`
 	URL      string `json:"url"`
 	Verdict  string `json:"verdict"`
-	Subtopic int64  `json:"subtopic,omitempty"`
+	Subtopic string `json:"subtopic,omitempty"`
 	// How far it is read, once it is.
 	Read string `json:"read,omitempty"`
 }
@@ -860,6 +883,19 @@ func (t *mcpTools) setWork(ctx context.Context, user auth.User, _ *mcp.CallToolR
 		return workView{}, errors.New("give a verdict, read: true, or both")
 	}
 
+	lab, labOK := parseID(in.Lab)
+	work, workOK := parseID(in.Work)
+	subtopic, subtopicOK := optionalID(in.Subtopic)
+
+	switch {
+	case !labOK:
+		return workView{}, t.labFailed(labs.ErrNotFound)
+	case !workOK:
+		return workView{}, research.ErrWorkNotFound
+	case !subtopicOK:
+		return workView{}, research.ErrSubtopicNotFound
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
 	defer cancel()
 
@@ -869,19 +905,19 @@ func (t *mcpTools) setWork(ctx context.Context, user auth.User, _ *mcp.CallToolR
 	)
 
 	if in.Verdict != "" {
-		if w, err = t.research.service.SetVerdict(ctx, user.ID, in.Lab, in.Work, in.Verdict, in.Subtopic); err != nil {
+		if w, err = t.research.service.SetVerdict(ctx, user.ID, lab, work, in.Verdict, subtopic); err != nil {
 			return workView{}, t.labFailed(err)
 		}
 	}
 
 	if in.Read {
-		if w, err = t.research.service.ReadWork(ctx, user.ID, in.Lab, in.Work); err != nil {
+		if w, err = t.research.service.ReadWork(ctx, user.ID, lab, work); err != nil {
 			return workView{}, t.labFailed(err)
 		}
 	}
 
 	read := w.Read
-	if w.SourceID != 0 && read == "" {
+	if w.SourceID != "" && read == "" {
 		read = research.ReadReading
 	}
 
@@ -889,8 +925,8 @@ func (t *mcpTools) setWork(ctx context.Context, user auth.User, _ *mcp.CallToolR
 }
 
 type readMapInput struct {
-	Lab     int64 `json:"lab" jsonschema:"the lab's id, from list_labs"`
-	Dropped bool  `json:"dropped,omitempty" jsonschema:"also list the works dropped, with why"`
+	Lab     string `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Dropped bool   `json:"dropped,omitempty" jsonschema:"also list the works dropped, with why"`
 }
 
 func (t *mcpTools) readMap(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in readMapInput) (string, error) {
@@ -901,12 +937,17 @@ func (t *mcpTools) readMap(ctx context.Context, user auth.User, _ *mcp.CallToolR
 	ctx, cancel := context.WithTimeout(ctx, labsTimeout)
 	defer cancel()
 
-	lab, err := t.labs.service.Get(ctx, user.ID, in.Lab)
+	id, ok := parseID(in.Lab)
+	if !ok {
+		return "", t.labFailed(labs.ErrNotFound)
+	}
+
+	lab, err := t.labs.service.Get(ctx, user.ID, id)
 	if err != nil {
 		return "", t.labFailed(err)
 	}
 
-	m, err := t.research.service.Map(ctx, user.ID, in.Lab)
+	m, err := t.research.service.Map(ctx, user.ID, id)
 	if err != nil {
 		return "", t.labFailed(err)
 	}
@@ -931,7 +972,7 @@ func (t *mcpTools) labFailed(err error) error {
 // ---- reports ----
 
 type draftReportInput struct {
-	Lab     int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Lab     string `json:"lab" jsonschema:"the lab's id, from list_labs"`
 	Request string `json:"request" jsonschema:"what the report is to be about"`
 }
 
@@ -959,9 +1000,14 @@ func (t *mcpTools) draftReport(ctx context.Context, user auth.User, _ *mcp.CallT
 	return out, nil
 }
 
-func (t *mcpTools) draft(ctx context.Context, user auth.User, lab int64, request string) (artifacts.Outline, error) {
+func (t *mcpTools) draft(ctx context.Context, user auth.User, lab, request string) (artifacts.Outline, error) {
 	if t.artifacts.service == nil {
 		return artifacts.Outline{}, artifacts.ErrUnavailable
+	}
+
+	lab, ok := parseID(lab)
+	if !ok {
+		return artifacts.Outline{}, t.reportFailed(labs.ErrNotFound)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, t.artifacts.draftTimeout)
@@ -976,20 +1022,25 @@ func (t *mcpTools) draft(ctx context.Context, user auth.User, lab int64, request
 }
 
 type writeReportInput struct {
-	Lab      int64            `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Lab      string           `json:"lab" jsonschema:"the lab's id, from list_labs"`
 	Request  string           `json:"request" jsonschema:"what the report is to be about"`
 	Title    string           `json:"title,omitempty" jsonschema:"the report's title, with sections; drafted when there are none"`
 	Sections []plannedSection `json:"sections,omitempty" jsonschema:"the sections to write, in order, as draft_report gave them or changed; drafted when none"`
 }
 
 func (t *mcpTools) writeReport(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in writeReportInput) (reportView, error) {
+	lab, ok := parseID(in.Lab)
+	if !ok {
+		return reportView{}, t.reportFailed(labs.ErrNotFound)
+	}
+
 	outline := artifacts.Outline{Title: in.Title}
 	for _, s := range in.Sections {
 		outline.Sections = append(outline.Sections, artifacts.Planned{Heading: s.Heading, Focus: s.Focus})
 	}
 
 	if len(outline.Sections) == 0 {
-		drafted, err := t.draft(ctx, user, in.Lab, in.Request)
+		drafted, err := t.draft(ctx, user, lab, in.Request)
 		if err != nil {
 			return reportView{}, err
 		}
@@ -1000,7 +1051,7 @@ func (t *mcpTools) writeReport(ctx context.Context, user auth.User, _ *mcp.CallT
 	ctx, cancel := context.WithTimeout(ctx, artifactsTimeout)
 	defer cancel()
 
-	a, err := t.artifacts.service.Build(ctx, user.ID, in.Lab, in.Request, outline)
+	a, err := t.artifacts.service.Build(ctx, user.ID, lab, in.Request, outline)
 	if err != nil {
 		return reportView{}, t.reportFailed(err)
 	}
@@ -1009,8 +1060,8 @@ func (t *mcpTools) writeReport(ctx context.Context, user auth.User, _ *mcp.CallT
 }
 
 type readReportInput struct {
-	Report  int64 `json:"report" jsonschema:"the report's id, from get_lab or write_report"`
-	Version int   `json:"version,omitempty" jsonschema:"an earlier version's number; the latest by default"`
+	Report  string `json:"report" jsonschema:"the report's id, from get_lab or write_report"`
+	Version int    `json:"version,omitempty" jsonschema:"an earlier version's number; the latest by default"`
 }
 
 func (t *mcpTools) readReport(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in readReportInput) (string, error) {
@@ -1021,7 +1072,12 @@ func (t *mcpTools) readReport(ctx context.Context, user auth.User, _ *mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, artifactsTimeout)
 	defer cancel()
 
-	a, v, _, err := t.artifacts.service.Get(ctx, user.ID, in.Report, in.Version)
+	report, ok := parseID(in.Report)
+	if !ok {
+		return "", t.reportFailed(artifacts.ErrNotFound)
+	}
+
+	a, v, _, err := t.artifacts.service.Get(ctx, user.ID, report, in.Version)
 	if err != nil {
 		return "", t.reportFailed(err)
 	}
@@ -1060,13 +1116,18 @@ func reportText(a artifacts.Artifact, v artifacts.Version) string {
 }
 
 type saveAnswerInput struct {
-	Lab    int64  `json:"lab" jsonschema:"the lab's id, from list_labs"`
+	Lab    string `json:"lab" jsonschema:"the lab's id, from list_labs"`
 	Answer string `json:"answer_id" jsonschema:"the answer id ask returned"`
 }
 
 func (t *mcpTools) saveAnswer(ctx context.Context, user auth.User, _ *mcp.CallToolRequest, in saveAnswerInput) (reportView, error) {
 	if t.artifacts.service == nil {
 		return reportView{}, artifacts.ErrUnavailable
+	}
+
+	lab, labOK := parseID(in.Lab)
+	if !labOK {
+		return reportView{}, t.reportFailed(labs.ErrNotFound)
 	}
 
 	kept, ok := t.artifacts.recent.get(user.ID, in.Answer)
@@ -1081,7 +1142,7 @@ func (t *mcpTools) saveAnswer(ctx context.Context, user auth.User, _ *mcp.CallTo
 	ctx, cancel := context.WithTimeout(ctx, artifactsTimeout)
 	defer cancel()
 
-	a, err := t.artifacts.service.SaveAnswer(ctx, user.ID, in.Lab, artifacts.SavedAnswer{
+	a, err := t.artifacts.service.SaveAnswer(ctx, user.ID, lab, artifacts.SavedAnswer{
 		Question: kept.query, Text: kept.res.Answer, Sources: kept.res.Sources, Claims: kept.claims, Conflicts: kept.conflicts, Model: kept.res.Model,
 	})
 	if err != nil {

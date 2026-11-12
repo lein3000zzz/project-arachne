@@ -25,21 +25,21 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-func (s *PostgresStore) StartRun(ctx context.Context, labID int64, request string, budget Budget, focus Focus, model string) (int64, error) {
-	var id int64
+func (s *PostgresStore) StartRun(ctx context.Context, labID, request string, budget Budget, focus Focus, model string) (string, error) {
+	var id string
 
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO research_runs (lab_id, request, found_budget, read_budget, focus_work, focus_subtopic, status, model)
-		VALUES ($1, $2, $3, $4, nullif($5, 0), nullif($6, 0), 'running', $7)
+		VALUES ($1, $2, $3, $4, nullif($5, '')::uuid, nullif($6, '')::uuid, 'running', $7)
 		RETURNING id`, labID, request, budget.Found, budget.Read, focus.Work, focus.Subtopic, model).Scan(&id)
 	if isUniqueViolation(err) {
-		return 0, ErrRunning
+		return "", ErrRunning
 	}
 
 	return id, err
 }
 
-func (s *PostgresStore) SaveRounds(ctx context.Context, id int64, rounds []Round) error {
+func (s *PostgresStore) SaveRounds(ctx context.Context, id string, rounds []Round) error {
 	// A run that ended before its first round has none: an empty list, never null.
 	if rounds == nil {
 		rounds = []Round{}
@@ -55,15 +55,15 @@ func (s *PostgresStore) SaveRounds(ctx context.Context, id int64, rounds []Round
 	return err
 }
 
-func (s *PostgresStore) FinishRun(ctx context.Context, id int64, status, stopped, errText string) error {
+func (s *PostgresStore) FinishRun(ctx context.Context, id string, status, stopped, errText string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE research_runs SET status = $2, stopped = $3, error = $4, finished_at = now() WHERE id = $1`, id, status, stopped, errText)
 
 	return err
 }
 
-const runColumns = `id, lab_id, request, found_budget, read_budget, coalesce(focus_work, 0), coalesce(focus_subtopic, 0), status, stopped,
-	rounds, error, model, started_at, finished_at`
+const runColumns = `id, lab_id, request, found_budget, read_budget, coalesce(focus_work::text, ''), coalesce(focus_subtopic::text, ''),
+	status, stopped, rounds, error, model, started_at, finished_at`
 
 func scanRun(row pgx.CollectableRow) (Run, error) {
 	var (
@@ -89,15 +89,15 @@ func scanRun(row pgx.CollectableRow) (Run, error) {
 	return r, nil
 }
 
-func (s *PostgresStore) Run(ctx context.Context, id int64) (Run, error) {
+func (s *PostgresStore) Run(ctx context.Context, id string) (Run, error) {
 	return s.oneRun(ctx, `SELECT `+runColumns+` FROM research_runs WHERE id = $1`, id)
 }
 
-func (s *PostgresStore) LatestRun(ctx context.Context, labID int64) (Run, error) {
+func (s *PostgresStore) LatestRun(ctx context.Context, labID string) (Run, error) {
 	return s.oneRun(ctx, `SELECT `+runColumns+` FROM research_runs WHERE lab_id = $1 ORDER BY started_at DESC, id DESC LIMIT 1`, labID)
 }
 
-func (s *PostgresStore) oneRun(ctx context.Context, query string, arg int64) (Run, error) {
+func (s *PostgresStore) oneRun(ctx context.Context, query, arg string) (Run, error) {
 	rows, err := s.pool.Query(ctx, query, arg)
 	if err != nil {
 		return Run{}, err
@@ -119,7 +119,7 @@ func (s *PostgresStore) Interrupt(ctx context.Context) (int64, error) {
 	return tag.RowsAffected(), err
 }
 
-func (s *PostgresStore) Subtopics(ctx context.Context, labID int64) ([]Subtopic, error) {
+func (s *PostgresStore) Subtopics(ctx context.Context, labID string) ([]Subtopic, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, name, focus, queries FROM lab_subtopics WHERE lab_id = $1 ORDER BY position, id`, labID)
 	if err != nil {
 		return nil, err
@@ -138,7 +138,7 @@ func (s *PostgresStore) Subtopics(ctx context.Context, labID int64) ([]Subtopic,
 	return subs, err
 }
 
-func (s *PostgresStore) AddSubtopics(ctx context.Context, labID int64, subs []Subtopic) ([]Subtopic, error) {
+func (s *PostgresStore) AddSubtopics(ctx context.Context, labID string, subs []Subtopic) ([]Subtopic, error) {
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var next int
 		if err := tx.QueryRow(ctx, `SELECT coalesce(max(position) + 1, 0) FROM lab_subtopics WHERE lab_id = $1`, labID).Scan(&next); err != nil {
@@ -168,9 +168,56 @@ func (s *PostgresStore) AddSubtopics(ctx context.Context, labID int64, subs []Su
 	return s.Subtopics(ctx, labID)
 }
 
-func (s *PostgresStore) Find(ctx context.Context, labID, runID int64, w Work, f Find) (int64, bool, error) {
+func (s *PostgresStore) RenameSubtopic(ctx context.Context, labID, subtopicID, name, focus string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE lab_subtopics SET name = $3, focus = $4 WHERE id = $2 AND lab_id = $1`, labID, subtopicID, name, focus)
+	if isUniqueViolation(err) {
+		return ErrSubtopicTaken
+	}
+
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrSubtopicNotFound
+	}
+
+	return err
+}
+
+func (s *PostgresStore) MergeSubtopics(ctx context.Context, labID, from, into string) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var found int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM lab_subtopics WHERE lab_id = $1 AND id IN ($2, $3)`, labID, from, into).Scan(&found); err != nil {
+			return err
+		}
+
+		if found != 2 {
+			return ErrSubtopicNotFound
+		}
+
+		steps := []struct {
+			sql  string
+			args []any
+		}{
+			{`UPDATE works SET subtopic_id = $3 WHERE lab_id = $1 AND subtopic_id = $2`, []any{labID, from, into}},
+			{`UPDATE research_runs SET focus_subtopic = $3 WHERE lab_id = $1 AND focus_subtopic = $2`, []any{labID, from, into}},
+			// Its searches go with it, so researching the merged subtopic
+			// further searches both.
+			{`UPDATE lab_subtopics i SET queries = ARRAY(SELECT DISTINCT unnest(i.queries || f.queries))
+				FROM lab_subtopics f WHERE i.id = $3 AND f.id = $2 AND i.lab_id = $1`, []any{labID, from, into}},
+			{`DELETE FROM lab_subtopics WHERE lab_id = $1 AND id = $2`, []any{labID, from}},
+		}
+
+		for _, step := range steps {
+			if _, err := tx.Exec(ctx, step.sql, step.args...); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+func (s *PostgresStore) Find(ctx context.Context, labID, runID string, w Work, f Find) (string, bool, error) {
 	var (
-		id    int64
+		id    string
 		added bool
 	)
 
@@ -191,7 +238,7 @@ func (s *PostgresStore) Find(ctx context.Context, labID, runID int64, w Work, f 
 			added = true
 			err = tx.QueryRow(ctx, `
 				INSERT INTO works (lab_id, url, kind, title, snippet, site, year, doi, openalex_id, cited_by, verdict, source_id, first_run, first_round)
-				VALUES ($1, $2, $3, $4, $5, $6, nullif($7, 0), $8, $9, $10, $11, nullif($12, 0), nullif($13, 0), $14)
+				VALUES ($1, $2, $3, $4, $5, $6, nullif($7, 0), $8, $9, $10, $11, nullif($12, '')::uuid, nullif($13, '')::uuid, $14)
 				RETURNING id`,
 				labID, w.URL, w.Kind, w.Title, w.Snippet, w.Site, w.Year, w.DOI, w.OpenAlexID, w.CitedBy, verdict, w.SourceID, runID, f.Round).Scan(&id)
 		case err == nil:
@@ -218,7 +265,7 @@ func (s *PostgresStore) Find(ctx context.Context, labID, runID int64, w Work, f 
 		}
 
 		_, err = tx.Exec(ctx, `
-			INSERT INTO work_finds (work_id, channel, query, via_work, run_id, round) VALUES ($1, $2, $3, nullif($4, 0), nullif($5, 0), $6)
+			INSERT INTO work_finds (work_id, channel, query, via_work, run_id, round) VALUES ($1, $2, $3, nullif($4, '')::uuid, nullif($5, '')::uuid, $6)
 			ON CONFLICT DO NOTHING`, id, f.Channel, f.Query, f.Via, runID, f.Round)
 
 		return err
@@ -229,10 +276,10 @@ func (s *PostgresStore) Find(ctx context.Context, labID, runID int64, w Work, f 
 
 // Works reads every work of the lab with its finds. A work read says how far
 // it has come: its crawl's progress and its pages' review.
-func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) {
+func (s *PostgresStore) Works(ctx context.Context, labID string) ([]Work, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT w.id, w.url, w.kind, w.title, w.snippet, w.site, coalesce(w.year, 0), w.doi, w.openalex_id, w.cited_by,
-		       coalesce(w.subtopic_id, 0), w.verdict, w.reason, w.by_user, coalesce(w.source_id, 0), w.references_done, w.citing_done,
+		       coalesce(w.subtopic_id::text, ''), w.verdict, w.reason, w.by_user, coalesce(w.source_id::text, ''), w.references_done, w.citing_done,
 		       CASE
 		           WHEN w.source_id IS NULL THEN ''
 		           WHEN rev.indexed THEN 'in'
@@ -248,8 +295,8 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 		           WHEN rev.ok > 0 THEN 'empty'
 		           ELSE 'failed'
 		       END,
-		       coalesce((SELECT json_agg(json_build_object('channel', f.channel, 'query', f.query, 'via', coalesce(f.via_work, 0), 'round', f.round,
-		                                                   'run', coalesce(f.run_id, 0))
+		       coalesce((SELECT json_agg(json_build_object('channel', f.channel, 'query', f.query, 'via', coalesce(f.via_work::text, ''), 'round', f.round,
+		                                                   'run', coalesce(f.run_id::text, ''))
 		                                 ORDER BY f.id)
 		                 FROM work_finds f WHERE f.work_id = w.id), '[]')
 		FROM works w
@@ -305,7 +352,7 @@ func (s *PostgresStore) Works(ctx context.Context, labID int64) ([]Work, error) 
 
 // labPages are the lab's pages kept on review, by the source that brought
 // each in, oldest source first.
-func (s *PostgresStore) labPages(ctx context.Context, labID int64) ([]LabPage, error) {
+func (s *PostgresStore) labPages(ctx context.Context, labID string) ([]LabPage, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT sp.source_id, p.url, pr.content_hash, pr.sketch
 		FROM sources src
@@ -331,17 +378,17 @@ func (s *PostgresStore) labPages(ctx context.Context, labID int64) ([]LabPage, e
 	})
 }
 
-func (s *PostgresStore) Judge(ctx context.Context, workID int64, verdict, reason string, subtopicID int64) error {
+func (s *PostgresStore) Judge(ctx context.Context, workID, verdict, reason, subtopicID string) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE works SET verdict = $2, reason = $3, subtopic_id = coalesce(nullif($4, 0), subtopic_id)
+		UPDATE works SET verdict = $2, reason = $3, subtopic_id = coalesce(nullif($4, '')::uuid, subtopic_id)
 		WHERE id = $1 AND NOT by_user`, workID, verdict, reason, subtopicID)
 
 	return err
 }
 
-func (s *PostgresStore) SetVerdict(ctx context.Context, labID, workID int64, verdict string, subtopicID int64) error {
+func (s *PostgresStore) SetVerdict(ctx context.Context, labID, workID, verdict, subtopicID string) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE works SET verdict = $3, by_user = true, subtopic_id = coalesce(nullif($4, 0), subtopic_id)
+		UPDATE works SET verdict = $3, by_user = true, subtopic_id = coalesce(nullif($4, '')::uuid, subtopic_id)
 		WHERE id = $2 AND lab_id = $1`, labID, workID, verdict, subtopicID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrWorkNotFound
@@ -350,26 +397,26 @@ func (s *PostgresStore) SetVerdict(ctx context.Context, labID, workID int64, ver
 	return err
 }
 
-func (s *PostgresStore) SetSource(ctx context.Context, workID, sourceID int64) error {
+func (s *PostgresStore) SetSource(ctx context.Context, workID, sourceID string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE works SET source_id = $2 WHERE id = $1`, workID, sourceID)
 	return err
 }
 
-func (s *PostgresStore) Expanded(ctx context.Context, workID int64, references, citing bool) error {
+func (s *PostgresStore) Expanded(ctx context.Context, workID string, references, citing bool) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE works SET references_done = references_done OR $2, citing_done = citing_done OR $3 WHERE id = $1`, workID, references, citing)
 
 	return err
 }
 
-func (s *PostgresStore) Link(ctx context.Context, labID int64, l Link) error {
+func (s *PostgresStore) Link(ctx context.Context, labID string, l Link) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO work_links (lab_id, from_work, to_work) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, labID, l.From, l.To)
 
 	return err
 }
 
-func (s *PostgresStore) Links(ctx context.Context, labID int64) ([]Link, error) {
+func (s *PostgresStore) Links(ctx context.Context, labID string) ([]Link, error) {
 	rows, err := s.pool.Query(ctx, `SELECT from_work, to_work FROM work_links WHERE lab_id = $1 ORDER BY from_work, to_work`, labID)
 	if err != nil {
 		return nil, err
@@ -388,7 +435,7 @@ func (s *PostgresStore) Links(ctx context.Context, labID int64) ([]Link, error) 
 	return links, err
 }
 
-func (s *PostgresStore) ReferencesOf(ctx context.Context, workIDs []int64) ([]Reference, error) {
+func (s *PostgresStore) ReferencesOf(ctx context.Context, workIDs []string) ([]Reference, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT w.id, r.url, r.label
 		FROM works w

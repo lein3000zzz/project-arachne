@@ -22,18 +22,20 @@
 <header class="site">
   <a class="brand" href="/">arachne</a>
   <nav class="nav" aria-label="Main">
-    <a href="/">Look up</a>
-    <a href="/?tab=labs" aria-current="true">Labs</a>
+    <a href="/" data-nav="search">Look up</a>
+    <a href="/?tab=labs" data-nav="labs" aria-current="page">Labs</a>
   </nav>
-  <span class="who" id="who"></span>
-  <a class="theme" href="/settings">settings</a>
-  <button type="button" class="theme" id="logout">log out</button>
-  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+  <div class="account">
+    <span class="who" id="who"></span>
+    <a href="/settings">settings</a>
+    <button type="button" class="link" id="logout">log out</button>
+    <button type="button" class="link" id="theme" aria-live="polite">theme: system</button>
+  </div>
 </header>
 
 <main id="main" class="docs with-toc">
   <nav class="docs-nav" aria-label="Lab">
-    <a id="backToLab" href="/">&larr; Lab</a>
+    <a id="backToLab" class="crumb" href="/">&larr; Lab</a>
     <p class="lab-name" id="labName"></p>
     <div class="artifact-nav" id="artifactNav"></div>
   </nav>
@@ -60,7 +62,7 @@
             <label for="extendText">Add a section</label>
             <textarea id="extendText" placeholder="the bottleneck blocks of deeper ResNets" required></textarea>
           </div>
-          <button class="action" id="extendGo">Plan section</button>
+          <button class="action primary" id="extendGo">Plan section</button>
         </form>
         <p class="note" id="extendNote" aria-live="polite"></p>
         <div id="extendCard"></div>
@@ -87,7 +89,7 @@
 <script src="/static/theme.js"></script>
 <script src="/static/common.js"></script>
 <script>
-const [, , labID, , artifactID] = location.pathname.split("/").map((p) => (/^\d+$/.test(p) ? Number(p) : p));
+const [, , labID, , artifactID] = location.pathname.split("/").map((p) => p.toLowerCase());
 let polling = null;
 let shownVersion = 0;
 let claims = {};
@@ -111,6 +113,9 @@ function render(data) {
     v.seconds ? Math.round(v.seconds) + " s" : null,
   ].filter(Boolean).join(" · ");
 
+  // The verdict box may sit inside the old text: home first, or it goes with it.
+  $("body").before($("claimInfo"));
+  $("claimInfo").hidden = true;
   $("body").innerHTML = data.html;
 
   // Sections are changed by asking, on the newest version only: a rewrite or
@@ -122,7 +127,7 @@ function render(data) {
       const id = h2.parentElement.id;
       if (!/^s\d+$/.test(id)) return;
       h2.append(el("button", {
-        type: "button", class: "action small rewrite", "data-section": id.slice(1),
+        type: "button", class: "link rewrite", "data-section": id.slice(1),
         title: "Write this section again from what the lab holds now",
       }, "rewrite"));
     });
@@ -152,15 +157,35 @@ function summarize(list) {
   }
   const counts = {};
   for (const c of list) counts[c.verdict || "unchecked"] = (counts[c.verdict || "unchecked"] || 0) + 1;
+  // Each kind of doubt is a way through the report: pressed again, the next
+  // claim of that kind.
   const said = [["supported", "supported"], ["partly", "partly"], ["unsupported", "not supported"], ["unchecked", "unchecked"]]
-    .filter(([k]) => counts[k]).map(([k, name]) => `${counts[k]} ${name}`);
-  $("checks").textContent = `checked ${list.length} claims: ${said.join(", ")}`;
+    .filter(([k]) => counts[k]).map(([k, name]) => k === "supported" ? `${counts[k]} ${name}`
+      : el("button", { type: "button", class: "jump " + k, title: `Go to the next claim ${name}`, onclick: () => jump(k) }, `${counts[k]} ${name} ›`));
+  $("checks").replaceChildren(`checked ${list.length} claims: `, ...said.flatMap((x, i) => (i ? [", ", x] : [x])));
 }
 
-function showClaim(id) {
+const jumped = {};
+
+function jump(verdict) {
+  const marks = [...document.querySelectorAll(`#body .mark.${verdict}`)];
+  if (!marks.length) return;
+  jumped[verdict] = ((jumped[verdict] ?? -1) + 1) % marks.length;
+  const mark = marks[jumped[verdict]];
+  mark.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  mark.focus({ preventScroll: true });
+  showClaim(mark.dataset.claim, mark);
+}
+
+// The verdict opens under the block that holds the claim, where the eye is.
+function showClaim(id, mark) {
   const c = claims[id];
   if (!c) return;
   const info = $("claimInfo");
+  const block = mark && mark.closest("#body p, #body ul, #body ol, #body table, #body pre, #body .part");
+  if (block) block.after(info);
+  document.querySelectorAll("#body .mark.current").forEach((m) => m.classList.remove("current"));
+  if (mark) mark.classList.add("current");
   info.hidden = false;
   // replaceChildren would print a null as "null".
   info.replaceChildren(...[
@@ -174,7 +199,7 @@ function showClaim(id) {
 $("body").addEventListener("click", async (e) => {
   const mark = e.target.closest(".mark");
   if (mark) {
-    showClaim(mark.dataset.claim);
+    showClaim(mark.dataset.claim, mark);
     return;
   }
 
@@ -295,7 +320,7 @@ $("rebuild").addEventListener("click", async () => {
 });
 
 $("deleteArtifact").addEventListener("click", async () => {
-  if (!confirm(`Delete "${$("title").textContent}", every version of it?`)) return;
+  if (!(await confirmInline($("deleteArtifact"), "Delete every version?", "delete"))) return;
   try {
     await send("DELETE", `/api/artifacts/${artifactID}`);
     location.assign(`/labs/${labID}#artifacts`);

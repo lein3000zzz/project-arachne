@@ -1,7 +1,7 @@
 -- What a document links to or cites, offered to the labs that hold it. Never
 -- links of the graph, never crawled unless a lab takes one as a source.
 CREATE TABLE page_references (
-    page_id  bigint NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+    page_id  uuid NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
     position int    NOT NULL,
     url      text   NOT NULL,
     label    text   NOT NULL DEFAULT '',

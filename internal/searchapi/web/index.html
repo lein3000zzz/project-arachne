@@ -23,23 +23,25 @@
 
 <header class="site">
   <a class="brand" href="/">arachne</a>
-  <span class="who" id="who"></span>
-  <a class="theme" href="/settings">settings</a>
-  <button type="button" class="theme" id="logout">log out</button>
-  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+  <nav class="nav" aria-label="Main">
+    <a href="/" data-nav="search" aria-current="page">Look up</a>
+    <a href="/?tab=labs" data-nav="labs">Labs</a>
+  </nav>
+  <div class="account">
+    <span class="who" id="who"></span>
+    <a href="/settings">settings</a>
+    <button type="button" class="link" id="logout">log out</button>
+    <button type="button" class="link" id="theme" aria-live="polite">theme: system</button>
+  </div>
 </header>
 
-<nav class="tabs" role="tablist" aria-label="Views">
-  <button type="button" class="tab" role="tab" id="tab-search" data-tab="search" aria-controls="search" aria-selected="true">Look up</button>
-  <button type="button" class="tab" role="tab" id="tab-labs" data-tab="labs" aria-controls="labs" aria-selected="false">Labs</button>
-</nav>
 
 <main id="main">
 
-<div id="search" role="tabpanel" aria-labelledby="tab-search">
+<div id="search">
   <section class="hero">
-    <p class="eyebrow">@arachne</p>
     <h1>Look up.</h1>
+    <p class="lede base-stats" id="baseStats" aria-live="polite"></p>
 
     <form id="searchForm" class="query" role="search">
       <div class="field">
@@ -115,6 +117,7 @@
     <div id="conflicts" class="conflicts" hidden></div>
     <div class="save-answer" id="saveAnswer" hidden></div>
     <ol class="read" id="read"></ol>
+    <details class="measure answer-measure" id="measure" hidden><summary>details</summary><p class="note answer-meta" id="measureText"></p></details>
   </section>
 
   <section id="resultsBox" hidden>
@@ -123,59 +126,30 @@
   </section>
 </div>
 
-<div id="labs" role="tabpanel" aria-labelledby="tab-labs" hidden>
+<div id="labs" hidden>
   <section class="hero">
-    <p class="eyebrow">@arachne</p>
-    <h1>Labs.</h1>
+    <div class="title-row">
+      <h1>Labs.</h1>
+      <button type="button" class="action primary" id="newLab" aria-expanded="false" aria-controls="newLabBox">New lab</button>
+    </div>
     <p class="lede">Topics the model builds from your links and files. Tick them when you look something up.</p>
 
-    <form id="planForm" class="ask">
-      <div class="field">
-        <label for="planText">New lab</label>
-        <textarea id="planText" placeholder="Go concurrency, from go.dev/doc/effective_go and go.dev/ref/mem" required></textarea>
-      </div>
-      <button class="action primary" id="planGo">Plan</button>
-    </form>
-    <p class="note" id="planNote" aria-live="polite"></p>
-    <div id="planCard"></div>
-  </section>
-
-  <section>
-    <h2>Your labs</h2>
-    <div class="cards" id="labCards"></div>
-  </section>
-
-  <section id="crawl" hidden>
-    <h2>Shared base</h2>
-    <form id="crawlForm" class="tool-row">
-      <div class="field">
-        <label for="crawlUrl">Start URL</label>
-        <input id="crawlUrl" type="url" placeholder="https://go.dev/doc/" required>
-      </div>
-      <div class="field narrow">
-        <label for="crawlLinks">Pages</label>
-        <input id="crawlLinks" type="number" min="1" value="100">
-      </div>
-      <div class="field narrow">
-        <label for="crawlDepth">Depth</label>
-        <input id="crawlDepth" type="number" min="1" value="3">
-      </div>
-      <div class="control">
-        <span class="control-label" id="l-scope">Scope</span>
-        <div class="segmented" data-name="scope" aria-labelledby="l-scope">
-          <button type="button" class="seg" data-value="site" aria-pressed="true">site</button>
-          <button type="button" class="seg" data-value="section" aria-pressed="false">section</button>
-          <button type="button" class="seg" data-value="anywhere" aria-pressed="false">anywhere</button>
+    <div class="drawer" id="newLabBox" hidden>
+      <form id="planForm" class="ask">
+        <div class="field">
+          <label for="planText">What the lab is about, and links if you have them</label>
+          <textarea id="planText" placeholder="Go concurrency, from go.dev/doc/effective_go and go.dev/ref/mem" required></textarea>
         </div>
-      </div>
-      <button class="action primary" id="crawlGo">Crawl</button>
-    </form>
-    <p id="crawlHint" class="note">Searchable by everyone once indexed.</p>
+        <div class="buttons">
+          <button class="action primary" id="planGo">Plan</button>
+          <button type="button" class="action" id="planCancel">Cancel</button>
+        </div>
+      </form>
+      <p class="note" id="planNote" aria-live="polite"></p>
+      <div id="planCard"></div>
+    </div>
 
-    <table class="table stack">
-      <thead><tr><th>URL</th><th>Status</th><th class="num">Pages</th><th class="num">Searchable</th><th class="num">When</th></tr></thead>
-      <tbody id="runs"></tbody>
-    </table>
+    <div class="cards" id="labCards"></div>
   </section>
 </div>
 
@@ -217,9 +191,11 @@ function showTab(name) {
   current = tabNames.includes(name) ? name : "search";
   for (const t of tabNames) {
     $(t).hidden = t !== current;
-    $("tab-" + t).setAttribute("aria-selected", String(t === current));
   }
-  if (current === "labs") loadRuns();
+  document.querySelectorAll("[data-nav]").forEach((a) => {
+    if (a.dataset.nav === current) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
 }
 
 function syncURL(extra) {
@@ -229,9 +205,26 @@ function syncURL(extra) {
   history.replaceState(null, "", p.toString() ? "?" + p : location.pathname);
 }
 
-document.querySelectorAll(".tab").forEach((button) => {
-  button.addEventListener("click", () => { showTab(button.dataset.tab); syncURL(); });
+// The header's links switch the view in place: no reload, the query kept.
+document.querySelectorAll("[data-nav]").forEach((a) => {
+  a.addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault();
+    showTab(a.dataset.nav);
+    syncURL();
+  });
 });
+
+// ---- the shared base in a line: what a look-up searches besides the labs ----
+api("/api/base").then((b) => {
+  if (!b.pages) {
+    $("baseStats").textContent = "Nothing crawled yet: answers come from your labs.";
+    return;
+  }
+  const more = [b.waiting ? `${plural(b.waiting, "page")} waiting to be indexed` : null, b.crawling ? `${plural(b.crawling, "crawl")} running` : null].filter(Boolean);
+  $("baseStats").replaceChildren(`Searches ${plural(b.pages, "page")} from ${plural(b.sites, "site")}, and your labs.`,
+    more.length ? el("span", { class: "more" }, more.join(" · ")) : null);
+}).catch(() => {});
 
 // ---- labs: ticks under the search box, cards in Labs ----
 function renderTicks() {
@@ -248,29 +241,27 @@ function renderTicks() {
       lab.name)));
 }
 
+function openNewLab(open) {
+  $("newLabBox").hidden = !open;
+  $("newLab").setAttribute("aria-expanded", String(open));
+  if (open) $("planText").focus();
+}
+
+$("newLab").addEventListener("click", () => openNewLab($("newLabBox").hidden));
+$("planCancel").addEventListener("click", () => { openNewLab(false); $("planNote").textContent = ""; });
+
 function renderCards() {
   if (labs.length === 0) {
-    $("labCards").replaceChildren(el("p", { class: "note" }, "None yet."));
+    $("labCards").replaceChildren(el("p", { class: "note" }, "No labs yet: describe one above to start."));
+    $("newLabBox").hidden = false;
+    $("newLab").setAttribute("aria-expanded", "true");
     return;
   }
   $("labCards").replaceChildren(...labs.map((lab) => el("div", { class: "card" },
     el("h3", {}, el("a", { href: "/labs/" + lab.id }, lab.name)),
     lab.topic ? el("p", { class: "note clamp" }, lab.topic) : null,
     el("p", { class: "note card-meta" }, `${lab.sources} sources · ${lab.pages} pages` +
-      (lab.set_aside ? ` · ${lab.set_aside} set aside` : "") + ` · ${ago(lab.updated_at)}`),
-    el("button", { type: "button", class: "card-delete", "aria-label": `Delete ${lab.name}`, title: "Delete this lab",
-      onclick: () => deleteLab(lab) }, "delete"))));
-}
-
-async function deleteLab(lab) {
-  if (!confirm(`Delete “${lab.name}”? Its reports and map go; its pages stay in the shared base.`)) return;
-  try {
-    await send("DELETE", "/api/labs/" + lab.id);
-    ticked.delete(lab.id);
-  } catch (err) {
-    alert(err.message);
-  }
-  loadLabs();
+      (lab.set_aside ? ` · ${lab.set_aside} set aside` : "") + ` · ${ago(lab.updated_at)}`))));
 }
 
 async function loadLabs() {
@@ -294,7 +285,7 @@ function signals(r) {
   if (r.dense) out.push(chip("dense ", el("b", {}, "#" + r.dense.rank), " " + fmt(r.dense.score, 3)));
   if (r.bm25) out.push(chip("bm25 ", el("b", {}, "#" + r.bm25.rank), " " + fmt(r.bm25.score, 3)));
   if (r.pagerank) out.push(chip("pagerank ", el("b", {}, fmt(r.pagerank.page, 3)), " site " + fmt(r.pagerank.site, 3)));
-  return el("ul", { class: "chips" }, ...out);
+  return el("details", { class: "measure" }, el("summary", {}, "scores"), el("ul", { class: "chips" }, ...out));
 }
 
 function renderResults(list) {
@@ -369,6 +360,10 @@ function offerWeb(q, weak) {
   const box = $("webOffer");
   box.hidden = !engines.look_up;
   if (box.hidden) return;
+  // After an answer it is a next step, beside saving it; without one, the
+  // way on, right under the question.
+  if (weak) $("badge").after(box);
+  else $("saveAnswer").after(box);
   const button = el("button", { type: "button", class: "action small" + (weak ? " primary" : "") }, weak ? "Look on the web" : "Look on the web too");
   button.addEventListener("click", () => searchAndAnswer(q, true));
   box.replaceChildren(...[weak ? el("span", { class: "note" }, "Nothing clearly relevant in the index.") : null, button].filter(Boolean));
@@ -378,6 +373,11 @@ function offerWeb(q, weak) {
 // citation links and claim marks added after - the only HTML this page takes
 // from the server. Until the first rendering arrives, the text is shown as is.
 function showAnswer(html) {
+  // The verdict box may sit inside the old text: home first, or it goes with it.
+  if ($("answerText").contains($("claimInfo"))) {
+    $("answerText").after($("claimInfo"));
+    $("claimInfo").hidden = true;
+  }
   $("answerText").innerHTML = html;
 }
 
@@ -397,16 +397,21 @@ function markClaim(i, claim) {
 $("answerText").addEventListener("click", (e) => {
   const mark = e.target.closest(".mark");
   if (mark) {
-    showClaim(Number(mark.dataset.claim.split("-")[1]));
+    showClaim(Number(mark.dataset.claim.split("-")[1]), mark);
     return;
   }
   const link = e.target.closest('a[href^="#src-"]');
   if (link) flash(Number(link.getAttribute("href").slice(5)));
 });
 
-function showClaim(i) {
+// The verdict opens under the block that holds the claim, where the eye is.
+function showClaim(i, mark) {
   const c = checked[i];
   const info = $("claimInfo");
+  const block = mark && mark.closest("#answerText p, #answerText ul, #answerText ol, #answerText table, #answerText pre");
+  if (block) block.after(info);
+  document.querySelectorAll("#answerText .mark.current").forEach((m) => m.classList.remove("current"));
+  if (mark) mark.classList.add("current");
   info.hidden = false;
   if (!c || !c.verdict) {
     info.replaceChildren("Being checked against " + (c ? c.cites.map((n) => "[" + n + "]").join("") : "its sources") + "…");
@@ -458,9 +463,34 @@ function offerSave(id, question) {
 function summarize(seconds) {
   const counts = {};
   for (const c of checked) counts[c.verdict || "unchecked"] = (counts[c.verdict || "unchecked"] || 0) + 1;
+  // A doubtful kind is a way through the answer, as on a report.
   const said = [["supported", "supported"], ["partly", "partly"], ["unsupported", "not supported"], ["unchecked", "unchecked"]]
-    .filter(([v]) => counts[v]).map(([v, name]) => `${counts[v]} ${name}`);
-  return checked.length ? `checked ${checked.length} claims: ${said.join(", ")} · ${seconds.toFixed(1)} s` : "no claims to check";
+    .filter(([v]) => counts[v]).map(([v, name]) => v === "supported" ? `${counts[v]} ${name}`
+      : el("button", { type: "button", class: "jump " + v, title: `Go to the next claim ${name}`, onclick: () => jump(v) }, `${counts[v]} ${name} ›`));
+  return checked.length ? [`checked ${checked.length} claims: `, ...said.flatMap((x, i) => (i ? [", ", x] : [x]))] : ["no claims to check"];
+}
+
+const jumped = {};
+
+function jump(verdict) {
+  const marks = [...document.querySelectorAll(`#answerText .mark.${verdict}`)];
+  if (!marks.length) return;
+  jumped[verdict] = ((jumped[verdict] ?? -1) + 1) % marks.length;
+  const mark = marks[jumped[verdict]];
+  mark.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  mark.focus({ preventScroll: true });
+  showClaim(Number(mark.dataset.claim.split("-")[1]), mark);
+}
+
+// Timings and token counts matter for measuring the system, not for reading
+// the answer: kept, folded under "details".
+const measures = new Map();
+
+function measure(key, text) {
+  if (text == null) measures.delete(key);
+  else measures.set(key, text);
+  $("measure").hidden = measures.size === 0;
+  $("measureText").textContent = [...measures.values()].join(" · ");
 }
 
 function flash(n) {
@@ -493,9 +523,12 @@ function searchAndAnswer(q, web) {
   $("go").disabled = true;
   $("answerBox").hidden = true;
   $("resultsBox").hidden = true;
+  $("answerText").after($("claimInfo"));
   $("answerText").replaceChildren();
   $("answerMeta").textContent = "";
   $("verifyMeta").textContent = "";
+  measures.clear();
+  measure("reset", null);
   $("conflicts").hidden = true;
   $("claimInfo").hidden = true;
   offerSave(null);
@@ -570,15 +603,15 @@ function searchAndAnswer(q, web) {
     const total = ((performance.now() - started) / 1000).toFixed(1);
     const wait = first ? ((first - started) / 1000).toFixed(1) : "–";
     $("answerMeta").textContent = (done.weak ? "nothing clearly relevant found · " : "") +
-      `${fromWeb.size ? sourceCounts(sources, fromWeb) : scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited · ` +
-      `${done.usage.output_tokens} tokens · first word ${wait} s · ${total} s`;
+      `${fromWeb.size ? sourceCounts(sources, fromWeb) : scopeNames[done.scope] || ""} · ${done.cited.length}/${count} cited`;
+    measure("answer", `answered by ${done.model} · ${done.usage.output_tokens} tokens · first word ${wait} s · ${total} s`);
     $("go").disabled = false;
     checking = done.verifying;
     answerID = done.id;
     weak = done.weak;
     if (!checking) {
       stream.close();
-      badge(`${done.model} · ${total} s`);
+      badge("answered");
       offerSave(answerID, q);
       if (!web) offerWeb(q, weak);
       return;
@@ -619,8 +652,10 @@ function searchAndAnswer(q, web) {
     const v = JSON.parse(e.data);
     stream.close();
     checking = false;
-    $("verifyMeta").textContent = summarize(v.seconds) + ` · ${v.model}`;
-    badge(`checked · ${((performance.now() - started) / 1000).toFixed(1)} s`);
+    $("verifyMeta").replaceChildren(...summarize());
+    measure("check", `checked by ${v.model} in ${v.seconds.toFixed(1)} s`);
+    measure("total", `${((performance.now() - started) / 1000).toFixed(1)} s in all`);
+    badge("answered and checked");
     offerSave(answerID, q);
     if (!web) offerWeb(q, weak);
   });
@@ -659,7 +694,7 @@ async function searchOnly(q) {
     p.set("limit", String(RESULTS));
     const body = await api("/search?" + p);
     renderResults(body.results);
-    badge(body.results.length ? `${body.results.length} results · ${body.took_ms} ms` : "nothing found");
+    badge(body.results.length ? plural(body.results.length, "result") : "nothing found");
   } catch (err) {
     badge("look-up failed: " + err.message, "failed");
   } finally {
@@ -668,6 +703,7 @@ async function searchOnly(q) {
 }
 
 function run(q) {
+  document.body.classList.add("asked");
   const p = params(q);
   if (segValue("answer") === "off") p.set("answer", "0");
   syncURL(p);
@@ -680,65 +716,13 @@ $("searchForm").addEventListener("submit", (e) => {
   if (q) run(q);
 });
 
-// ---- crawls of the shared base ----
-let polling = null;
-
-function renderRuns(list) {
-  if (list.length === 0) {
-    $("runs").replaceChildren(el("tr", {}, el("td", { colspan: "5", class: "note" }, "None yet.")));
-    return;
-  }
-  $("runs").replaceChildren(...list.map((run) => el("tr", {},
-    el("td", { class: "url" }, run.start_url, run.note ? el("div", { class: "note" }, run.note) : null),
-    el("td", { "data-label": "status" }, stateOf(run.status)),
-    el("td", { class: "num", "data-label": "pages" }, run.pages + " / " + run.max_links),
-    el("td", { class: "num", "data-label": "searchable" }, run.docs_indexed + " / " + run.docs_queued,
-      run.docs_rejected ? el("div", { class: "note" }, run.docs_rejected + " set aside") : null,
-      run.docs_failed ? el("div", { class: "note" }, run.docs_failed + " failed") : null),
-    el("td", { class: "num", "data-label": "submitted" }, ago(run.submitted_at)))));
-}
-
-async function loadRuns() {
-  clearTimeout(polling);
-  try {
-    const res = await call("/api/runs?limit=8");
-    if (res.status === 503) { $("crawl").hidden = true; return; }
-    const body = await res.json();
-    $("crawl").hidden = false;
-    renderRuns(body.runs);
-    if (current === "labs" && body.runs.some((r) => active(r.status))) polling = setTimeout(loadRuns, 3000);
-  } catch (_) {
-    if (current === "labs") polling = setTimeout(loadRuns, 10000);
-  }
-}
-
-$("crawlForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  $("crawlGo").disabled = true;
-  try {
-    const run = await send("POST", "/api/runs", {
-      url: $("crawlUrl").value.trim(),
-      scope: segValue("scope"),
-      links: Number($("crawlLinks").value),
-      depth: Number($("crawlDepth").value),
-    });
-    $("crawlUrl").value = "";
-    $("crawlHint").textContent = "Queued " + run.start_url;
-    loadRuns();
-  } catch (err) {
-    $("crawlHint").replaceChildren(el("span", { class: "error" }, err.message));
-  } finally {
-    $("crawlGo").disabled = false;
-  }
-});
-
 // ---- new lab: the model drafts, the user confirms ----
 let planFiles = [];
 
 function renderPlanFiles() {
   $("planFiles").replaceChildren(...planFiles.map((f, i) => el("li", {},
     f.name, el("span", { class: "host" }, fileSize(f.size)),
-    el("button", { type: "button", class: "action small", onclick: () => { planFiles.splice(i, 1); renderPlanFiles(); } }, "remove"))));
+    el("button", { type: "button", class: "link danger", onclick: () => { planFiles.splice(i, 1); renderPlanFiles(); } }, "remove"))));
 }
 
 function addPlanFiles(plan, files) {
@@ -750,33 +734,58 @@ function addPlanFiles(plan, files) {
   renderPlanFiles();
 
   // Files are sources too: a lab made of them need not search the web.
-  if (firstFiles && planFiles.length && !plan.sources.length && $("planWeb")) $("planWeb").checked = false;
+  if (firstFiles && planFiles.length && !plan.sources.length && $("planWeb")) {
+    $("planWeb").checked = false;
+    syncPlanResearch();
+  }
+}
+
+// Engines matter only when the lab researches: greyed out otherwise.
+function syncPlanResearch() {
+  const on = $("planWeb") && $("planWeb").checked;
+  if ($("planLinksNote")) $("planLinksNote").textContent = on ? "None given: research finds the sources." : "None given: add files, or the lab starts empty.";
+  const row = $("planEngines");
+  if (!row) return;
+  row.classList.toggle("off", !on);
+  row.querySelectorAll("input").forEach((box) => { box.disabled = !on; });
+}
+
+const planRow = (label, ...value) => el("div", { class: "plan-row" },
+  el("span", { class: "plan-label" }, label), el("div", { class: "plan-value" }, ...value));
+
+function closePlan() {
+  $("planCard").replaceChildren();
+  $("planForm").hidden = false;
+  $("planText").focus();
 }
 
 function renderPlan(plan) {
   planFiles = [];
+  $("planForm").hidden = true;
+  const canResearch = engines.available.length > 0;
+  // Without links, research is how the lab gets anything, so it starts ticked.
+  const research = canResearch ? el("input", { type: "checkbox", id: "planWeb", checked: plan.sources.length === 0, onchange: syncPlanResearch }) : null;
   $("planCard").replaceChildren(el("div", { class: "plan" },
     el("p", { class: "eyebrow" }, plan.model ? "drafted by " + plan.model : "read literally: the model could not draft it"),
     el("h3", {}, plan.name),
     plan.topic ? el("p", { class: "note" }, plan.topic) : null,
-    plan.sources.length
-      ? el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope))))
-      : el("p", { class: "note" }, engines.available.length ? "No links: add files, or research the topic to find its sources." : "No links: add files, or the lab starts empty."),
-    el("div", { class: "upload" },
-      el("label", { class: "action small file-pick" }, "Add files",
-        el("input", { type: "file", multiple: true, onchange: (e) => { addPlanFiles(plan, e.target.files); e.target.value = ""; } })),
-      el("span", { class: "note" }, "PDF, Word, EPUB, scans…, up to 32 MiB each; only your labs see them."),
-      el("ul", { class: "file-list", id: "planFiles" })),
-    // Without links, research is how the lab gets anything, so it starts ticked.
-    engines.available.length ? el("div", { class: "web-choice" },
-      el("label", { class: "check" }, el("input", { type: "checkbox", id: "planWeb", checked: plan.sources.length === 0 }),
-        "Research this topic: find, judge and read what exists on it"),
-      el("div", { class: "ticks" }, el("span", { class: "control-label" }, "Engines"),
-        ...engines.available.map((e) => el("label", { class: "tick" },
-          el("input", { type: "checkbox", class: "planEngine", value: e, checked: engines.default.includes(e) }), e)))) : null,
+    el("div", { class: "plan-rows" },
+      planRow("Links", plan.sources.length
+        ? el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope))))
+        : el("span", { class: "note", id: "planLinksNote" })),
+      planRow("Files",
+        el("label", { class: "action small file-pick" }, "Add files",
+          el("input", { type: "file", multiple: true, onchange: (e) => { addPlanFiles(plan, e.target.files); e.target.value = ""; } })),
+        el("span", { class: "note" }, "PDF, Word, EPUB, scans · up to 32 MiB each · only your labs see them"),
+        el("ul", { class: "file-list", id: "planFiles" })),
+      canResearch ? planRow("Research", el("label", { class: "check" }, research, "Find, judge and read what exists on the topic")) : null,
+      canResearch ? el("div", { class: "plan-row", id: "planEngines" }, el("span", { class: "plan-label" }, "Engines"),
+        el("div", { class: "plan-value ticks" }, engines.available.map((e) => el("label", { class: "tick" },
+          el("input", { type: "checkbox", class: "planEngine", value: e, checked: engines.default.includes(e) }), e)))) : null),
     el("div", { class: "buttons" },
-      el("button", { type: "button", class: "action primary", onclick: (e) => build(plan, e.target) }, "Build"),
-      el("button", { type: "button", class: "action", onclick: () => $("planCard").replaceChildren() }, "Cancel"))));
+      el("button", { type: "button", class: "action primary", onclick: (e) => build(plan, e.target) }, "Build the lab"),
+      el("button", { type: "button", class: "action", onclick: closePlan }, "Back"))));
+  syncPlanResearch();
 }
 
 async function build(plan, button) {
@@ -829,7 +838,7 @@ $("planForm").addEventListener("submit", async (e) => {
 // ---- start: the URL may name a tab, ticked labs and a query ----
 {
   const p = new URLSearchParams(location.search);
-  for (const id of (p.get("labs") || "").split(",")) if (/^\d+$/.test(id)) ticked.add(Number(id));
+  for (const id of (p.get("labs") || "").split(",")) if (isID(id)) ticked.add(id.toLowerCase());
 
   showTab(p.get("tab") || "search");
 

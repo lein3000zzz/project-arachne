@@ -23,7 +23,16 @@ type QualityPage struct {
 	Hash       string
 	// Nil when the page has none: too short, or not sketched yet.
 	Sketch copies.Sketch
+	// Its latest version in the indexing queue: waiting, dead (every try
+	// failed), or "" when none is there.
+	Queue      string
+	QueueError string
 }
+
+const (
+	QueueWaiting = "waiting"
+	QueueDead    = "dead"
+)
 
 // Quality is how good a lab's material is, before an answer leans on it:
 // what share of its pages a model can read with profit, and what the rest is.
@@ -35,7 +44,14 @@ type Quality struct {
 	Share   float64 `json:"share"`
 	Verdict string  `json:"verdict"`
 
-	NotFetched int            `json:"not_fetched"`
+	NotFetched int `json:"not_fetched"`
+	// Fetched, never indexed yet: still in the indexing queue.
+	Waiting int `json:"waiting"`
+	// Fetched, and indexing failed every try: nothing of the page is
+	// searchable, or only an older version.
+	NotIndexed      int          `json:"not_indexed"`
+	NotIndexedPages []FailedPage `json:"not_indexed_pages"`
+
 	SetAside   int            `json:"set_aside"`
 	Reasons    map[string]int `json:"reasons"`
 	Unreviewed int            `json:"unreviewed"`
@@ -53,6 +69,11 @@ type Quality struct {
 	Notes []string `json:"notes"`
 }
 
+type FailedPage struct {
+	URL   string `json:"url"`
+	Error string `json:"error"`
+}
+
 type Duplicate struct {
 	Title string   `json:"title"`
 	URLs  []string `json:"urls"`
@@ -67,6 +88,8 @@ const (
 	// sees the topic through it.
 	dominantSite    = 0.5
 	duplicateGroups = 10
+	failedShown     = 10
+	failedErrorRuns = 300
 )
 
 var reasonWords = map[string]string{
@@ -76,7 +99,7 @@ var reasonWords = map[string]string{
 
 // QualityOf reports on a lab's pages.
 func QualityOf(pages []QualityPage) Quality {
-	q := Quality{Pages: len(pages), Reasons: map[string]int{}, DuplicateGroups: []Duplicate{}, Notes: []string{}}
+	q := Quality{Pages: len(pages), Reasons: map[string]int{}, DuplicateGroups: []Duplicate{}, NotIndexedPages: []FailedPage{}, Notes: []string{}}
 
 	var kept []QualityPage
 
@@ -84,6 +107,18 @@ func QualityOf(pages []QualityPage) Quality {
 		switch {
 		case p.Status < 200 || p.Status > 299:
 			q.NotFetched++
+			continue
+		case p.Queue == QueueDead:
+			q.NotIndexed++
+			if len(q.NotIndexedPages) < failedShown {
+				q.NotIndexedPages = append(q.NotIndexedPages, FailedPage{URL: p.URL, Error: cut(p.QueueError, failedErrorRuns)})
+			}
+
+			continue
+		case p.Queue == QueueWaiting && p.Decision == "":
+			// Never indexed: a page with a review waits as a newer version,
+			// the older one searchable meanwhile.
+			q.Waiting++
 			continue
 		case p.Decision == "skip":
 			q.SetAside++
@@ -250,6 +285,14 @@ func notes(q Quality) []string {
 		out = append(out, note{q.NotFetched, fmt.Sprintf("%d %s could not be fetched", q.NotFetched, pagesWord(q.NotFetched))})
 	}
 
+	if q.NotIndexed > 0 {
+		out = append(out, note{q.NotIndexed, fmt.Sprintf("%d %s fetched but could not be indexed", q.NotIndexed, pagesWord(q.NotIndexed))})
+	}
+
+	if q.Waiting > 0 {
+		out = append(out, note{q.Waiting, fmt.Sprintf("%d %s still waiting to be indexed", q.Waiting, pagesWord(q.Waiting))})
+	}
+
 	if q.Duplicates > 0 {
 		same := "the same text"
 		if slices.ContainsFunc(q.DuplicateGroups, func(d Duplicate) bool { return d.Near }) {
@@ -295,8 +338,23 @@ func pluralHas(n int) string {
 	return "pages have"
 }
 
+func cut(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > limit {
+		return string(r[:limit]) + "…"
+	}
+
+	return s
+}
+
+// RetryFailed gives the lab's pages that failed every indexing try another
+// round of tries.
+func (s *Service) RetryFailed(ctx context.Context, ownerID, labID string) (int64, error) {
+	return s.store.RetryFailed(ctx, ownerID, labID)
+}
+
 // Quality reports on how good the lab's material is.
-func (s *Service) Quality(ctx context.Context, ownerID, labID int64) (Quality, error) {
+func (s *Service) Quality(ctx context.Context, ownerID, labID string) (Quality, error) {
 	pages, err := s.store.QualityPages(ctx, ownerID, labID)
 	if err != nil {
 		return Quality{}, err

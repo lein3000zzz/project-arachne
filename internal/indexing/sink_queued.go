@@ -267,7 +267,7 @@ func (s *QueuedSink) process(job *Job) {
 }
 
 // hold renews the lease on a page until ctx ends.
-func (s *QueuedSink) hold(ctx context.Context, id int64) {
+func (s *QueuedSink) hold(ctx context.Context, id string) {
 	ticker := time.NewTicker(lease / 3)
 	defer ticker.Stop()
 

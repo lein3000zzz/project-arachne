@@ -22,20 +22,26 @@
 <header class="site">
   <a class="brand" href="/">arachne</a>
   <nav class="nav" aria-label="Main">
-    <a href="/">Look up</a>
-    <a href="/?tab=labs" aria-current="true">Labs</a>
+    <a href="/" data-nav="search">Look up</a>
+    <a href="/?tab=labs" data-nav="labs" aria-current="page">Labs</a>
   </nav>
-  <span class="who" id="who"></span>
-  <a class="theme" href="/settings">settings</a>
-  <button type="button" class="theme" id="logout">log out</button>
-  <button type="button" class="theme" id="theme" aria-live="polite">theme: system</button>
+  <div class="account">
+    <span class="who" id="who"></span>
+    <a href="/settings">settings</a>
+    <button type="button" class="link" id="logout">log out</button>
+    <button type="button" class="link" id="theme" aria-live="polite">theme: system</button>
+  </div>
 </header>
 
 <main id="main" class="lab-page">
   <div class="lab-head">
     <a class="crumb" href="/?tab=labs">&larr; Labs</a>
-    <h1 id="title">&hellip;</h1>
+    <div class="lab-title">
+      <h1 id="title">&hellip;</h1>
+      <button type="button" class="link" id="goRename" hidden>rename</button>
+    </div>
     <p class="lede clamp" id="topic"></p>
+    <button type="button" class="link" id="topicMore" hidden aria-controls="topic" aria-expanded="false">more</button>
     <p class="note" id="summary"></p>
     <div class="buttons">
       <a class="action primary" id="askWith" href="/">Look up with this lab</a>
@@ -55,8 +61,10 @@
   </nav>
 
   <section class="panel" id="overview" role="tabpanel">
+    <div class="next-step" id="nextStep" aria-live="polite"></div>
     <div class="overview" id="overviewCards"></div>
     <div class="quality" id="qualityReport"></div>
+    <div class="buttons quality-links" id="qualityLinks"></div>
   </section>
 
   <section class="panel" id="sources" role="tabpanel" hidden>
@@ -116,19 +124,23 @@
     </div>
     <div class="graph" id="researchGraph" hidden>
       <div class="graph-tools">
-        <span class="control-label">Also show</span>
-        <label class="tick"><input type="checkbox" id="gMaybe"> maybe</label>
-        <label class="tick"><input type="checkbox" id="gPending"> not yet judged</label>
-        <label class="tick"><input type="checkbox" id="gDropped"> dropped</label>
-        <button type="button" class="action small" id="graphFit">fit</button>
+        <div class="segmented" role="group" aria-label="Works shown">
+          <button type="button" class="seg" id="gMaybe" aria-pressed="false">+ maybe</button>
+          <button type="button" class="seg" id="gPending" aria-pressed="false">+ not judged</button>
+          <button type="button" class="seg" id="gDropped" aria-pressed="false">+ dropped</button>
+        </div>
         <span class="note" id="graphNote" aria-live="polite"></span>
+        <span class="graph-actions">
+          <button type="button" class="action small" id="graphFit" title="Fit the whole graph in view">fit</button>
+          <button type="button" class="action small" id="graphFull" aria-pressed="false" title="Full screen (Esc to leave)">full screen</button>
+        </span>
       </div>
       <div class="graph-body">
         <div id="graphCanvas" class="graph-canvas" role="img" aria-label="The research map as a graph: works and the citations between them"></div>
         <aside id="graphSide" class="graph-side"></aside>
       </div>
-      <p class="note graph-legend">● in the index &nbsp; ◐ being read &nbsp; ○ not read &nbsp; ◌ kept out or set aside &nbsp;·&nbsp; a line: one cites the other
-        &nbsp;·&nbsp; size: how often the map's own works cite it &nbsp;·&nbsp; boxes: subtopics</p>
+      <p class="note graph-legend">● in the index &nbsp; ◐ being read &nbsp; ○ not read &nbsp; ◌ kept out &nbsp;·&nbsp; bigger: cited more by the map's own works
+        &nbsp;·&nbsp; hover a dot for its title, pick one to see its citations</p>
     </div>
     <div class="map" id="researchMap" hidden>
       <nav class="map-groups" id="mapGroups" aria-label="Subtopics"></nav>
@@ -156,7 +168,7 @@
         <label for="reportText">New report</label>
         <textarea id="reportText" placeholder="how residual connections fix the degradation problem, and what came after" required></textarea>
       </div>
-      <button class="action" id="reportGo">Outline</button>
+      <button class="action primary" id="reportGo">Outline</button>
     </form>
     <p class="note" id="reportNote" aria-live="polite"></p>
     <div id="outlineCard"></div>
@@ -168,6 +180,23 @@
   </section>
 
   <section class="panel" id="settings" role="tabpanel" hidden>
+    <h2>Name and topic</h2>
+    <p class="note">Drafted by the model from your request. Research judges what it finds against the topic, so a sharper topic
+      sharpens the next run.</p>
+    <form id="renameForm" class="settings-form">
+      <div class="field">
+        <label for="labName">Name</label>
+        <input id="labName" maxlength="80" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="labTopic">Topic</label>
+        <textarea id="labTopic" maxlength="2000"></textarea>
+      </div>
+      <div class="buttons">
+        <button class="action primary" id="renameGo">Save</button>
+        <span class="note" id="renameNote" aria-live="polite"></span>
+      </div>
+    </form>
     <h2>Search engines</h2>
     <p class="note">What research searches besides OpenAlex. Saved as you tick.</p>
     <div class="ticks" id="engineTicks"></div>
@@ -193,7 +222,7 @@
 <script src="/static/theme.js"></script>
 <script src="/static/common.js"></script>
 <script>
-const labID = Number(location.pathname.split("/").pop());
+const labID = location.pathname.split("/").pop().toLowerCase();
 const base = "/api/labs/" + labID;
 let polling = null;
 let lab = null;
@@ -226,7 +255,7 @@ function openDrawer(drawer, focus) {
 $("goResearch").addEventListener("click", () => { showTab("research"); openDrawer("researchDrawer", "researchText"); });
 $("goAdd").addEventListener("click", () => { showTab("sources"); openDrawer("addDrawer", "growText"); });
 $("addToggle").addEventListener("click", () => openDrawer("addDrawer", "growText"));
-$("addCancel").addEventListener("click", () => { $("addDrawer").hidden = true; $("growCard").replaceChildren(); });
+$("addCancel").addEventListener("click", () => { $("addDrawer").hidden = true; closePlan(); });
 $("researchNew").addEventListener("click", () => openDrawer("researchDrawer", "researchText"));
 $("researchCancel").addEventListener("click", () => { $("researchDrawer").hidden = true; });
 
@@ -234,8 +263,6 @@ function host(u) {
   if (isUpload(u)) return "an uploaded file";
   try { return new URL(u).hostname.replace(/^www\./, ""); } catch (_) { return u; }
 }
-
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 // ---- sources ----
 function sourceProgress(src) {
@@ -248,7 +275,7 @@ function sourceProgress(src) {
 function sourceRow(src) {
   const run = src.run;
   const status = run ? stateOf(run.status) : el("span", { class: "note" }, "not crawled");
-  const act = (label, onclick) => el("button", { type: "button", class: "action small", onclick }, label);
+  const act = (label, onclick, cls) => el("button", { type: "button", class: "link" + (cls ? " " + cls : ""), onclick }, label);
 
   const tag = { search: "found", reference: "cited", upload: "file", research: "research" }[src.kind] || src.scope;
   const upload = src.kind === "upload";
@@ -260,25 +287,37 @@ function sourceRow(src) {
       el("a", { href: pageHref(src.url), target: "_blank", rel: "noopener noreferrer", title: src.url }, upload ? src.filename : host(src.url) + shortPath(src.url)),
       el("span", { class: "tag" }, tag),
       why ? el("div", { class: "note clamp-1", title: why }, why) : null,
-      run && run.note ? el("div", { class: "note error" }, run.note) : null),
+      run && run.note ? el("div", { class: "note error" }, run.note) : null,
+      sourceErrors.has(src.id) ? el("div", { class: "error", role: "alert" }, sourceErrors.get(src.id)) : null),
     el("td", { "data-label": "status" }, status),
-    el("td", { class: "num", "data-label": "searchable" }, run ? run.docs_indexed + " / " + run.docs_queued : "–",
+    el("td", { class: "num", "data-label": "searchable" }, run && run.docs_queued ? run.docs_indexed + " / " + run.docs_queued : "–",
       run && run.docs_rejected ? el("div", { class: "note" }, run.docs_rejected + " set aside") : null),
     el("td", { class: "actions" },
       el("div", { class: "buttons" },
-        act("refresh", async (e) => {
-          e.target.disabled = true;
-          try { await send("POST", `${base}/sources/${src.id}/refresh`); } catch (err) { alert(err.message); }
-          load();
-        }),
-        act("remove", async () => {
-          const asked = upload ? `Remove ${src.filename}? Unless another of your labs holds it, the file is deleted.`
-            : `Remove ${src.url}? Its pages leave this lab, not the shared base.`;
-          if (!confirm(asked)) return;
-          try { await send("DELETE", `${base}/sources/${src.id}`); } catch (err) { alert(err.message); }
-          load();
-        }))));
+        ...(removing === src.id ? [
+          el("span", { class: "confirm-q" }, upload ? "Remove it? The file goes too, unless another lab holds it." : "Remove it from this lab?"),
+          act("remove", async () => {
+            removing = null;
+            sourceErrors.delete(src.id);
+            try { await send("DELETE", `${base}/sources/${src.id}`); } catch (err) { sourceErrors.set(src.id, err.message); }
+            load();
+          }, "danger"),
+          act("no", () => { removing = null; sources.redraw(); }),
+        ] : [
+          act("refresh", async (e) => {
+            e.target.disabled = true;
+            sourceErrors.delete(src.id);
+            try { await send("POST", `${base}/sources/${src.id}/refresh`); } catch (err) { sourceErrors.set(src.id, err.message); }
+            load();
+          }),
+          act("remove", () => { removing = src.id; sources.redraw(); }, "danger"),
+        ]))));
 }
+
+// The source asked about, and failures of a row's action: kept here, as the
+// list is redrawn while the lab is polled.
+let removing = null;
+const sourceErrors = new Map();
 
 function shortPath(u) {
   try {
@@ -315,16 +354,18 @@ const reasonNames = {
 function pageItem(p) {
   const r = p.review;
   const setAside = r && r.decision === "skip";
-  return el("li", { class: "page" + (setAside ? " set-aside" : "") },
-    el("span", { class: "status" }, p.status ? String(p.status) : "–"),
+  const failed = !(p.status >= 200 && p.status < 300);
+  return el("li", { class: "page" + (setAside ? " set-aside" : "") + (failed ? " failed" : "") },
     el("div", {},
       el("a", { href: pageHref(p.url), target: "_blank", rel: "noopener noreferrer" }, p.title || (isUpload(p.url) ? "an uploaded file" : p.url)),
       el("span", { class: "host" }, isUpload(p.url) ? "" : host(p.url)),
+      failed ? el("span", { class: "tag bad" }, p.status ? "not fetched: " + p.status : "not fetched") : null,
       setAside ? el("span", { class: "tag" }, "set aside: " + (r.reasons.map((x) => reasonNames[x] || x).join(", ") || "review")) : null,
       r && r.unreviewed ? el("span", { class: "tag" }, "unreviewed") : null,
       r && r.summary ? el("div", { class: "note clamp-2" }, r.summary) : null));
 }
 
+let allPages = [];
 const pageState = (p) => (p.review && p.review.decision === "skip" ? "aside" : p.status >= 200 && p.status < 300 ? "in" : "failed");
 
 const pagesList = listView({
@@ -336,7 +377,6 @@ const pagesList = listView({
   ],
   text: (p) => [p.url, p.title, p.review && p.review.summary].filter(Boolean).join(" "),
   row: pageItem,
-  size: 40,
   wrap: (rows) => el("ul", { class: "pages" }, rows),
 });
 $("pageList").append(pagesList.el);
@@ -344,6 +384,7 @@ $("pageList").append(pagesList.el);
 async function loadPages() {
   try {
     const { pages } = await api(`${base}/pages?limit=1000`);
+    allPages = pages;
     pagesList.set(pages);
     $("countPages").textContent = pages.length || "";
     return pages;
@@ -377,6 +418,20 @@ function renderQuality() {
     el("span", {}, d.title || host(d.urls[0])),
     el("span", { class: "note" }, ` · ${d.urls.length} ${d.near ? "near copies" : "copies"}: `),
     d.urls.map((u, i) => [i ? ", " : "", el("a", { href: u, target: "_blank", rel: "noopener noreferrer" }, host(u) + shortPath(u))])));
+  const failed = (q.not_indexed_pages || []).map((f) => el("li", {},
+    el("a", { href: f.url, target: "_blank", rel: "noopener noreferrer" }, host(f.url) + shortPath(f.url)),
+    el("div", { class: "note clamp-2" }, f.error)));
+  const retry = el("button", { type: "button", class: "action small" }, "Try them again");
+  retry.addEventListener("click", async () => {
+    retry.disabled = true;
+    try {
+      const r = await send("POST", `${base}/quality/retry`);
+      retry.textContent = `${plural(r.retried, "page")} queued again`;
+      setTimeout(loadQuality, 1500);
+    } catch (err) {
+      retry.textContent = err.message;
+    }
+  });
   // replaceChildren would print a null as "null".
   $("qualityReport").replaceChildren(...[
     el("h2", {}, "Context quality"),
@@ -385,6 +440,9 @@ function renderQuality() {
       `From ${plural(q.sites, "site")}.`),
     q.notes.length ? el("ul", { class: "quality-notes" }, q.notes.map((n) => el("li", {}, n))) : el("p", { class: "note" }, "Nothing stands out."),
     dupes.length ? el("details", { class: "options" }, el("summary", {}, `Copies (${q.duplicates})`), el("ul", { class: "quality-dupes" }, dupes)) : null,
+    q.not_indexed ? el("details", { class: "options" }, el("summary", {}, `Could not be indexed (${q.not_indexed})`),
+      el("p", { class: "note" }, "Fetched, but indexing failed every try - often the embedder or the review model was down."), retry,
+      el("ul", { class: "quality-dupes" }, failed)) : null,
   ].filter(Boolean));
 }
 
@@ -404,8 +462,14 @@ async function load() {
   document.title = lab.name + " · arachne";
   $("title").textContent = lab.name;
   $("topic").textContent = lab.topic;
-  $("summary").textContent = `${plural(lab.sources.length, "source")} · ${plural(lab.pages, "page")}` +
-    (lab.set_aside ? ` · ${lab.set_aside} set aside on review` : "") + ` · updated ${ago(lab.updated_at)}`;
+  $("goRename").hidden = false;
+  fitTopic();
+  // What is being typed stays: the lab is polled while it moves.
+  if (!renameDirty) {
+    $("labName").value = lab.name;
+    $("labTopic").value = lab.topic;
+  }
+  $("summary").textContent = `made ${ago(lab.created_at)} · updated ${ago(lab.updated_at)}`;
   $("askWith").href = "/?labs=" + lab.id;
   $("countSources").textContent = lab.sources.length || "";
 
@@ -417,48 +481,127 @@ async function load() {
   if (researching || building || lab.sources.some((s) => s.run && active(s.run.status))) polling = setTimeout(load, 3000);
 }
 
-// ---- overview: where each part stands, and the way in ----
+// ---- name and topic: the model's draft, the user's to change ----
+let renameDirty = false;
+$("renameForm").addEventListener("input", () => { renameDirty = true; $("renameNote").textContent = ""; });
+$("goRename").addEventListener("click", () => { showTab("settings"); $("labName").focus(); $("labName").select(); });
+
+$("renameForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("renameGo").disabled = true;
+  try {
+    await send("PUT", base, { name: $("labName").value, topic: $("labTopic").value });
+    renameDirty = false;
+    $("renameNote").textContent = "Saved.";
+    load();
+  } catch (err) {
+    $("renameNote").replaceChildren(el("span", { class: "error" }, err.message));
+  } finally {
+    $("renameGo").disabled = false;
+  }
+});
+
+// A topic cut to three lines offers the rest.
+function fitTopic() {
+  const t = $("topic");
+  if ($("topicMore").getAttribute("aria-expanded") === "true") return;
+  $("topicMore").hidden = t.scrollHeight <= t.clientHeight + 1;
+}
+
+$("topicMore").addEventListener("click", () => {
+  const open = $("topicMore").getAttribute("aria-expanded") !== "true";
+  $("topic").classList.toggle("clamp", !open);
+  $("topicMore").setAttribute("aria-expanded", String(open));
+  $("topicMore").textContent = open ? "less" : "more";
+});
+addEventListener("resize", fitTopic);
+
+// ---- overview: what to do next, where each part stands, and the way in ----
+// A card opens its tab; each of its lines opens the tab on what that line
+// counts.
 function card(tab, title, big, lines) {
-  return el("button", { type: "button", class: "ov-card", onclick: () => showTab(tab) },
-    el("span", { class: "ov-title" }, title),
+  const open = el("button", { type: "button", class: "ov-open", onclick: () => showTab(tab) }, el("span", { class: "ov-title" }, title));
+  return el("div", { class: "ov-card" },
+    open,
     el("span", { class: "ov-big" }, big),
-    lines.filter(Boolean).map((l) => el("span", { class: "ov-line" }, l)));
+    lines.filter(Boolean).map(([text, go]) => go
+      ? el("button", { type: "button", class: "ov-line ov-go", onclick: go }, text)
+      : el("span", { class: "ov-line" }, text)));
+}
+
+const goSources = (filter) => () => { showTab("sources"); sources.show(filter); };
+const goPages = (filter) => () => { showTab("pages"); pagesList.show(filter); };
+const goGroup = (key) => () => { group = key; showTab("research"); if (lastMap) renderMap(lastMap); };
+
+// The one thing most worth doing now, worked out from where the lab stands.
+function nextStep() {
+  const c = researchMap && researchMap.coverage, run = researchMap && researchMap.run;
+  const crawling = lab.sources.filter((s) => sourceProgress(s) === "progress").length;
+  const act = (label, onclick, primary) => el("button", { type: "button", class: "action small" + (primary ? " primary" : ""), onclick }, label);
+
+  if (!lab.sources.length && !run) {
+    return ["Empty so far: research the topic to find what exists on it, or add links and files you have.",
+      researchMap ? act("Research", () => { showTab("research"); openDrawer("researchDrawer", "researchText"); }, true) : null,
+      act("Add sources", () => { showTab("sources"); openDrawer("addDrawer", "growText"); })];
+  }
+  if (run && run.status === "running") {
+    return [`Researching: round ${Math.max(run.rounds.length, 1)}. Works show in Research as they are judged; kept ones are read in.`,
+      act("Watch it", () => showTab("research"))];
+  }
+  if (crawling) {
+    return [`${plural(crawling, "source")} still being read; ${crawling === 1 ? "its pages become" : "their pages become"} searchable as they are indexed.`,
+      act("See them", goSources("progress"))];
+  }
+  if (quality && (quality.verdict === "poor" || quality.verdict === "mixed")) {
+    return [`Context quality is ${quality.verdict}: ${quality.pages - quality.usable} of ${plural(quality.pages, "page")} are not usable. Answers lean on what is left.`,
+      act("See the pages", goPages(lab.set_aside ? "aside" : "failed"))];
+  }
+  if (c && c.pending && !(run && run.status === "running")) {
+    return [`${plural(c.pending, "work")} found by research still wait for a verdict.`, act("Judge them", goGroup("pending"))];
+  }
+  if (!artifactList.length) {
+    return ["Ready: look something up with this lab, or have a report written from it.",
+      el("a", { class: "action small primary", href: "/?labs=" + lab.id }, "Look up"),
+      act("Write a report", () => { showTab("artifacts"); $("reportText").focus(); })];
+  }
+  return ["Ready: look something up with this lab.", el("a", { class: "action small primary", href: "/?labs=" + lab.id }, "Look up")];
 }
 
 function renderOverview() {
   if (!lab) return;
+  const [say, ...actions] = nextStep();
+  $("nextStep").replaceChildren(el("p", {}, say), el("div", { class: "buttons" }, actions.filter(Boolean)));
+
   const by = (k) => lab.sources.filter((s) => sourceProgress(s) === k).length;
   const cards = [];
-  if (quality && quality.pages) {
-    cards.push(card("pages", "Context quality", verdictWords[quality.verdict] || quality.verdict, [
-      `${quality.usable} of ${quality.pages} pages usable`,
-      quality.notes[0] || "nothing stands out",
-    ]));
-  }
   cards.push(
     card("sources", "Sources", lab.sources.length, [
-      by("progress") ? `${by("progress")} being crawled` : null,
-      by("problems") ? `${by("problems")} with nothing searchable` : null,
-      `${by("done")} done`,
+      by("progress") ? [`${by("progress")} being read`, goSources("progress")] : null,
+      by("problems") ? [`${by("problems")} with nothing searchable`, goSources("problems")] : null,
+      [`${by("done")} done`, goSources("done")],
     ]));
 
   if (researchMap) {
     const c = researchMap.coverage, run = researchMap.run;
     cards.push(card("research", "Research", c.kept + " kept", [
-      run ? (run.status === "running" ? `researching… round ${Math.max(run.rounds.length, 1)}` : `last run ${ago(run.finished_at || run.started_at)}`) : "not researched yet",
-      c.works ? `${c.works} found · ${c.in} in the index` : null,
-      c.estimate ? `about ${Math.round(c.estimate.share * 100)}% of what exists found` : null,
+      [run ? (run.status === "running" ? `researching… round ${Math.max(run.rounds.length, 1)}` : `last run ${ago(run.finished_at || run.started_at)}`) : "not researched yet"],
+      c.works ? [`${c.works} found · ${c.in} in the index`] : null,
+      c.pending ? [`${c.pending} not yet judged`, goGroup("pending")] : null,
+      c.estimate ? [`about ${Math.round(c.estimate.share * 100)}% of what exists found`] : null,
     ]));
   }
 
   const writing = artifactList.filter((a) => a.latest.status === "running").length;
   cards.push(card("artifacts", "Reports", artifactList.length, [
-    writing ? `${writing} being written` : null,
-    artifactList[0] ? "latest: " + artifactList[0].title : "none yet",
+    writing ? [`${writing} being written`] : null,
+    artifactList[0] ? ["latest: " + artifactList[0].title, () => location.assign(`/labs/${labID}/artifacts/${artifactList[0].id}`)] : ["none yet"],
   ]));
-  cards.push(card("pages", "Pages", lab.pages, [lab.set_aside ? `${lab.set_aside} set aside on review` : "all read pages kept"]));
 
   $("overviewCards").replaceChildren(...cards);
+
+  const count = (k) => allPages.filter((p) => pageState(p) === k).length;
+  const link = (n, what, filter) => n ? el("button", { type: "button", class: "link", onclick: goPages(filter) }, `see the ${plural(n, "page")} ${what}`) : null;
+  $("qualityLinks").replaceChildren(...[link(count("aside"), "set aside", "aside"), link(count("failed"), "not fetched", "failed")].filter(Boolean));
 }
 
 // ---- references: what the lab's documents cite, offered and never followed ----
@@ -564,8 +707,6 @@ $("refAdd").addEventListener("click", async () => {
 });
 
 // ---- reports: built from the lab; answers saved to it ----
-const sectionStates = { pending: "·", writing: "…", checking: "…", done: "✓", thin: "–", failed: "✕" };
-
 function artifactRow(a) {
   const v = a.latest;
   const done = v.sections.filter((s) => s.state === "done").length;
@@ -576,8 +717,7 @@ function artifactRow(a) {
     el("a", { href: `/labs/${labID}/artifacts/${a.id}` }, a.title),
     el("span", { class: "tag" }, a.kind === "answer" ? "answer" : "report"),
     status,
-    v.status === "running" ? el("span", { class: "section-states", "aria-label": `${done} of ${v.sections.length} sections written` },
-      v.sections.map((s) => el("span", { title: `${s.heading}: ${s.state}` }, sectionStates[s.state] || "·"))) : null);
+    v.status === "running" ? el("span", { class: "note" }, `${done} of ${v.sections.length} sections written`) : null);
 }
 
 // Returns whether a report is being built, so the page keeps polling.
@@ -742,8 +882,9 @@ function renderRun(run, m) {
       r.queries && r.queries.length ? el("div", { class: "note clamp-2" }, "searched " + r.queries.map((q) => "“" + q + "”").join(", ")) : null,
       failed ? el("div", { class: "note" }, failed) : null);
   });
+  const judged = run.rounds.reduce((n, r) => n + (r.judged || 0), 0), read = run.rounds.reduce((n, r) => n + (r.read || 0), 0);
   const details = el("details", { class: "options rounds-box", open: roundsOpen },
-    el("summary", {}, plural(run.rounds.length, "round") + ` · ${run.model} · judge up to ${run.budget.found} · read up to ${run.budget.read}`),
+    el("summary", {}, plural(run.rounds.length, "round") + ` · ${run.model} · judged ${judged} of ${run.budget.found} · read ${read} of ${run.budget.read}`),
     run.request ? el("p", { class: "note" }, "asked: " + run.request) : null,
     el("ol", { class: "rounds" }, rounds));
   details.addEventListener("toggle", () => { roundsOpen = details.open; });
@@ -751,8 +892,18 @@ function renderRun(run, m) {
     el("p", { class: "run-status" }, el("span", { class: "state " + (researching ? "running" : run.status === "failed" ? "dropped" : "finished") },
       el("span", { class: "state-glyph", "aria-hidden": "true" }, researching ? "●" : run.status === "failed" ? "✕" : "✓"), status)),
     focusLine(run.focus, m),
+    researching ? el("div", { class: "meters" }, meter("judged", judged, run.budget.found), meter("read", read, run.budget.read)) : null,
     details,
   ].filter(Boolean));
+}
+
+// How much of a run's budget is spent: research stops when either runs out.
+function meter(what, used, of) {
+  const share = of ? Math.min(1, used / of) : 0;
+  return el("div", { class: "meter" },
+    el("span", { class: "meter-label" }, `${what} ${used} of ${of}`),
+    el("span", { class: "meter-bar", role: "progressbar", "aria-label": what, "aria-valuemin": "0", "aria-valuemax": String(of), "aria-valuenow": String(used) },
+      el("span", { class: "meter-fill", style: `width: ${(share * 100).toFixed(1)}%` })));
 }
 
 function focusLine(focus, m) {
@@ -816,14 +967,13 @@ function howFound(w) {
 }
 
 function workItem(w) {
-  const meta = [w.kind, w.year, w.site, w.cited_by ? `cited ${w.cited_by.toLocaleString()} times` : null].filter(Boolean).join(" · ");
+  const meta = [w.kind, w.year, w.site, w.cited_by ? `cited ${w.cited_by.toLocaleString()} times` : null, howFound(w)].filter(Boolean).join(" · ");
   return el("li", { class: "work " + (w.read ? "read-" + w.read : w.verdict) },
-    el("div", {},
+    el("div", { class: "work-main" },
       el("a", { href: pageHref(w.url), target: "_blank", rel: "noopener noreferrer" }, w.title || w.url),
-      w.read ? el("span", { class: "tag" + (w.read === "in" ? " lab" : ""), title: w.copy_of ? "the same text as " + w.copy_of : null }, readNames[w.read] || w.read) : null),
-    el("div", { class: "work-meta" }, meta),
-    el("div", { class: "note clamp-1" }, howFound(w)),
-    w.reason ? el("div", { class: "work-reason" }, w.reason) : null,
+      w.read ? el("span", { class: "tag" + (w.read === "in" ? " lab" : ""), title: w.copy_of ? "the same text as " + w.copy_of : null }, readNames[w.read] || w.read) : null,
+      el("div", { class: "work-meta clamp-1", title: meta }, meta),
+      w.reason ? el("div", { class: "work-reason" }, w.reason) : null),
     workActions(w));
 }
 
@@ -838,7 +988,6 @@ const works = listView({
   ],
   text: (w) => [w.title, w.url, w.site, w.reason].filter(Boolean).join(" "),
   row: workItem,
-  size: 20,
   empty: "No works here yet.",
   wrap: (rows) => el("ol", { class: "works" }, rows),
 });
@@ -902,15 +1051,77 @@ function renderMap(m) {
   }, el("span", { class: "g-name" }, g.name), el("span", { class: "g-count" }, g.works.length + (g.share != null ? ` · ${g.share}%` : "")))));
 
   const g = groups.find((x) => x.key === group);
+  // A rename or merge being typed is not redrawn under the user's hands.
+  const busy = g.subtopic && (editingSub === g.subtopic || mergingSub === g.subtopic) && $("groupHead").contains(document.activeElement);
+  if (!busy) renderGroupHead(g, m);
+  works.set(g.works);
+}
+
+// The subtopics are the model's draft too: renamed, or merged when two say
+// the same thing.
+let editingSub = null, mergingSub = null;
+
+function renderGroupHead(g, m) {
+  const redraw = () => renderMap(m);
+  const note = el("span", { class: "note", "aria-live": "polite" });
+
+  if (g.subtopic && editingSub === g.subtopic) {
+    const name = el("input", { value: g.name, maxlength: "80", required: true, "aria-label": "Subtopic name" });
+    const focus = el("input", { value: g.focus || "", maxlength: "500", "aria-label": "What it covers", placeholder: "what it covers" });
+    const form = el("form", { class: "sub-edit" },
+      el("div", { class: "field" }, el("label", {}, "Name"), name),
+      el("div", { class: "field" }, el("label", {}, "What it covers"), focus),
+      el("div", { class: "buttons" },
+        el("button", { class: "action small primary" }, "Save"),
+        el("button", { type: "button", class: "action small", onclick: () => { editingSub = null; redraw(); } }, "Cancel"), note));
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await send("PUT", `${base}/research/subtopics/${g.subtopic}`, { name: name.value, focus: focus.value });
+        editingSub = null;
+        load();
+      } catch (err) {
+        note.replaceChildren(el("span", { class: "error" }, err.message));
+      }
+    });
+    $("groupHead").replaceChildren(form);
+    name.focus();
+    return;
+  }
+
+  const others = g.subtopic ? m.subtopics.filter((s) => s.id !== g.subtopic) : [];
+  let merge = null;
+  if (g.subtopic && mergingSub === g.subtopic) {
+    const into = el("select", { "aria-label": "Merge into" }, others.map((s) => el("option", { value: s.id }, s.name)));
+    const go = el("button", { type: "button", class: "action small primary", disabled: researching,
+      title: researching ? "after the research under way" : null }, "Merge");
+    go.addEventListener("click", async () => {
+      try {
+        await send("POST", `${base}/research/subtopics/${g.subtopic}/merge`, { into: into.value });
+        mergingSub = null;
+        group = "sub-" + into.value;
+        load();
+      } catch (err) {
+        note.replaceChildren(el("span", { class: "error" }, err.message));
+      }
+    });
+    merge = el("div", { class: "sub-merge" },
+      el("span", { class: "note" }, "Merge into"), into, go,
+      el("button", { type: "button", class: "action small", onclick: () => { mergingSub = null; redraw(); } }, "Cancel"),
+      el("p", { class: "note" }, `Its ${plural(g.works.length, "work")} and searches move there; “${g.name}” goes.`), note);
+  }
+
   $("groupHead").replaceChildren(...[
-    el("h3", {}, g.name),
+    el("div", { class: "group-title" }, el("h3", {}, g.name),
+      g.subtopic ? el("button", { type: "button", class: "link", onclick: () => { editingSub = g.subtopic; mergingSub = null; redraw(); } }, "rename") : null,
+      others.length ? el("button", { type: "button", class: "link", onclick: () => { mergingSub = g.subtopic; editingSub = null; redraw(); } }, "merge into…") : null),
     g.focus ? el("p", { class: "note" }, g.focus) : null,
+    merge,
     g.subtopic ? el("div", { class: "buttons" },
       el("span", { class: "note" }, `${g.works.length} kept · ${g.inIndex} in the index` + (g.share != null ? ` · about ${g.share}% found` : "")),
       el("button", { type: "button", class: "action small", disabled: researching,
         onclick: () => steer("POST", "/research", { subtopic: g.subtopic }) }, "research this further")) : null,
   ].filter(Boolean));
-  works.set(g.works);
 }
 
 async function loadResearch() {
@@ -951,8 +1162,35 @@ document.querySelectorAll("#viewSwitch .seg").forEach((b) => b.addEventListener(
   if (view === "graph") renderGraph();
 }));
 
-for (const id of ["gMaybe", "gPending", "gDropped"]) $(id).addEventListener("change", () => renderGraph());
-$("graphFit").addEventListener("click", () => cy && cy.fit(undefined, 24));
+const graphAlso = { gMaybe: "maybe", gPending: "pending", gDropped: "drop" };
+for (const id of Object.keys(graphAlso)) $(id).addEventListener("click", () => {
+  $(id).setAttribute("aria-pressed", String($(id).getAttribute("aria-pressed") !== "true"));
+  renderGraph();
+});
+$("graphFit").addEventListener("click", () => cy && cy.fit(undefined, 30));
+
+// Full screen is the browser's own where it has one; elsewhere - a phone -
+// the graph covers the window.
+const graphIsFull = () => $("researchGraph").classList.contains("full");
+
+async function setGraphFull(on) {
+  const box = $("researchGraph");
+  box.classList.toggle("full", on);
+  document.body.classList.toggle("no-scroll", on);
+  if (on && box.requestFullscreen && !document.fullscreenElement) await box.requestFullscreen().catch(() => {});
+  if (!on && document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+  $("graphFull").setAttribute("aria-pressed", String(on));
+  $("graphFull").textContent = on ? "leave full screen" : "full screen";
+  if (cy) {
+    cy.resize();
+    cy.fit(undefined, 30);
+  }
+}
+
+$("graphFull").addEventListener("click", () => setGraphFull(!graphIsFull()));
+// Esc leaves the browser's full screen by itself; the page follows.
+document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && graphIsFull()) setGraphFull(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && graphIsFull() && !document.fullscreenElement) setGraphFull(false); });
 
 function loadCytoscape() {
   if (window.cytoscape) return Promise.resolve();
@@ -967,63 +1205,77 @@ function loadCytoscape() {
 
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+// Dots without names: a title shows on hover, for the works the picked one
+// is linked with, and for each subtopic's most cited. Named all at once,
+// a map of a hundred works is a wall of overlapping text.
 function graphStyle() {
   // Plain colours only: the canvas cannot read "rgb(… / alpha)".
   const fg = cssVar("--fg"), bg = cssVar("--bg"), muted = cssVar("--muted"), line = cssVar("--line");
+  const mono = "ui-monospace, Menlo, monospace";
   return [
     { selector: "node.sub", style: {
-      "background-color": line, "background-opacity": 0.25, "border-color": line, "border-width": 1, shape: "round-rectangle",
-      label: "data(label)", "text-valign": "top", "text-halign": "center", "text-margin-y": -4, color: muted,
-      "font-family": "ui-monospace, Menlo, monospace", "font-size": 11, padding: 14 } },
+      "background-color": line, "background-opacity": 0.18, "border-color": line, "border-width": 1, shape: "round-rectangle",
+      label: "data(label)", "text-valign": "top", "text-halign": "center", "text-margin-y": -6, color: muted,
+      "font-family": mono, "font-size": 12, padding: 18, "min-zoomed-font-size": 5 } },
     { selector: "node.work", style: {
-      width: "data(size)", height: "data(size)", "background-color": bg, "border-color": fg, "border-width": 1.5,
-      label: "data(label)", "font-size": 9, color: fg, "text-valign": "bottom", "text-margin-y": 3,
-      "font-family": "ui-monospace, Menlo, monospace", "text-max-width": 140, "text-wrap": "ellipsis", "min-zoomed-font-size": 13 } },
-    // The works the map cites most keep their names at any zoom: landmarks.
-    { selector: "node.work[links >= 3], node.work[cited >= 2]", style: { "font-size": 11, "font-weight": 600, "min-zoomed-font-size": 4, "text-background-color": bg,
-      "text-background-opacity": 0.85, "text-background-padding": 2 } },
+      width: "data(size)", height: "data(size)", "background-color": bg, "border-color": fg, "border-width": 1.5, label: "" } },
     { selector: "node.in", style: { "background-color": fg } },
     { selector: "node.reading", style: { "background-color": fg, "background-opacity": 0.45 } },
     { selector: "node.out", style: { "border-color": muted, "border-style": "dashed" } },
-    { selector: "node.maybe, node.pending, node.drop", style: { "border-color": muted, color: muted, opacity: 0.75 } },
+    { selector: "node.maybe, node.pending, node.drop", style: { "border-color": muted, opacity: 0.7 } },
     { selector: "node.drop", style: { "border-style": "dotted" } },
-    { selector: "node.work:selected", style: { "border-width": 3, "border-color": cssVar("--pod") || fg, "overlay-opacity": 0 } },
-    { selector: "edge", style: {
-      width: 1, "line-color": line, "curve-style": "bezier", "target-arrow-shape": "triangle", "target-arrow-color": line, "arrow-scale": 0.6 } },
-    { selector: "edge.near", style: { "line-color": fg, "target-arrow-color": fg, width: 1.5 } },
+    { selector: "node.landmark, node.named, node.hover", style: {
+      label: "data(label)", "font-family": mono, "font-size": 11, color: fg, "text-valign": "bottom", "text-margin-y": 4,
+      "text-max-width": 170, "text-wrap": "ellipsis", "text-background-color": bg, "text-background-opacity": 0.9,
+      "text-background-padding": 2, "min-zoomed-font-size": 6, "z-index": 15 } },
+    { selector: "node.hover", style: { "font-weight": 600, "z-index": 20 } },
+    { selector: "node.work:selected", style: { "border-width": 3, "border-color": cssVar("--pod") || fg, "overlay-opacity": 0, "z-index": 20 } },
+    // Faint until a work is picked: the boxes, not the lines, give the shape.
+    { selector: "edge", style: { width: 1, "line-color": muted, opacity: 0.25, "curve-style": "haystack" } },
+    { selector: "edge.near", style: {
+      "curve-style": "bezier", width: 1.6, "line-color": fg, opacity: 1, "target-arrow-shape": "triangle", "target-arrow-color": fg,
+      "arrow-scale": 0.7, "z-index": 10 } },
+    { selector: ".faded", style: { opacity: 0.12 } },
+    { selector: "node.sub.faded", style: { opacity: 0.4 } },
   ];
 }
 
 // The graph's elements: the works shown, the citations between them, and a
-// box for each subtopic that holds any.
+// box for each subtopic that holds any - and one for works in none.
 function graphElements(m) {
   const show = new Set(["keep"]);
-  if ($("gMaybe").checked) show.add("maybe");
-  if ($("gPending").checked) show.add("pending");
-  if ($("gDropped").checked) show.add("drop");
+  for (const [id, verdict] of Object.entries(graphAlso)) if ($(id).getAttribute("aria-pressed") === "true") show.add(verdict);
 
   const works = m.works.filter((w) => show.has(w.verdict));
   const ids = new Set(works.map((w) => w.id));
   const links = m.links.filter((l) => l.from !== l.to && ids.has(l.from) && ids.has(l.to));
-  const cited = new Map(), degree = new Map();
-  for (const l of links) {
-    cited.set(l.to, (cited.get(l.to) || 0) + 1);
-    for (const id of [l.from, l.to]) degree.set(id, (degree.get(id) || 0) + 1);
-  }
+  const cited = new Map();
+  for (const l of links) cited.set(l.to, (cited.get(l.to) || 0) + 1);
 
   const subs = new Set(m.subtopics.map((s) => s.id));
-  const used = new Set(works.filter((w) => subs.has(w.subtopic_id)).map((w) => w.subtopic_id));
+  const boxOf = (w) => subs.has(w.subtopic_id) ? "s" + w.subtopic_id : "s-none";
+  const inBox = new Map();
+  for (const w of works) inBox.set(boxOf(w), [...(inBox.get(boxOf(w)) || []), w]);
+
+  // Each box's most cited work, when the map cites it at all, keeps its
+  // name: a landmark to find one's way by.
+  const landmarks = new Set();
+  for (const list of inBox.values()) {
+    const top = list.filter((w) => cited.get(w.id)).sort((a, b) => cited.get(b.id) - cited.get(a.id))[0];
+    if (top) landmarks.add(top.id);
+  }
+
   const state = (w) => w.verdict !== "keep" ? w.verdict
     : w.read === "in" ? "in" : w.read === "reading" ? "reading" : w.read ? "out" : "unread";
+  const box = (id, name) => ({ group: "nodes", data: { id, label: `${name} · ${inBox.get(id).length}` }, classes: "sub" });
 
   const elements = [
-    ...m.subtopics.filter((s) => used.has(s.id)).map((s) => ({ group: "nodes", data: { id: "s" + s.id, label: s.name }, classes: "sub" })),
+    ...m.subtopics.filter((s) => inBox.has("s" + s.id)).map((s) => box("s" + s.id, s.name)),
+    ...(inBox.has("s-none") ? [box("s-none", "no subtopic")] : []),
     ...works.map((w) => {
       const n = cited.get(w.id) || 0;
-      const title = w.title || host(w.url);
-      return { group: "nodes", classes: "work " + state(w), data: {
-        id: "w" + w.id, work: w.id, parent: used.has(w.subtopic_id) ? "s" + w.subtopic_id : undefined,
-        size: 12 + 7 * Math.sqrt(n), cited: n, links: degree.get(w.id) || 0, label: title.length > 40 ? title.slice(0, 38) + "…" : title,
+      return { group: "nodes", classes: "work " + state(w) + (landmarks.has(w.id) ? " landmark" : ""), data: {
+        id: "w" + w.id, work: w.id, parent: boxOf(w), size: 12 + 7 * Math.sqrt(n), cited: n, label: w.title || host(w.url),
       } };
     }),
     ...links.map((l) => ({ group: "edges", data: { id: `e${l.from}-${l.to}`, source: "w" + l.from, target: "w" + l.to } })),
@@ -1042,13 +1294,13 @@ async function renderGraph() {
   }
 
   const { elements, works, links } = graphElements(lastMap);
-  $("graphNote").textContent = `${plural(works, "work")} · ${plural(links, "citation")} between them`;
+  $("graphNote").textContent = `${plural(works, "work")} · ${plural(links, "citation")}`;
 
   // Polling redraws only what changed: a new layout every few seconds would
   // throw the dots around under the reader's eyes.
   const shape = elements.map((e) => e.data.id + (e.data.parent || "")).join(",");
   if (cy && shape === graphShape) {
-    for (const e of elements) if (e.group === "nodes") cy.getElementById(e.data.id).classes(e.classes).data(e.data);
+    for (const e of elements) cy.getElementById(e.data.id).classes(e.classes || "").data(e.data);
     showPicked();
     return;
   }
@@ -1060,53 +1312,66 @@ async function renderGraph() {
     layout: { name: "preset" },
   });
   arrange();
+  cy.on("mouseover", "node.work", (e) => e.target.addClass("hover"));
+  cy.on("mouseout", "node.work", (e) => e.target.removeClass("hover"));
   cy.on("tap", "node.work", (e) => { graphPick = e.target.data("work"); showPicked(); });
   cy.on("tap", (e) => { if (e.target === cy) { graphPick = null; showPicked(); } });
   showPicked();
 }
 
 // arrange lays each subtopic out as its own cluster, the most-cited works in
-// its middle, and the clusters side by side. Citations among the works of a
-// map are few - a force layout would string them out in rows - so the
-// subtopics give the shape and the citations are drawn across it.
+// its middle, and the clusters in rows, each as wide as its works need. The
+// citations among the works of a map are few - a force layout would string
+// them out in rows - so the subtopics give the shape and the citations are
+// drawn across it.
 function arrange() {
   const clusters = cy.nodes(".sub").map((sub) => sub.children());
-  const loose = cy.nodes(".work").orphans();
-  if (loose.length) clusters.push(loose);
+  const sideOf = (nodes) => Math.max(110, Math.ceil(Math.sqrt(nodes.length)) * 46);
+  const gap = 90;
 
-  const sideOf = (nodes) => Math.max(160, Math.ceil(Math.sqrt(nodes.length)) * 76);
-  const cell = Math.max(...clusters.map(sideOf)) + 90;
-  // As many columns as the canvas's shape asks for: wide on a desk, one or
-  // two on a phone.
+  // Rows about as wide as the canvas's shape asks for: wide on a desk,
+  // narrow on a phone.
   const aspect = cy.width() / Math.max(1, cy.height());
-  const cols = Math.max(1, Math.min(clusters.length, Math.round(Math.sqrt(clusters.length * aspect))));
+  const area = clusters.reduce((sum, nodes) => sum + (sideOf(nodes) + gap) ** 2, 0);
+  const rowWidth = Math.max(...clusters.map(sideOf)) + gap, target = Math.max(rowWidth, Math.sqrt(area * aspect));
 
-  clusters.forEach((nodes, i) => {
+  let x = 0, y = 0, rowHeight = 0;
+  for (const nodes of clusters) {
     const side = sideOf(nodes);
-    const x = (i % cols) * cell + (cell - side) / 2, y = Math.floor(i / cols) * cell + (cell - side) / 2;
+    if (x > 0 && x + side > target) {
+      x = 0;
+      y += rowHeight + gap;
+      rowHeight = 0;
+    }
     nodes.layout({
       name: "concentric", boundingBox: { x1: x, y1: y, w: side, h: side }, fit: false, animate: false,
-      concentric: (n) => n.data("cited"), levelWidth: () => 1, minNodeSpacing: 26, avoidOverlap: true,
+      concentric: (n) => n.data("cited"), levelWidth: () => 1, minNodeSpacing: 16, avoidOverlap: true,
       startAngle: (3 / 2) * Math.PI,
     }).run();
-  });
+    x += side + gap;
+    rowHeight = Math.max(rowHeight, side);
+  }
 
-  cy.fit(undefined, 24);
+  cy.fit(undefined, 30);
 }
 
-// The work picked shows beside the graph with everything the list gives it;
-// its citations light up.
+// The work picked shows beside the graph with everything the list gives it.
+// What it cites and what cites it stay lit and named; the rest fades.
 function showPicked() {
   if (!cy) return;
-  cy.edges().removeClass("near");
+  cy.elements().removeClass("near named faded");
   const w = graphPick && lastMap.works.find((x) => x.id === graphPick);
-  if (!w) {
-    $("graphSide").replaceChildren(el("p", { class: "note" }, "Pick a work to see it here, with what it cites and what cites it lit up."));
+  const node = w && cy.getElementById("w" + w.id);
+  if (!node || node.empty()) {
+    $("graphSide").replaceChildren(el("p", { class: "note" }, "Pick a work to see it here, with what it cites and what cites it."));
     return;
   }
-  const node = cy.getElementById("w" + w.id);
   node.select();
+  const near = node.closedNeighborhood();
+  cy.elements().not(near).not(near.nodes().parents()).addClass("faded");
+  cy.nodes(".sub").not(near.nodes().parents()).addClass("faded");
   node.connectedEdges().addClass("near");
+  near.nodes().addClass("named");
   $("graphSide").replaceChildren(el("ol", { class: "works" }, workItem(w)));
 }
 
@@ -1133,21 +1398,31 @@ $("researchForm").addEventListener("submit", async (e) => {
 });
 
 // ---- growing: the model drafts the sources, the user confirms ----
+const planRow = (label, ...value) => el("div", { class: "plan-row" },
+  el("span", { class: "plan-label" }, label), el("div", { class: "plan-value" }, ...value));
+
+function closePlan() {
+  $("growCard").replaceChildren();
+  $("growForm").hidden = false;
+}
+
 function renderPlan(plan) {
   if (plan.sources.length === 0) {
     $("growCard").replaceChildren(el("p", { class: "note" }, "Nothing new to add: no links the lab does not have already."));
     return;
   }
+  $("growForm").hidden = true;
   $("growCard").replaceChildren(el("div", { class: "plan" },
     el("p", { class: "eyebrow" }, plan.model ? "drafted by " + plan.model : "read literally: the model could not draft it"),
-    el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope)))),
-    plan.reply ? el("p", {}, plan.reply) : null,
+    el("div", { class: "plan-rows" },
+      planRow("Links", el("ul", { class: "plan-sources" }, plan.sources.map((s) => el("li", {}, s.url, el("span", { class: "tag" }, s.scope))))),
+      plan.reply ? planRow("Note", el("span", { class: "note" }, plan.reply)) : null),
     el("div", { class: "buttons" },
       el("button", { type: "button", class: "action primary", onclick: async (e) => {
         e.target.disabled = true;
         try {
           await send("POST", `${base}/sources`, { sources: plan.sources });
-          $("growCard").replaceChildren();
+          closePlan();
           $("growText").value = "";
           $("addDrawer").hidden = true;
           load();
@@ -1155,8 +1430,8 @@ function renderPlan(plan) {
           $("growNote").replaceChildren(el("span", { class: "error" }, err.message));
           e.target.disabled = false;
         }
-      } }, "Add"),
-      el("button", { type: "button", class: "action", onclick: () => $("growCard").replaceChildren() }, "Cancel"))));
+      } }, plan.sources.length === 1 ? "Add it" : `Add these ${plan.sources.length}`),
+      el("button", { type: "button", class: "action", onclick: closePlan }, "Back"))));
 }
 
 $("growForm").addEventListener("submit", async (e) => {
@@ -1177,12 +1452,12 @@ $("growForm").addEventListener("submit", async (e) => {
 });
 
 $("deleteLab").addEventListener("click", async () => {
-  if (!confirm("Delete this lab? Its pages stay in the shared base.")) return;
+  if (!(await confirmInline($("deleteLab"), "Its sources, research and reports go for good.", "delete the lab"))) return;
   try {
     await send("DELETE", base);
     location.assign("/?tab=labs");
   } catch (err) {
-    alert(err.message);
+    showError($("deleteLab"), err.message);
   }
 });
 

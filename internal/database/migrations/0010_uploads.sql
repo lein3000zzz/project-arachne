@@ -2,7 +2,7 @@
 -- is random rather than a hash anyone holding the file could compute.
 CREATE TABLE uploads (
     id           text        PRIMARY KEY,
-    owner_id     bigint      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    owner_id     uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     sha256       bytea       NOT NULL,
     filename     text        NOT NULL,
     content_type text        NOT NULL DEFAULT '',

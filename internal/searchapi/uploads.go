@@ -21,7 +21,7 @@ import (
 )
 
 type UploadStore interface {
-	Owned(ctx context.Context, ownerID int64, id string) (uploads.File, error)
+	Owned(ctx context.Context, ownerID, id string) (uploads.File, error)
 }
 
 const (
@@ -80,7 +80,7 @@ func (h *labsHandler) addUploads(w http.ResponseWriter, r *http.Request) {
 		files = append(files, labs.File{Name: name, ContentType: contentType(part.Header.Get("Content-Type"), name, data), Data: data})
 	}
 
-	h.withLabFor(w, r, uploadTimeout, func(ctx context.Context, owner, lab int64) (int, any, error) {
+	h.withLabFor(w, r, uploadTimeout, func(ctx context.Context, owner, lab string) (int, any, error) {
 		detail, err := h.service.AddUploads(ctx, owner, lab, files)
 		return http.StatusOK, detail, err
 	})

@@ -100,3 +100,30 @@ func TestNearCopiesAreCopiesToo(t *testing.T) {
 		t.Errorf("notes %q", q.Notes)
 	}
 }
+
+// A page fetched but not indexed is not usable, whatever else it is: still
+// waiting, or failed every try - then named with why.
+func TestPagesNotIndexedAreNotUsable(t *testing.T) {
+	q := QualityOf([]QualityPage{
+		{URL: "https://a.dev/1", Host: "a.dev", Status: 200, Decision: "index", Hash: "1"},
+		{URL: "https://a.dev/new", Host: "a.dev", Status: 200, Queue: QueueWaiting},
+		{URL: "https://a.dev/refreshing", Host: "a.dev", Status: 200, Decision: "index", Hash: "2", Queue: QueueWaiting},
+		{URL: "https://a.dev/broken", Host: "a.dev", Status: 200, Queue: QueueDead, QueueError: "embedding 4 chunks: connection refused"},
+		{URL: "https://a.dev/gone", Host: "a.dev", Status: 404, Queue: QueueDead},
+	})
+
+	if q.Usable != 2 || q.Waiting != 1 || q.NotIndexed != 1 || q.NotFetched != 1 || q.Unreviewed != 0 {
+		t.Errorf("quality %+v; a page waiting as a newer version stays usable", q)
+	}
+
+	if len(q.NotIndexedPages) != 1 || q.NotIndexedPages[0] != (FailedPage{URL: "https://a.dev/broken", Error: "embedding 4 chunks: connection refused"}) {
+		t.Errorf("failed pages %+v", q.NotIndexedPages)
+	}
+
+	joined := strings.Join(q.Notes, " | ")
+	for _, want := range []string{"1 page fetched but could not be indexed", "1 page still waiting to be indexed"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("notes %q lack %q", joined, want)
+		}
+	}
+}

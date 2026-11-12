@@ -40,6 +40,34 @@ func (s *PostgresStore) Unsketched(ctx context.Context, limit int) ([]string, er
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
+// Sketches gives the sketch of each of urls that has one.
+func (s *PostgresStore) Sketches(ctx context.Context, urls []string) (map[string]copies.Sketch, error) {
+	rows, err := s.pool.Query(ctx, `SELECT url, sketch FROM page_reviews WHERE url = ANY($1) AND length(sketch) > 0`, urls)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]copies.Sketch{}
+
+	for rows.Next() {
+		var (
+			url    string
+			sketch []byte
+		)
+
+		if err := rows.Scan(&url, &sketch); err != nil {
+			return nil, err
+		}
+
+		if sk := copies.SketchFrom(sketch); sk != nil {
+			out[url] = sk
+		}
+	}
+
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) SaveSketch(ctx context.Context, url string, sketch copies.Sketch) error {
 	_, err := s.pool.Exec(ctx, `UPDATE page_reviews SET sketch = $2 WHERE url = $1 AND sketch IS NULL`, url, sketch.Bytes())
 	return err

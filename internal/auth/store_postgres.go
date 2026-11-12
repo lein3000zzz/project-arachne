@@ -59,7 +59,7 @@ func (s *PostgresStore) AccountByName(ctx context.Context, username string) (Acc
 	return a, err
 }
 
-func (s *PostgresStore) PasswordHash(ctx context.Context, userID int64) (string, error) {
+func (s *PostgresStore) PasswordHash(ctx context.Context, userID string) (string, error) {
 	var hash string
 
 	err := s.pool.QueryRow(ctx, `SELECT password_hash FROM users WHERE id = $1 AND disabled_at IS NULL`, userID).Scan(&hash)
@@ -70,12 +70,12 @@ func (s *PostgresStore) PasswordHash(ctx context.Context, userID int64) (string,
 	return hash, err
 }
 
-func (s *PostgresStore) SetPasswordHash(ctx context.Context, userID int64, hash string) error {
+func (s *PostgresStore) SetPasswordHash(ctx context.Context, userID, hash string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, hash)
 	return err
 }
 
-func (s *PostgresStore) ReplacePassword(ctx context.Context, userID int64, hash string) error {
+func (s *PostgresStore) ReplacePassword(ctx context.Context, userID, hash string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, hash)
 		if err != nil {
@@ -92,7 +92,7 @@ func (s *PostgresStore) ReplacePassword(ctx context.Context, userID int64, hash 
 	})
 }
 
-func (s *PostgresStore) SetDisabled(ctx context.Context, userID int64, disabled bool) error {
+func (s *PostgresStore) SetDisabled(ctx context.Context, userID string, disabled bool) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			UPDATE users SET disabled_at = CASE WHEN $2 THEN coalesce(disabled_at, now()) END WHERE id = $1`,
@@ -110,7 +110,7 @@ func (s *PostgresStore) SetDisabled(ctx context.Context, userID int64, disabled 
 	})
 }
 
-func (s *PostgresStore) CreateSession(ctx context.Context, tokenHash []byte, userID int64, ttl time.Duration, userAgent string) (time.Time, error) {
+func (s *PostgresStore) CreateSession(ctx context.Context, tokenHash []byte, userID string, ttl time.Duration, userAgent string) (time.Time, error) {
 	var expires time.Time
 
 	err := s.pool.QueryRow(ctx, `
@@ -158,7 +158,7 @@ func (s *PostgresStore) DeleteSession(ctx context.Context, tokenHash []byte) err
 	return err
 }
 
-func (s *PostgresStore) SaveToken(ctx context.Context, userID int64, name string, tokenHash []byte) error {
+func (s *PostgresStore) SaveToken(ctx context.Context, userID, name string, tokenHash []byte) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO api_tokens (token_hash, user_id, name) VALUES ($1, $2, $3)
 		ON CONFLICT (user_id, name) DO UPDATE
@@ -168,7 +168,7 @@ func (s *PostgresStore) SaveToken(ctx context.Context, userID int64, name string
 	return err
 }
 
-func (s *PostgresStore) AddToken(ctx context.Context, userID int64, name string, tokenHash []byte, limit int) error {
+func (s *PostgresStore) AddToken(ctx context.Context, userID, name string, tokenHash []byte, limit int) error {
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO api_tokens (token_hash, user_id, name)
 		SELECT $1, $2, $3 WHERE (SELECT count(*) FROM api_tokens WHERE user_id = $2) < $4
@@ -192,7 +192,7 @@ func (s *PostgresStore) AddToken(ctx context.Context, userID int64, name string,
 	return ErrTooManyTokens
 }
 
-func (s *PostgresStore) ListTokens(ctx context.Context, userID int64) ([]Token, error) {
+func (s *PostgresStore) ListTokens(ctx context.Context, userID string) ([]Token, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT name, created_at, last_used_at FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC, name`, userID)
 	if err != nil {
@@ -207,7 +207,7 @@ func (s *PostgresStore) ListTokens(ctx context.Context, userID int64) ([]Token, 
 	})
 }
 
-func (s *PostgresStore) DeleteToken(ctx context.Context, userID int64, name string) error {
+func (s *PostgresStore) DeleteToken(ctx context.Context, userID, name string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM api_tokens WHERE user_id = $1 AND name = $2`, userID, name)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrTokenNotFound

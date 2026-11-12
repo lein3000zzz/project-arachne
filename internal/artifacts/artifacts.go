@@ -59,8 +59,8 @@ const (
 )
 
 type Artifact struct {
-	ID        int64     `json:"id"`
-	LabID     int64     `json:"lab_id"`
+	ID        string    `json:"id"`
+	LabID     string    `json:"lab_id"`
 	Kind      Kind      `json:"kind"`
 	Title     string    `json:"title"`
 	Request   string    `json:"request"`
@@ -122,17 +122,17 @@ type Source struct {
 }
 
 type Store interface {
-	Create(ctx context.Context, ownerID, labID int64, kind Kind, title, request string) (int64, error)
+	Create(ctx context.Context, ownerID, labID string, kind Kind, title, request string) (string, error)
 	// StartVersion adds the next version of the artifact; ErrBuilding when one
 	// is running.
-	StartVersion(ctx context.Context, artifactID int64, v Version) (int, error)
-	SaveVersion(ctx context.Context, artifactID int64, v Version) error
-	List(ctx context.Context, ownerID, labID int64) ([]Artifact, error)
-	Get(ctx context.Context, ownerID, artifactID int64) (Artifact, error)
+	StartVersion(ctx context.Context, artifactID string, v Version) (int, error)
+	SaveVersion(ctx context.Context, artifactID string, v Version) error
+	List(ctx context.Context, ownerID, labID string) ([]Artifact, error)
+	Get(ctx context.Context, ownerID, artifactID string) (Artifact, error)
 	// Version 0 is the newest.
-	Version(ctx context.Context, ownerID, artifactID int64, number int) (Version, error)
-	Versions(ctx context.Context, ownerID, artifactID int64) ([]int, error)
-	Delete(ctx context.Context, ownerID, artifactID int64) error
+	Version(ctx context.Context, ownerID, artifactID string, number int) (Version, error)
+	Versions(ctx context.Context, ownerID, artifactID string) ([]int, error)
+	Delete(ctx context.Context, ownerID, artifactID string) error
 	Interrupt(ctx context.Context) (int64, error)
 }
 
@@ -146,9 +146,9 @@ type Answers interface {
 }
 
 type Labs interface {
-	Get(ctx context.Context, ownerID, labID int64) (labs.Detail, error)
-	PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error)
-	Pages(ctx context.Context, ownerID, labID int64, limit int) ([]labs.Page, error)
+	Get(ctx context.Context, ownerID, labID string) (labs.Detail, error)
+	PageURLs(ctx context.Context, ownerID string, labIDs []string) ([]string, error)
+	Pages(ctx context.Context, ownerID, labID string, limit int) ([]labs.Page, error)
 }
 
 type Config struct {
@@ -190,7 +190,7 @@ const (
 
 // Build checks the outline, records the report and builds it in the
 // background; it returns at once.
-func (s *Service) Build(ctx context.Context, ownerID, labID int64, request string, outline Outline) (Artifact, error) {
+func (s *Service) Build(ctx context.Context, ownerID, labID, request string, outline Outline) (Artifact, error) {
 	if s.answers == nil || s.chat == nil {
 		return Artifact{}, ErrUnavailable
 	}
@@ -222,7 +222,7 @@ func (s *Service) Build(ctx context.Context, ownerID, labID int64, request strin
 
 // Rebuild builds a report again from its outline, as a new version: the lab
 // may hold more by now.
-func (s *Service) Rebuild(ctx context.Context, ownerID, artifactID int64) (Artifact, error) {
+func (s *Service) Rebuild(ctx context.Context, ownerID, artifactID string) (Artifact, error) {
 	return s.change(ctx, ownerID, artifactID, func(latest Version) (Version, error) {
 		return fresh(latest.Outline), nil
 	})
@@ -231,7 +231,7 @@ func (s *Service) Rebuild(ctx context.Context, ownerID, artifactID int64) (Artif
 // Rewrite writes one section again (numbered from 1), as a new version, the
 // others kept as they are: after gathering for a section the lab held too
 // little on, say.
-func (s *Service) Rewrite(ctx context.Context, ownerID, artifactID int64, section int) (Artifact, error) {
+func (s *Service) Rewrite(ctx context.Context, ownerID, artifactID string, section int) (Artifact, error) {
 	return s.change(ctx, ownerID, artifactID, func(latest Version) (Version, error) {
 		if section < 1 || section > len(latest.Sections) {
 			return Version{}, fmt.Errorf("%w: the report has sections 1 to %d", ErrInvalid, len(latest.Sections))
@@ -247,7 +247,7 @@ func (s *Service) Rewrite(ctx context.Context, ownerID, artifactID int64, sectio
 
 // Extend adds a section at the end and writes it alone, as a new version: a
 // report is extended by asking, never by editing it.
-func (s *Service) Extend(ctx context.Context, ownerID, artifactID int64, planned Planned) (Artifact, error) {
+func (s *Service) Extend(ctx context.Context, ownerID, artifactID string, planned Planned) (Artifact, error) {
 	heading, err := clean(planned.Heading, maxHeadingRunes, "a heading")
 	if err != nil || heading == "" {
 		return Artifact{}, fmt.Errorf("%w: a section needs a heading of at most %d characters", ErrInvalid, maxHeadingRunes)
@@ -278,7 +278,7 @@ func (s *Service) Extend(ctx context.Context, ownerID, artifactID int64, planned
 }
 
 // change starts a new version of a report, made from its newest by next.
-func (s *Service) change(ctx context.Context, ownerID, artifactID int64, next func(Version) (Version, error)) (Artifact, error) {
+func (s *Service) change(ctx context.Context, ownerID, artifactID string, next func(Version) (Version, error)) (Artifact, error) {
 	if s.answers == nil || s.chat == nil {
 		return Artifact{}, ErrUnavailable
 	}
@@ -339,7 +339,7 @@ func carried(latest Version) Version {
 
 // start records v as the next version and writes its pending sections in the
 // background.
-func (s *Service) start(ctx context.Context, ownerID, labID, artifactID int64, v Version) error {
+func (s *Service) start(ctx context.Context, ownerID, labID, artifactID string, v Version) error {
 	v.Status, v.Model, v.Markdown, v.Error, v.Seconds, v.FinishedAt = StatusRunning, llm.ModelOf(auth.WithUser(ctx, auth.User{ID: ownerID}), s.chat), "", "", 0, nil
 
 	number, err := s.store.StartVersion(ctx, artifactID, v)
@@ -359,7 +359,7 @@ func (s *Service) start(ctx context.Context, ownerID, labID, artifactID int64, v
 	return nil
 }
 
-func (s *Service) List(ctx context.Context, ownerID, labID int64) ([]Artifact, error) {
+func (s *Service) List(ctx context.Context, ownerID, labID string) ([]Artifact, error) {
 	if _, err := s.labs.Get(ctx, ownerID, labID); err != nil {
 		return nil, err
 	}
@@ -369,7 +369,7 @@ func (s *Service) List(ctx context.Context, ownerID, labID int64) ([]Artifact, e
 
 // Get returns the artifact, one of its versions - 0 for the newest - and the
 // numbers of all of them.
-func (s *Service) Get(ctx context.Context, ownerID, artifactID int64, number int) (Artifact, Version, []int, error) {
+func (s *Service) Get(ctx context.Context, ownerID, artifactID string, number int) (Artifact, Version, []int, error) {
 	a, err := s.store.Get(ctx, ownerID, artifactID)
 	if err != nil {
 		return Artifact{}, Version{}, nil, err
@@ -385,7 +385,7 @@ func (s *Service) Get(ctx context.Context, ownerID, artifactID int64, number int
 	return a, v, numbers, err
 }
 
-func (s *Service) Delete(ctx context.Context, ownerID, artifactID int64) error {
+func (s *Service) Delete(ctx context.Context, ownerID, artifactID string) error {
 	return s.store.Delete(ctx, ownerID, artifactID)
 }
 
@@ -401,7 +401,7 @@ type SavedAnswer struct {
 }
 
 // SaveAnswer keeps an answer, with its check, as an artifact of the lab.
-func (s *Service) SaveAnswer(ctx context.Context, ownerID, labID int64, saved SavedAnswer) (Artifact, error) {
+func (s *Service) SaveAnswer(ctx context.Context, ownerID, labID string, saved SavedAnswer) (Artifact, error) {
 	question, err := clean(saved.Question, maxRequestRunes, "a question")
 	if err != nil || question == "" || strings.TrimSpace(saved.Text) == "" {
 		return Artifact{}, fmt.Errorf("%w: nothing to save", ErrInvalid)

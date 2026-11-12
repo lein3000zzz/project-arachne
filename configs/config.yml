@@ -185,6 +185,11 @@ weblookup:
   timeout: 3m
   choose_tokens: 200
 
+ui:
+  # rows a list on the pages (a lab's sources, pages, research works) shows
+  # at a time; the rest is a page further
+  list_size: 15
+
 mcp:
   # an MCP server at /mcp for agents (Claude Code and the like), signed in
   # with an API token each user makes on their settings page. It does what

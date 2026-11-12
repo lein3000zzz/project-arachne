@@ -35,8 +35,8 @@ type Request struct {
 // from a request body: a source taken from one would let anyone crawl pages
 // into another user's lab.
 type Origin struct {
-	UserID   int64
-	SourceID int64
+	UserID   string
+	SourceID string
 }
 
 type Limits struct {
@@ -89,7 +89,7 @@ func (s *Service) Submit(ctx context.Context, req Request, origin Origin) (Run, 
 		return Run{}, err
 	}
 
-	run.ReadDocuments = origin.SourceID != 0
+	run.ReadDocuments = origin.SourceID != ""
 
 	if err := s.store.Submitted(ctx, run, origin); err != nil {
 		return Run{}, err

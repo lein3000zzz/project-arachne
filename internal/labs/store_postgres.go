@@ -44,7 +44,7 @@ const (
 
 	sourceColumns = `
 		s.id, s.lab_id, s.kind, s.url, s.scope, s.max_depth, s.max_links, s.created_at, s.query, s.engines, s.reason,
-		coalesce(s.gathering_id, 0), s.cited_by, s.citation, s.filename,
+		coalesce(s.gathering_id::text, ''), s.cited_by, s.citation, s.filename,
 		(SELECT count(*) FROM source_pages sp JOIN pages p ON p.id = sp.page_id
 			WHERE sp.source_id = s.id AND p.status BETWEEN 200 AND 299),
 		coalesce((SELECT r.id FROM runs r WHERE r.source_id = s.id ORDER BY r.submitted_at DESC LIMIT 1), '')`
@@ -79,8 +79,8 @@ func one[T any](rows pgx.Rows, err error, scan pgx.RowToFunc[T], missing error) 
 	return v, err
 }
 
-func (s *PostgresStore) Create(ctx context.Context, ownerID int64, name, topic string, engines []string) (Lab, error) {
-	var id int64
+func (s *PostgresStore) Create(ctx context.Context, ownerID string, name, topic string, engines []string) (Lab, error) {
+	var id string
 
 	err := s.pool.QueryRow(ctx, `INSERT INTO labs (owner_id, name, topic, engines) VALUES ($1, $2, $3, $4) RETURNING id`,
 		ownerID, name, topic, engineList(engines)).Scan(&id)
@@ -95,12 +95,12 @@ func (s *PostgresStore) Create(ctx context.Context, ownerID int64, name, topic s
 	return s.Get(ctx, ownerID, id)
 }
 
-func (s *PostgresStore) Get(ctx context.Context, ownerID, labID int64) (Lab, error) {
+func (s *PostgresStore) Get(ctx context.Context, ownerID, labID string) (Lab, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+labColumns+` FROM labs l WHERE l.id = $1 AND l.owner_id = $2`, labID, ownerID)
 	return one(rows, err, scanLab, ErrNotFound)
 }
 
-func (s *PostgresStore) List(ctx context.Context, ownerID int64) ([]Lab, error) {
+func (s *PostgresStore) List(ctx context.Context, ownerID string) ([]Lab, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+labColumns+` FROM labs l WHERE l.owner_id = $1 ORDER BY l.updated_at DESC, l.id DESC`,
 		ownerID)
 	if err != nil {
@@ -110,7 +110,7 @@ func (s *PostgresStore) List(ctx context.Context, ownerID int64) ([]Lab, error) 
 	return pgx.CollectRows(rows, scanLab)
 }
 
-func (s *PostgresStore) Delete(ctx context.Context, ownerID, labID int64) error {
+func (s *PostgresStore) Delete(ctx context.Context, ownerID, labID string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM labs WHERE id = $1 AND owner_id = $2`, labID, ownerID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -119,8 +119,26 @@ func (s *PostgresStore) Delete(ctx context.Context, ownerID, labID int64) error 
 	return err
 }
 
-func (s *PostgresStore) SetEngines(ctx context.Context, ownerID, labID int64, engines []string) (Lab, error) {
+func (s *PostgresStore) SetEngines(ctx context.Context, ownerID, labID string, engines []string) (Lab, error) {
 	tag, err := s.pool.Exec(ctx, `UPDATE labs SET engines = $3 WHERE id = $1 AND owner_id = $2`, labID, ownerID, engineList(engines))
+	if err == nil && tag.RowsAffected() == 0 {
+		return Lab{}, ErrNotFound
+	}
+
+	if err != nil {
+		return Lab{}, err
+	}
+
+	return s.Get(ctx, ownerID, labID)
+}
+
+func (s *PostgresStore) Rename(ctx context.Context, ownerID, labID, name, topic string) (Lab, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE labs SET name = $3, topic = $4, updated_at = now() WHERE id = $1 AND owner_id = $2`,
+		labID, ownerID, name, topic)
+	if isUniqueViolation(err) {
+		return Lab{}, ErrNameTaken
+	}
+
 	if err == nil && tag.RowsAffected() == 0 {
 		return Lab{}, ErrNotFound
 	}
@@ -134,13 +152,13 @@ func (s *PostgresStore) SetEngines(ctx context.Context, ownerID, labID int64, en
 
 // AddSource takes src's URL, scope and limits, and for a search source its
 // provenance; the URL must be canonical.
-func (s *PostgresStore) AddSource(ctx context.Context, ownerID, labID int64, src Source) (Source, error) {
-	var id int64
+func (s *PostgresStore) AddSource(ctx context.Context, ownerID, labID string, src Source) (Source, error) {
+	var id string
 
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `
 			INSERT INTO sources (lab_id, kind, url, scope, max_depth, max_links, query, engines, reason, gathering_id, cited_by, citation, filename)
-			SELECT id, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, 0), $12, $13, $14 FROM labs WHERE id = $1 AND owner_id = $2
+			SELECT id, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, '')::uuid, $12, $13, $14 FROM labs WHERE id = $1 AND owner_id = $2
 			RETURNING id`,
 			labID, ownerID, kindOf(src), src.URL, src.Scope, src.MaxDepth, src.MaxLinks, src.Query, engineList(src.Engines), src.Reason,
 			src.GatheringID, src.CitedBy, src.Citation, src.Filename).Scan(&id)
@@ -165,7 +183,7 @@ func (s *PostgresStore) AddSource(ctx context.Context, ownerID, labID int64, src
 	return s.Source(ctx, ownerID, labID, id)
 }
 
-func (s *PostgresStore) Source(ctx context.Context, ownerID, labID, sourceID int64) (Source, error) {
+func (s *PostgresStore) Source(ctx context.Context, ownerID, labID, sourceID string) (Source, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+sourceColumns+` FROM sources s JOIN labs l ON l.id = s.lab_id
 		WHERE s.id = $1 AND s.lab_id = $2 AND l.owner_id = $3`, sourceID, labID, ownerID)
@@ -173,7 +191,7 @@ func (s *PostgresStore) Source(ctx context.Context, ownerID, labID, sourceID int
 	return one(rows, err, scanSource, ErrNotFound)
 }
 
-func (s *PostgresStore) Sources(ctx context.Context, ownerID, labID int64) ([]Source, error) {
+func (s *PostgresStore) Sources(ctx context.Context, ownerID, labID string) ([]Source, error) {
 	if _, err := s.Get(ctx, ownerID, labID); err != nil {
 		return nil, err
 	}
@@ -186,7 +204,7 @@ func (s *PostgresStore) Sources(ctx context.Context, ownerID, labID int64) ([]So
 	return pgx.CollectRows(rows, scanSource)
 }
 
-func (s *PostgresStore) RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error {
+func (s *PostgresStore) RemoveSource(ctx context.Context, ownerID, labID, sourceID string) error {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM sources s USING labs l
 		WHERE s.id = $1 AND s.lab_id = $2 AND l.id = s.lab_id AND l.owner_id = $3`, sourceID, labID, ownerID)
@@ -199,7 +217,7 @@ func (s *PostgresStore) RemoveSource(ctx context.Context, ownerID, labID, source
 
 // PageURLs lists the successfully fetched pages of the given labs, each once;
 // the labs must all be the owner's.
-func (s *PostgresStore) PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error) {
+func (s *PostgresStore) PageURLs(ctx context.Context, ownerID string, labIDs []string) ([]string, error) {
 	var owned int
 
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM labs WHERE id = ANY($1) AND owner_id = $2`, labIDs, ownerID).
@@ -226,7 +244,7 @@ func (s *PostgresStore) PageURLs(ctx context.Context, ownerID int64, labIDs []in
 
 // Pages lists a lab's pages, the most recently fetched first, failed fetches
 // included so a lab can show what did not work.
-func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID int64, limit int) ([]Page, error) {
+func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID string, limit int) ([]Page, error) {
 	if _, err := s.Get(ctx, ownerID, labID); err != nil {
 		return nil, err
 	}
@@ -260,15 +278,17 @@ func (s *PostgresStore) Pages(ctx context.Context, ownerID, labID int64, limit i
 }
 
 // QualityPages is every page of the lab with what the quality report reads.
-func (s *PostgresStore) QualityPages(ctx context.Context, ownerID, labID int64) ([]QualityPage, error) {
+func (s *PostgresStore) QualityPages(ctx context.Context, ownerID, labID string) ([]QualityPage, error) {
 	if _, err := s.Get(ctx, ownerID, labID); err != nil {
 		return nil, err
 	}
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT p.url, p.host, coalesce(p.title, ''), coalesce(p.status, 0), coalesce(r.decision, ''), coalesce(r.reasons, '{}'),
-		       coalesce(r.unreviewed, false), coalesce(r.content_hash, ''), r.sketch
+		       coalesce(r.unreviewed, false), coalesce(r.content_hash, ''), r.sketch,
+		       CASE WHEN q.dead THEN 'dead' WHEN q.id IS NOT NULL THEN 'waiting' ELSE '' END, coalesce(q.error, '')
 		FROM pages p LEFT JOIN page_reviews r ON r.url = p.url
+		LEFT JOIN LATERAL (SELECT iq.id, iq.dead, iq.error FROM index_queue iq WHERE iq.url = p.url ORDER BY iq.id DESC LIMIT 1) q ON true
 		WHERE p.id IN (SELECT sp.page_id FROM sources s JOIN source_pages sp ON sp.source_id = s.id WHERE s.lab_id = $1)
 		ORDER BY p.url`, labID)
 	if err != nil {
@@ -281,16 +301,42 @@ func (s *PostgresStore) QualityPages(ctx context.Context, ownerID, labID int64) 
 			sketch []byte
 		)
 
-		err := row.Scan(&p.URL, &p.Host, &p.Title, &p.Status, &p.Decision, &p.Reasons, &p.Unreviewed, &p.Hash, &sketch)
+		err := row.Scan(&p.URL, &p.Host, &p.Title, &p.Status, &p.Decision, &p.Reasons, &p.Unreviewed, &p.Hash, &sketch, &p.Queue, &p.QueueError)
 		p.Sketch = copies.SketchFrom(sketch)
 
 		return p, err
 	})
 }
 
+// RetryFailed gives the lab's dead pages in the indexing queue a fresh round
+// of tries, and says how many there were. A dead version with a newer one
+// queued behind it is dropped instead: the newer one is the page now.
+func (s *PostgresStore) RetryFailed(ctx context.Context, ownerID, labID string) (int64, error) {
+	if _, err := s.Get(ctx, ownerID, labID); err != nil {
+		return 0, err
+	}
+
+	var n int64
+
+	err := s.pool.QueryRow(ctx, `
+		WITH lab AS (
+			SELECT p.url FROM sources s JOIN source_pages sp ON sp.source_id = s.id JOIN pages p ON p.id = sp.page_id WHERE s.lab_id = $1),
+		dead AS (
+			SELECT d.id, EXISTS (SELECT 1 FROM index_queue n WHERE n.url = d.url AND n.id > d.id) AS superseded
+			FROM index_queue d WHERE d.dead AND d.url IN (SELECT url FROM lab)),
+		dropped AS (
+			DELETE FROM index_queue WHERE id IN (SELECT id FROM dead WHERE superseded)),
+		revived AS (
+			UPDATE index_queue SET dead = false, attempts = 0, ready_at = now(), error = ''
+			WHERE id IN (SELECT id FROM dead WHERE NOT superseded) RETURNING id)
+		SELECT count(*) FROM revived`, labID).Scan(&n)
+
+	return n, err
+}
+
 // References lists the lab's documents that link to or cite anything, with
 // what they do, in order. A document set aside on review offers nothing.
-func (s *PostgresStore) References(ctx context.Context, ownerID, labID int64) ([]Document, error) {
+func (s *PostgresStore) References(ctx context.Context, ownerID, labID string) ([]Document, error) {
 	if _, err := s.Get(ctx, ownerID, labID); err != nil {
 		return nil, err
 	}

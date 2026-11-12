@@ -14,7 +14,7 @@ func TestPostgresStoreKeepsRunsAndTheMap(t *testing.T) {
 	store := NewPostgresStore(pool)
 	ctx := context.Background()
 
-	var labID, sourceID int64
+	var labID, sourceID string
 	if err := pool.QueryRow(ctx, `
 		WITH u AS (INSERT INTO users (username, password_hash) VALUES ('lein', 'x') RETURNING id)
 		INSERT INTO labs (owner_id, name) SELECT id, 'resnets' FROM u RETURNING id`).Scan(&labID); err != nil {
@@ -59,7 +59,7 @@ func TestPostgresStoreKeepsRunsAndTheMap(t *testing.T) {
 	same, added, err := store.Find(ctx, labID, run, Work{URL: "https://doi.org/10.1109/cvpr.2016.90", Kind: KindPaper, DOI: "10.48550/arxiv.1512.03385",
 		OpenAlexID: "W1", Snippet: "Deeper networks", CitedBy: &cited, Year: 2016}, Find{Channel: ChannelCiting, Via: resnet, Round: 2})
 	if err != nil || added || same != resnet {
-		t.Fatalf("found again by its DOI: %d %v %v", same, added, err)
+		t.Fatalf("found again by its DOI: %s %v %v", same, added, err)
 	}
 
 	if _, _, err := store.Find(ctx, labID, run, Work{URL: "https://arxiv.org/abs/1512.03385"}, Find{Channel: ChannelSearch, Query: "resnet", Round: 3}); err != nil {
@@ -83,7 +83,7 @@ func TestPostgresStoreKeepsRunsAndTheMap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.Judge(ctx, highway, VerdictKeep, "the model's", 0); err != nil {
+	if err := store.Judge(ctx, highway, VerdictKeep, "the model's", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +111,7 @@ func TestPostgresStoreKeepsRunsAndTheMap(t *testing.T) {
 		t.Errorf("links %+v", links)
 	}
 
-	if refs, err := store.ReferencesOf(ctx, []int64{highway}); err != nil || len(refs) != 0 {
+	if refs, err := store.ReferencesOf(ctx, []string{highway}); err != nil || len(refs) != 0 {
 		t.Errorf("a work never crawled cites nothing: %+v, %v", refs, err)
 	}
 
@@ -153,17 +153,17 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 	store := NewPostgresStore(pool)
 	ctx := context.Background()
 
-	var labID int64
+	var labID string
 	if err := pool.QueryRow(ctx, `
 		WITH u AS (INSERT INTO users (username, password_hash) VALUES ('lein', 'x') RETURNING id)
 		INSERT INTO labs (owner_id, name) SELECT id, 'zig' FROM u RETURNING id`).Scan(&labID); err != nil {
 		t.Fatal(err)
 	}
 
-	read := func(url string, status int, queued int) int64 {
+	read := func(url string, status int, queued int) string {
 		t.Helper()
 
-		var sourceID int64
+		var sourceID string
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO sources (lab_id, kind, url, max_depth, max_links) VALUES ($1, 'research', $2, 1, 1) RETURNING id`, labID, url).Scan(&sourceID); err != nil {
 			t.Fatal(err)
@@ -178,7 +178,7 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		id, _, err := store.Find(ctx, labID, 0, Work{URL: url, Kind: KindWeb}, Find{Channel: ChannelSearch, Query: "zig"})
+		id, _, err := store.Find(ctx, labID, "", Work{URL: url, Kind: KindWeb}, Find{Channel: ChannelSearch, Query: "zig"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,7 +217,7 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 	}
 
 	for _, w := range works {
-		want := map[int64]string{blocked: ReadBlocked, empty: ReadEmpty, gone: ReadGone, robots: ReadBlocked, paper: ReadIn, mirror: ReadCopy}[w.ID]
+		want := map[string]string{blocked: ReadBlocked, empty: ReadEmpty, gone: ReadGone, robots: ReadBlocked, paper: ReadIn, mirror: ReadCopy}[w.ID]
 		if w.Read != want {
 			t.Errorf("%s reads as %q, want %q", w.URL, w.Read, want)
 		}
@@ -225,5 +225,65 @@ func TestReadsKeptOutBySitesAreNamed(t *testing.T) {
 		if w.ID == mirror && w.CopyOf != "https://arxiv.org/abs/zig" {
 			t.Errorf("the mirror copies %q", w.CopyOf)
 		}
+	}
+}
+
+func TestSubtopicsAreRenamedAndMerged(t *testing.T) {
+	pool := dbtest.NewPool(t)
+	store := NewPostgresStore(pool)
+	ctx := context.Background()
+
+	var labID, otherLab string
+	if err := pool.QueryRow(ctx, `
+		WITH u AS (INSERT INTO users (username, password_hash) VALUES ('lein', 'x') RETURNING id)
+		INSERT INTO labs (owner_id, name) SELECT id, 'resnets' FROM u RETURNING id`).Scan(&labID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pool.QueryRow(ctx, `INSERT INTO labs (owner_id, name) SELECT owner_id, 'other' FROM labs WHERE id = $1 RETURNING id`, labID).Scan(&otherLab); err != nil {
+		t.Fatal(err)
+	}
+
+	subs, _ := store.AddSubtopics(ctx, labID, []Subtopic{{Name: "Blocks", Queries: []string{"resnet", "blocks"}}, {Name: "Shortcuts", Queries: []string{"resnet", "highway"}}})
+	blocks, shortcuts := subs[0].ID, subs[1].ID
+
+	if err := store.RenameSubtopic(ctx, labID, blocks, "Residual blocks", "what a block computes"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RenameSubtopic(ctx, labID, blocks, "shortcuts", ""); !errors.Is(err, ErrSubtopicTaken) {
+		t.Errorf("onto another's name: %v", err)
+	}
+
+	if err := store.RenameSubtopic(ctx, otherLab, blocks, "Mine", ""); !errors.Is(err, ErrSubtopicNotFound) {
+		t.Errorf("through another lab: %v", err)
+	}
+
+	run, _ := store.StartRun(ctx, labID, "", Budget{Found: 1, Read: 1}, Focus{Subtopic: shortcuts}, "m")
+	work, _, _ := store.Find(ctx, labID, run, Work{URL: "https://arxiv.org/abs/1505.00387", Kind: KindPaper, Title: "Highway"}, Find{Channel: ChannelSearch, Query: "highway"})
+	if err := store.Judge(ctx, work, VerdictKeep, "", shortcuts); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.MergeSubtopics(ctx, otherLab, shortcuts, blocks); !errors.Is(err, ErrSubtopicNotFound) {
+		t.Errorf("through another lab: %v", err)
+	}
+
+	if err := store.MergeSubtopics(ctx, labID, shortcuts, blocks); err != nil {
+		t.Fatal(err)
+	}
+
+	left, _ := store.Subtopics(ctx, labID)
+	if len(left) != 1 || left[0].Name != "Residual blocks" || len(left[0].Queries) != 3 {
+		t.Errorf("after the merge: %+v", left)
+	}
+
+	works, _ := store.Works(ctx, labID)
+	if len(works) != 1 || works[0].SubtopicID != blocks {
+		t.Errorf("the work moved: %+v", works)
+	}
+
+	if r, _ := store.Run(ctx, run); r.Focus.Subtopic != blocks {
+		t.Errorf("the run's focus moved: %+v", r.Focus)
 	}
 }

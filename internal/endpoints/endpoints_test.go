@@ -24,25 +24,25 @@ func TestKeysAreSealedToTheirUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sealed := s.seal("sk-test-1234", 1)
+	sealed := s.seal("sk-test-1234", "user-1")
 
-	if got, err := s.open(sealed, 1); err != nil || got != "sk-test-1234" {
+	if got, err := s.open(sealed, "user-1"); err != nil || got != "sk-test-1234" {
 		t.Errorf("open = %q, %v", got, err)
 	}
 
-	if _, err := s.open(sealed, 2); err == nil {
+	if _, err := s.open(sealed, "user-2"); err == nil {
 		t.Error("a key sealed for user 1 opened for user 2")
 	}
 
 	tampered := append([]byte{}, sealed...)
 	tampered[len(tampered)-1] ^= 1
 
-	if _, err := s.open(tampered, 1); err == nil {
+	if _, err := s.open(tampered, "user-1"); err == nil {
 		t.Error("a tampered key opened")
 	}
 
 	other, _ := newSealer([]byte("fedcba9876543210fedcba9876543210"))
-	if _, err := other.open(sealed, 1); err == nil {
+	if _, err := other.open(sealed, "user-1"); err == nil {
 		t.Error("another ENDPOINT_KEY opened it")
 	}
 
@@ -65,7 +65,7 @@ func TestOnlyPublicAddressesArePublic(t *testing.T) {
 
 type memoryStore struct {
 	mu   sync.Mutex
-	rows map[int64]row
+	rows map[string]row
 }
 
 type row struct {
@@ -73,7 +73,7 @@ type row struct {
 	sealed []byte
 }
 
-func (m *memoryStore) Get(_ context.Context, id int64) (Endpoint, []byte, error) {
+func (m *memoryStore) Get(_ context.Context, id string) (Endpoint, []byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -87,7 +87,7 @@ func (m *memoryStore) Get(_ context.Context, id int64) (Endpoint, []byte, error)
 	return r.e, r.sealed, nil
 }
 
-func (m *memoryStore) Set(_ context.Context, id int64, e Endpoint, sealed []byte) error {
+func (m *memoryStore) Set(_ context.Context, id string, e Endpoint, sealed []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -96,7 +96,7 @@ func (m *memoryStore) Set(_ context.Context, id int64, e Endpoint, sealed []byte
 	return nil
 }
 
-func (m *memoryStore) Delete(_ context.Context, id int64) error {
+func (m *memoryStore) Delete(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -108,7 +108,7 @@ func (m *memoryStore) Delete(_ context.Context, id int64) error {
 func newService(t *testing.T, allowed ...string) (*Service, *memoryStore) {
 	t.Helper()
 
-	store := &memoryStore{rows: map[int64]row{}}
+	store := &memoryStore{rows: map[string]row{}}
 
 	s, err := New(store, testKey, Config{AllowedHosts: allowed, TestTimeout: 5 * time.Second})
 	if err != nil {
@@ -171,36 +171,36 @@ func TestKeysAreKeptReplacedAndRemoved(t *testing.T) {
 	in := base
 	in.APIKey = ptr("sk-abcdefghijklmnop")
 
-	e, err := s.Set(ctx, 1, in)
+	e, err := s.Set(ctx, "user-1", in)
 	if err != nil || !e.KeySet || e.KeyHint != "…mnop" {
 		t.Fatalf("set: %+v, %v", e, err)
 	}
 
-	if strings.Contains(string(store.rows[1].sealed), "sk-abc") {
+	if strings.Contains(string(store.rows["user-1"].sealed), "sk-abc") {
 		t.Error("the key is stored in the clear")
 	}
 
 	in = base
 	in.Model = "qwen3-big"
 
-	if e, _ = s.Set(ctx, 1, in); !e.KeySet || e.Model != "qwen3-big" {
+	if e, _ = s.Set(ctx, "user-1", in); !e.KeySet || e.Model != "qwen3-big" {
 		t.Errorf("no key given keeps it: %+v", e)
 	}
 
 	in.APIKey = ptr("")
-	if e, _ = s.Set(ctx, 1, in); e.KeySet || e.KeyHint != "" {
+	if e, _ = s.Set(ctx, "user-1", in); e.KeySet || e.KeyHint != "" {
 		t.Errorf("an empty key removes it: %+v", e)
 	}
 
-	if _, err := s.Set(ctx, 1, Settings{Provider: "anthropic", BaseURL: "http://model-box.lan/v1", Model: "claude"}); !errors.Is(err, ErrInvalid) {
+	if _, err := s.Set(ctx, "user-1", Settings{Provider: "anthropic", BaseURL: "http://model-box.lan/v1", Model: "claude"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("anthropic without a key: %v", err)
 	}
 
-	if err := s.Delete(ctx, 1); err != nil {
+	if err := s.Delete(ctx, "user-1"); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := s.Get(ctx, 1); !errors.Is(err, ErrNotSet) {
+	if _, err := s.Get(ctx, "user-1"); !errors.Is(err, ErrNotSet) {
 		t.Errorf("after delete: %v", err)
 	}
 }
@@ -210,7 +210,7 @@ func TestTheEndpointIsTestedAndUsedByItsUser(t *testing.T) {
 	host := mustHost(t, srv.URL)
 
 	blocked, _ := newService(t)
-	if _, err := blocked.Test(context.Background(), 1, Settings{Provider: "openai-compatible", BaseURL: srv.URL, Model: "m"}); !errors.Is(err, ErrInvalid) {
+	if _, err := blocked.Test(context.Background(), "user-1", Settings{Provider: "openai-compatible", BaseURL: srv.URL, Model: "m"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a loopback endpoint without the admin's leave: %v", err)
 	}
 
@@ -218,32 +218,32 @@ func TestTheEndpointIsTestedAndUsedByItsUser(t *testing.T) {
 	ctx := context.Background()
 	in := Settings{Provider: "openai-compatible", BaseURL: srv.URL + "/v1", Model: "m", APIKey: ptr("sk-abcdefghijklmnop")}
 
-	res, err := s.Test(ctx, 1, in)
+	res, err := s.Test(ctx, "user-1", in)
 	if err != nil || res.Reply != "OK" || *gotKey != "Bearer sk-abcdefghijklmnop" {
 		t.Fatalf("test: %+v, %v, key %q", res, err, *gotKey)
 	}
 
-	if _, err := s.Set(ctx, 1, in); err != nil {
+	if _, err := s.Set(ctx, "user-1", in); err != nil {
 		t.Fatal(err)
 	}
 
 	in.APIKey = nil
 	*gotKey = ""
 
-	if _, err := s.Test(ctx, 1, in); err != nil || *gotKey != "Bearer sk-abcdefghijklmnop" {
+	if _, err := s.Test(ctx, "user-1", in); err != nil || *gotKey != "Bearer sk-abcdefghijklmnop" {
 		t.Errorf("a test without a key uses the saved one: %v, %q", err, *gotKey)
 	}
 
 	fallback := &named{name: "server-model"}
 	r := NewRouter(s, fallback)
 
-	mine := auth.WithUser(ctx, auth.User{ID: 1})
+	mine := auth.WithUser(ctx, auth.User{ID: "user-1"})
 	if resp, err := r.Stream(mine, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}, MaxTokens: 5}, nil); err != nil ||
 		resp.Text != "OK" || r.ModelFor(mine) != "m" {
 		t.Errorf("user 1 gets their endpoint: %+v, %v, model %q", resp, err, r.ModelFor(mine))
 	}
 
-	theirs := auth.WithUser(ctx, auth.User{ID: 2})
+	theirs := auth.WithUser(ctx, auth.User{ID: "user-2"})
 	if resp, _ := r.Stream(theirs, llm.Request{}, nil); resp.Text != "server" || r.ModelFor(theirs) != "server-model" {
 		t.Errorf("user 2 gets the server's: %+v", resp)
 	}
@@ -256,7 +256,7 @@ func TestTheEndpointIsTestedAndUsedByItsUser(t *testing.T) {
 		t.Errorf("no server model, none of theirs: %v", err)
 	}
 
-	if err := s.Delete(ctx, 1); err != nil {
+	if err := s.Delete(ctx, "user-1"); err != nil {
 		t.Fatal(err)
 	}
 

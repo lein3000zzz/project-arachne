@@ -1,5 +1,5 @@
 CREATE TABLE users (
-    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id            uuid PRIMARY KEY DEFAULT uuidv7(),
     username      text        NOT NULL,
     -- argon2id as a PHC string, parameters included, so they can be raised
     -- without invalidating older hashes.
@@ -14,7 +14,7 @@ CREATE UNIQUE INDEX users_username ON users (lower(username));
 -- database hands out nothing that still works.
 CREATE TABLE sessions (
     token_hash   bytea       PRIMARY KEY,
-    user_id      bigint      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    user_id      uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     created_at   timestamptz NOT NULL DEFAULT now(),
     last_seen_at timestamptz NOT NULL DEFAULT now(),
     expires_at   timestamptz NOT NULL,
@@ -24,7 +24,7 @@ CREATE INDEX sessions_user ON sessions (user_id);
 
 CREATE TABLE api_tokens (
     token_hash   bytea       PRIMARY KEY,
-    user_id      bigint      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    user_id      uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     name         text        NOT NULL,
     created_at   timestamptz NOT NULL DEFAULT now(),
     last_used_at timestamptz,

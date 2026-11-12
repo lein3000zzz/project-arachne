@@ -8,7 +8,7 @@ import (
 
 // Clients gives a user's own model, if they set one.
 type Clients interface {
-	Client(ctx context.Context, userID int64) (llm.Client, bool, error)
+	Client(ctx context.Context, userID string) (llm.Client, bool, error)
 }
 
 // Router is a chat model that answers with the asking user's own endpoint

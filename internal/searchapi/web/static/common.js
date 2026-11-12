@@ -10,10 +10,38 @@ function el(tag, attrs, ...children) {
     else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
     else node.setAttribute(k, v === true ? "" : v);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child != null && child !== false) node.append(child);
   }
   return node;
+}
+
+// confirmInline asks in place of the button pressed - "question · yes · no" -
+// and resolves true on yes. A browser dialog would stop the page and look
+// like nothing else on it.
+function confirmInline(button, question, yesLabel = "yes") {
+  return new Promise((resolve) => {
+    const done = (ok) => {
+      box.remove();
+      button.hidden = false;
+      if (!ok) button.focus();
+      resolve(ok);
+    };
+    const yes = el("button", { type: "button", class: "link danger", onclick: () => done(true) }, yesLabel);
+    const box = el("span", { class: "confirm", role: "group", "aria-label": question,
+      onkeydown: (e) => { if (e.key === "Escape") done(false); } },
+      el("span", { class: "confirm-q" }, question), yes, el("button", { type: "button", class: "link", onclick: () => done(false) }, "no"));
+    button.hidden = true;
+    button.after(box);
+    yes.focus();
+  });
+}
+
+// showError puts a failure next to what failed, for a while.
+function showError(next, message) {
+  const e = el("span", { class: "error inline-error", role: "alert" }, message);
+  next.after(e);
+  setTimeout(() => e.remove(), 8000);
 }
 
 function toLogin() {
@@ -42,6 +70,8 @@ const send = (method, path, data) => api(path, {
   headers: data === undefined ? {} : { "Content-Type": "application/json" },
   body: data === undefined ? undefined : JSON.stringify(data),
 });
+
+const plural = (n, word) => `${Number(n).toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 
 function ago(iso) {
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
@@ -113,25 +143,39 @@ const verdictNames = {
   unsupported: "not supported by the cited excerpts", unchecked: "not checked",
 };
 
+// Ids are UUIDs, as the server writes them.
+const isID = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
+// How many rows a list shows at a time: the deployment sets it (ui.list_size).
+// Lists drawn before it arrives are drawn again.
+const ui = { listSize: 15 };
+const listsDrawn = new Set();
+fetch("/api/ui").then((res) => (res.ok ? res.json() : {})).then((settings) => {
+  if (settings.list_size > 0) ui.listSize = settings.list_size;
+  listsDrawn.forEach((draw) => draw());
+}).catch(() => {});
+
 // listView shows a long list a page at a time, with filter buttons and a
 // search. Polling hands it new items; the page, the filter and what was typed
 // stay. filters: [[value, label, keep(item)]]; text(item) is what the search
 // looks in; wrap builds the list around the rows.
-function listView({ filters, text, row, size = 25, empty = "None yet.", wrap = (rows) => el("ol", { class: "rows" }, rows) }) {
+function listView({ filters, text, row, empty = "None yet.", wrap = (rows) => el("ol", { class: "rows" }, rows) }) {
   const state = { page: 0, filter: filters ? filters[0][0] : "", query: "", items: [] };
   const counts = new Map();
 
   const search = el("input", { type: "search", class: "list-search", placeholder: "search…", "aria-label": "Search the list" });
   search.addEventListener("input", () => { state.query = search.value.trim().toLowerCase(); state.page = 0; draw(); });
 
+  const pick = (value) => {
+    state.filter = value;
+    state.page = 0;
+    buttons.forEach((x, i) => x.setAttribute("aria-pressed", String(filters[i][0] === value)));
+    draw();
+  };
+
   const buttons = (filters || []).map(([value, label]) => {
     const b = el("button", { type: "button", class: "seg", "aria-pressed": String(value === state.filter) }, label);
-    b.addEventListener("click", () => {
-      state.filter = value;
-      state.page = 0;
-      buttons.forEach((x, i) => x.setAttribute("aria-pressed", String(filters[i][0] === value)));
-      draw();
-    });
+    b.addEventListener("click", () => pick(value));
     counts.set(value, b);
     return b;
   });
@@ -147,6 +191,7 @@ function listView({ filters, text, row, size = 25, empty = "None yet.", wrap = (
       counts.get(value).textContent = `${label} ${state.items.filter(pred).length}`;
     }
     const shown = state.items.filter((it) => (!keep || keep[2](it)) && (!state.query || text(it).toLowerCase().includes(state.query)));
+    const size = ui.listSize;
     const pages = Math.max(1, Math.ceil(shown.length / size));
     state.page = Math.min(state.page, pages - 1);
     const slice = shown.slice(state.page * size, (state.page + 1) * size);
@@ -162,8 +207,17 @@ function listView({ filters, text, row, size = 25, empty = "None yet.", wrap = (
       .filter(Boolean));
   }
 
+  listsDrawn.add(draw);
+
   return {
     el: box,
     set(items) { state.items = items; draw(); },
+    redraw: draw,
+    // Opens the list on one filter, the search cleared: a way in from elsewhere.
+    show(value) {
+      search.value = "";
+      state.query = "";
+      pick(value);
+    },
   };
 }

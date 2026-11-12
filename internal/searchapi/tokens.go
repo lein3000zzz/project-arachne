@@ -12,9 +12,9 @@ import (
 
 // TokenService is optional: without it, tokens come from make token alone.
 type TokenService interface {
-	AddToken(ctx context.Context, userID int64, name string) (string, error)
-	Tokens(ctx context.Context, userID int64) ([]auth.Token, error)
-	RemoveToken(ctx context.Context, userID int64, name string) error
+	AddToken(ctx context.Context, userID, name string) (string, error)
+	Tokens(ctx context.Context, userID string) ([]auth.Token, error)
+	RemoveToken(ctx context.Context, userID, name string) error
 }
 
 type tokensHandler struct {
@@ -62,7 +62,7 @@ func (h *authHandler) agent(next http.Handler) http.Handler {
 }
 
 func (h *tokensHandler) list(w http.ResponseWriter, r *http.Request) {
-	h.run(w, r, func(ctx context.Context, user int64) (int, any, error) {
+	h.run(w, r, func(ctx context.Context, user string) (int, any, error) {
 		tokens, err := h.service.Tokens(ctx, user)
 		if tokens == nil {
 			tokens = []auth.Token{}
@@ -78,19 +78,19 @@ func (h *tokensHandler) add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.run(w, r, func(ctx context.Context, user int64) (int, any, error) {
+	h.run(w, r, func(ctx context.Context, user string) (int, any, error) {
 		token, err := h.service.AddToken(ctx, user, req.Name)
 		return http.StatusCreated, map[string]string{"name": req.Name, "token": token}, err
 	})
 }
 
 func (h *tokensHandler) remove(w http.ResponseWriter, r *http.Request) {
-	h.run(w, r, func(ctx context.Context, user int64) (int, any, error) {
+	h.run(w, r, func(ctx context.Context, user string) (int, any, error) {
 		return http.StatusNoContent, nil, h.service.RemoveToken(ctx, user, r.PathValue("name"))
 	})
 }
 
-func (h *tokensHandler) run(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, user int64) (int, any, error)) {
+func (h *tokensHandler) run(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, user string) (int, any, error)) {
 	if h.service == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "tokens are not available here"})
 		return

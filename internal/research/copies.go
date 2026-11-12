@@ -4,7 +4,7 @@ import "web-crawler/internal/copies"
 
 // LabPage is an indexed page of a lab, as copies are looked for.
 type LabPage struct {
-	SourceID int64
+	SourceID string
 	URL      string
 	Hash     string
 	Sketch   copies.Sketch
@@ -61,7 +61,7 @@ func markCopies(works []Work, pages []LabPage) {
 		}
 	}
 
-	bySource := map[int64][]int{}
+	bySource := map[string][]int{}
 	for i, p := range pages {
 		bySource[p.SourceID] = append(bySource[p.SourceID], i)
 	}

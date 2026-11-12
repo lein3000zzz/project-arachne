@@ -41,6 +41,8 @@ type Config struct {
 	MCP bool
 	// The engines new labs start with.
 	DefaultEngines []string
+	// Rows a list on the pages shows at a time.
+	ListSize int
 }
 
 type Response struct {
@@ -69,6 +71,7 @@ type Services struct {
 	WebLookup WebLookup
 	Tokens    TokenService
 	Research  ResearchService
+	Base      BaseStats
 }
 
 func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.Handler {
@@ -102,18 +105,23 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("POST /api/labs/plan", signIn.api(labsAPI.plan))
 	mux.Handle("GET /api/labs/{id}", signIn.api(labsAPI.get))
 	mux.Handle("DELETE /api/labs/{id}", signIn.api(labsAPI.delete))
+	mux.Handle("PUT /api/labs/{id}", signIn.api(labsAPI.rename))
 	mux.Handle("PUT /api/labs/{id}/engines", signIn.api(labsAPI.setEngines))
 
 	enginesAPI := &enginesHandler{logger: logger, lister: services.Engines, defaults: cfg.DefaultEngines, lookUp: services.WebLookup != nil}
 	mux.Handle("GET /api/engines", signIn.api(enginesAPI.engines))
+	mux.Handle("GET /api/base", signIn.api((&baseHandler{logger: logger, stats: services.Base}).get))
 
 	researchAPI := &researchHandler{logger: logger, service: services.Research, labs: labsAPI}
 	mux.Handle("POST /api/labs/{id}/research", signIn.api(researchAPI.start))
 	mux.Handle("GET /api/labs/{id}/research", signIn.api(researchAPI.researchMap))
 	mux.Handle("PUT /api/labs/{id}/research/works/{work}", signIn.api(researchAPI.setVerdict))
 	mux.Handle("POST /api/labs/{id}/research/works/{work}/read", signIn.api(researchAPI.readWork))
+	mux.Handle("PUT /api/labs/{id}/research/subtopics/{subtopic}", signIn.api(researchAPI.renameSubtopic))
+	mux.Handle("POST /api/labs/{id}/research/subtopics/{subtopic}/merge", signIn.api(researchAPI.mergeSubtopic))
 	mux.Handle("GET /api/labs/{id}/pages", signIn.api(labsAPI.pages))
 	mux.Handle("GET /api/labs/{id}/quality", signIn.api(labsAPI.quality))
+	mux.Handle("POST /api/labs/{id}/quality/retry", signIn.api(labsAPI.retryFailed))
 	mux.Handle("POST /api/labs/{id}/sources", signIn.api(labsAPI.addSources))
 	mux.Handle("GET /api/labs/{id}/references", signIn.api(labsAPI.references))
 	mux.Handle("POST /api/labs/{id}/references", signIn.api(labsAPI.addReferences))
@@ -196,6 +204,9 @@ func NewHandler(logger *zap.SugaredLogger, services Services, cfg Config) http.H
 	mux.Handle("GET /labs/{id}", signIn.page(serveLab))
 	mux.Handle("GET /labs/{id}/artifacts/{artifact}", signIn.page(serveArtifact))
 	mux.HandleFunc("GET /favicon.svg", serveFavicon)
+	mux.HandleFunc("GET /api/ui", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]int{"list_size": cfg.ListSize})
+	})
 	mux.Handle("GET /static/", staticHandler())
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

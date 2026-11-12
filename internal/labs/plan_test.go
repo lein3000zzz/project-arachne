@@ -35,7 +35,7 @@ func (c *scriptedChat) Stream(_ context.Context, req llm.Request, _ func(string)
 func plan(t *testing.T, chat llm.Client, request string) Plan {
 	t.Helper()
 
-	p, err := NewService(nil, nil, chat, Limits{MaxSources: 20}).Plan(context.Background(), 1, 0, request)
+	p, err := NewService(nil, nil, chat, Limits{MaxSources: 20}).Plan(context.Background(), "user-1", "", request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestPlanRejectsBadRequests(t *testing.T) {
 	s := NewService(nil, nil, nil, Limits{MaxSources: 20})
 
 	for _, request := range []string{"", "   ", strings.Repeat("x", maxRequestRunes+1), linksText(maxPlanLinks + 1)} {
-		if _, err := s.Plan(context.Background(), 1, 0, request); !errors.Is(err, ErrInvalid) {
+		if _, err := s.Plan(context.Background(), "user-1", "", request); !errors.Is(err, ErrInvalid) {
 			t.Errorf("request of %d characters: %v", len(request), err)
 		}
 	}

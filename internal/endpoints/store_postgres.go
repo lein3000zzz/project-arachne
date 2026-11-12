@@ -16,7 +16,7 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool}
 }
 
-func (s *PostgresStore) Get(ctx context.Context, userID int64) (Endpoint, []byte, error) {
+func (s *PostgresStore) Get(ctx context.Context, userID string) (Endpoint, []byte, error) {
 	var (
 		e      Endpoint
 		sealed []byte
@@ -34,7 +34,7 @@ func (s *PostgresStore) Get(ctx context.Context, userID int64) (Endpoint, []byte
 	return e, sealed, err
 }
 
-func (s *PostgresStore) Set(ctx context.Context, userID int64, e Endpoint, sealed []byte) error {
+func (s *PostgresStore) Set(ctx context.Context, userID string, e Endpoint, sealed []byte) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO user_endpoints (user_id, provider, base_url, model, api_key, key_hint, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, now())
@@ -45,7 +45,7 @@ func (s *PostgresStore) Set(ctx context.Context, userID int64, e Endpoint, seale
 	return err
 }
 
-func (s *PostgresStore) Delete(ctx context.Context, userID int64) error {
+func (s *PostgresStore) Delete(ctx context.Context, userID string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM user_endpoints WHERE user_id = $1`, userID)
 	return err
 }

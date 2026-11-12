@@ -32,7 +32,7 @@ type answerHandler struct {
 }
 
 type WebLookup interface {
-	Look(ctx context.Context, userID int64, question string, events weblookup.Events) ([]string, error)
+	Look(ctx context.Context, userID, question string, events weblookup.Events) ([]string, error)
 }
 
 func (h *answerHandler) request(r *http.Request) (answer.Request, error) {

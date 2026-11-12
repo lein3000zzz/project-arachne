@@ -14,13 +14,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func newStore(t *testing.T) (*PostgresStore, *pgxpool.Pool, int64, int64) {
+func newStore(t *testing.T) (*PostgresStore, *pgxpool.Pool, string, string) {
 	t.Helper()
 
 	pool := dbtest.NewPool(t)
 	ctx := context.Background()
 
-	var lein, other int64
+	var lein, other string
 	if err := pool.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('lein', 'x') RETURNING id`).Scan(&lein); err != nil {
 		t.Fatal(err)
 	}
@@ -41,10 +41,10 @@ func exec(t *testing.T, pool *pgxpool.Pool, query string, args ...any) {
 }
 
 // crawled pretends a run of the source fetched url with status.
-func crawled(t *testing.T, pool *pgxpool.Pool, sourceID int64, url string, status int) {
+func crawled(t *testing.T, pool *pgxpool.Pool, sourceID, url string, status int) {
 	t.Helper()
 
-	run := fmt.Sprintf("run-%d", sourceID)
+	run := "run-" + sourceID
 	exec(t, pool, `INSERT INTO runs (id, start_url, max_depth, max_links, source_id) VALUES ($1, '', 1, 1, $2) ON CONFLICT DO NOTHING`,
 		run, sourceID)
 	exec(t, pool, `
@@ -75,7 +75,7 @@ func TestLabsBelongToTheirOwner(t *testing.T) {
 		"delete":  func() error { return store.Delete(ctx, other, lab.ID) },
 		"sources": func() error { _, err := store.Sources(ctx, other, lab.ID); return err },
 		"pages":   func() error { _, err := store.Pages(ctx, other, lab.ID, 10); return err },
-		"urls":    func() error { _, err := store.PageURLs(ctx, other, []int64{lab.ID}); return err },
+		"urls":    func() error { _, err := store.PageURLs(ctx, other, []string{lab.ID}); return err },
 		"add source": func() error {
 			_, err := store.AddSource(ctx, other, lab.ID, Source{URL: "https://evil.example/", MaxDepth: 1, MaxLinks: 1})
 			return err
@@ -97,6 +97,31 @@ func TestLabsBelongToTheirOwner(t *testing.T) {
 
 	if _, err := store.Get(ctx, lein, lab.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("after delete: %v", err)
+	}
+}
+
+func TestALabIsRenamedByItsOwnerOnly(t *testing.T) {
+	store, _, lein, other := newStore(t)
+	ctx := context.Background()
+
+	lab, _ := store.Create(ctx, lein, "Zig Programming Language", "drafted", nil)
+	_, _ = store.Create(ctx, lein, "Rust", "", nil)
+
+	renamed, err := store.Rename(ctx, lein, lab.ID, "Zig", "comptime and allocators")
+	if err != nil || renamed.Name != "Zig" || renamed.Topic != "comptime and allocators" || !renamed.UpdatedAt.After(lab.UpdatedAt) {
+		t.Fatalf("%+v, %v", renamed, err)
+	}
+
+	if _, err := store.Rename(ctx, lein, lab.ID, "rust", ""); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("onto another lab's name: %v", err)
+	}
+
+	if _, err := store.Rename(ctx, other, lab.ID, "Mine", ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("by another user: %v", err)
+	}
+
+	if got, _ := store.Get(ctx, lein, lab.ID); got.Name != "Zig" {
+		t.Errorf("after refusals: %+v", got)
 	}
 }
 
@@ -134,16 +159,16 @@ func TestSourcesAndTheirPages(t *testing.T) {
 	}
 
 	sources, err := store.Sources(ctx, lein, golab.ID)
-	if err != nil || len(sources) != 2 || sources[0].Pages != 2 || sources[0].LastRunID != fmt.Sprintf("run-%d", doc.ID) || sources[1].Pages != 2 {
+	if err != nil || len(sources) != 2 || sources[0].Pages != 2 || sources[0].LastRunID != "run-"+doc.ID || sources[1].Pages != 2 {
 		t.Errorf("sources: %+v, %v", sources, err)
 	}
 
-	urls, err := store.PageURLs(ctx, lein, []int64{golab.ID, rustlab.ID})
+	urls, err := store.PageURLs(ctx, lein, []string{golab.ID, rustlab.ID})
 	if err != nil || fmt.Sprint(urls) != "[https://doc.rust-lang.org/book/ https://go.dev/blog/ https://go.dev/doc/ https://go.dev/doc/effective_go]" {
 		t.Errorf("urls of both labs: %v, %v", urls, err)
 	}
 
-	if _, err := store.PageURLs(ctx, lein, []int64{golab.ID, foreign.ID}); !errors.Is(err, ErrNotFound) {
+	if _, err := store.PageURLs(ctx, lein, []string{golab.ID, foreign.ID}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("urls with another user's lab among them: %v", err)
 	}
 
@@ -187,6 +212,40 @@ func TestSourcesAndTheirPages(t *testing.T) {
 		if want := p.URL == "https://go.dev/doc/"; (p.Sketch != nil) != want || want && copies.Resemblance(p.Sketch, sketch) != 1 {
 			t.Errorf("%s: sketch %v", p.URL, p.Sketch)
 		}
+	}
+
+	// effective_go failed every indexing try; the blog index waits (an older
+	// failed version of it was tried again since).
+	exec(t, pool, `INSERT INTO index_queue (url, fetched_at, dead, error, attempts) VALUES
+		('https://go.dev/doc/effective_go', now(), true, 'embedder down', 6),
+		('https://go.dev/blog/', now(), true, 'old failure', 6),
+		('https://go.dev/blog/', now(), false, '', 0),
+		('https://elsewhere.dev/', now(), true, 'not this lab', 6)`)
+
+	quality, err = store.QualityPages(ctx, lein, golab.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range quality {
+		want := map[string]string{"https://go.dev/doc/effective_go": QueueDead, "https://go.dev/blog/": QueueWaiting}[p.URL]
+		if p.Queue != want || (want == QueueDead) != (p.QueueError == "embedder down") {
+			t.Errorf("%s: queue %q %q, want %q", p.URL, p.Queue, p.QueueError, want)
+		}
+	}
+
+	if _, err := store.RetryFailed(ctx, other, golab.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another user retrying: %v", err)
+	}
+
+	if n, err := store.RetryFailed(ctx, lein, golab.ID); err != nil || n != 1 {
+		t.Errorf("retried %d, %v; the lab's dead pages, not another's, nor a version a newer one replaced", n, err)
+	}
+
+	var left string
+	if err := pool.QueryRow(ctx, `SELECT string_agg(url || ':' || dead, ' ' ORDER BY id) FROM index_queue`).Scan(&left); err != nil ||
+		left != "https://go.dev/doc/effective_go:false https://go.dev/blog/:false https://elsewhere.dev/:true" {
+		t.Errorf("queue after the retry: %s, %v", left, err)
 	}
 
 	if err := store.RemoveSource(ctx, other, golab.ID, doc.ID); !errors.Is(err, ErrNotFound) {

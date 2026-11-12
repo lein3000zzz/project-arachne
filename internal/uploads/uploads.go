@@ -66,7 +66,7 @@ func NewStore(pool *pgxpool.Pool, purge func(ctx context.Context, url string) er
 
 // Save keeps the file and returns its address. The same file uploaded again
 // by the same user is the same upload: indexed once, whichever labs hold it.
-func (s *Store) Save(ctx context.Context, ownerID int64, name, contentType string, data []byte) (string, error) {
+func (s *Store) Save(ctx context.Context, ownerID, name, contentType string, data []byte) (string, error) {
 	id, err := utils.GenerateID()
 	if err != nil {
 		return "", err
@@ -87,7 +87,7 @@ func (s *Store) Save(ctx context.Context, ownerID int64, name, contentType strin
 }
 
 // Owned returns the file if it is the user's.
-func (s *Store) Owned(ctx context.Context, ownerID int64, id string) (File, error) {
+func (s *Store) Owned(ctx context.Context, ownerID, id string) (File, error) {
 	f := File{ID: id}
 
 	err := s.pool.QueryRow(ctx, `SELECT filename, content_type, data FROM uploads WHERE id = $1 AND owner_id = $2`, id, ownerID).
@@ -101,7 +101,7 @@ func (s *Store) Owned(ctx context.Context, ownerID int64, id string) (File, erro
 
 // Forget deletes, of these addresses, the owner's uploads that none of their
 // labs holds any more - the file, its page, its review and its chunks.
-func (s *Store) Forget(ctx context.Context, ownerID int64, urls []string) error {
+func (s *Store) Forget(ctx context.Context, ownerID string, urls []string) error {
 	var ids []string
 
 	for _, u := range urls {

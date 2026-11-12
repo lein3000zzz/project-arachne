@@ -51,7 +51,7 @@ type Run struct {
 	// PageRank has been recomputed since the crawl finished.
 	Ranked bool `json:"ranked"`
 	// The lab source the run crawled for, if any.
-	SourceID int64 `json:"source_id,omitempty"`
+	SourceID string `json:"source_id,omitempty"`
 }
 
 const countTimeout = 2 * time.Second
@@ -73,7 +73,7 @@ func NewStore(logger *zap.SugaredLogger, pool *pgxpool.Pool, stallAfter time.Dur
 func (s *Store) Submitted(ctx context.Context, run *config.Run, origin Origin) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO runs (id, start_url, scope, max_depth, max_links, submitted_by, source_id)
-		VALUES ($1, $2, $3, $4, $5, nullif($6, 0), nullif($7, 0))
+		VALUES ($1, $2, $3, $4, $5, nullif($6, '')::uuid, nullif($7, '')::uuid)
 		ON CONFLICT (id) DO NOTHING`,
 		run.ID, run.StartURL, run.Scope, run.MaxDepth, run.MaxLinks, origin.UserID, origin.SourceID)
 
@@ -140,7 +140,7 @@ const selectRuns = `
 	       count(p.id) FILTER (WHERE p.fetched_at IS NOT NULL), max(p.fetched_at),
 	       r.docs_queued, r.docs_indexed, r.docs_failed, r.docs_rejected, r.indexed_at,
 	       coalesce((SELECT max(computed_at) FROM rank_runs) >= r.finished_at, false),
-	       coalesce(r.source_id, 0)
+	       coalesce(r.source_id::text, '')
 	FROM runs r LEFT JOIN pages p ON p.last_run_id = r.id`
 
 func (s *Store) List(ctx context.Context, limit int) ([]Run, error) {

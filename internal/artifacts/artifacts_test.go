@@ -3,6 +3,7 @@ package artifacts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -18,26 +19,26 @@ import (
 
 type memoryStore struct {
 	mu        sync.Mutex
-	artifacts map[int64]*Artifact
-	versions  map[int64][]Version
+	artifacts map[string]*Artifact
+	versions  map[string][]Version
 	saves     int
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{artifacts: map[int64]*Artifact{}, versions: map[int64][]Version{}}
+	return &memoryStore{artifacts: map[string]*Artifact{}, versions: map[string][]Version{}}
 }
 
-func (m *memoryStore) Create(_ context.Context, _, labID int64, kind Kind, title, request string) (int64, error) {
+func (m *memoryStore) Create(_ context.Context, _, labID string, kind Kind, title, request string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	id := int64(len(m.artifacts) + 1)
+	id := fmt.Sprint("artifact-", len(m.artifacts)+1)
 	m.artifacts[id] = &Artifact{ID: id, LabID: labID, Kind: kind, Title: title, Request: request}
 
 	return id, nil
 }
 
-func (m *memoryStore) StartVersion(_ context.Context, id int64, v Version) (int, error) {
+func (m *memoryStore) StartVersion(_ context.Context, id string, v Version) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -53,7 +54,7 @@ func (m *memoryStore) StartVersion(_ context.Context, id int64, v Version) (int,
 	return v.Number, nil
 }
 
-func (m *memoryStore) SaveVersion(_ context.Context, id int64, v Version) error {
+func (m *memoryStore) SaveVersion(_ context.Context, id string, v Version) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -64,9 +65,9 @@ func (m *memoryStore) SaveVersion(_ context.Context, id int64, v Version) error 
 	return nil
 }
 
-func (m *memoryStore) List(context.Context, int64, int64) ([]Artifact, error) { return nil, nil }
+func (m *memoryStore) List(context.Context, string, string) ([]Artifact, error) { return nil, nil }
 
-func (m *memoryStore) Get(_ context.Context, _, id int64) (Artifact, error) {
+func (m *memoryStore) Get(_ context.Context, _, id string) (Artifact, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -78,7 +79,7 @@ func (m *memoryStore) Get(_ context.Context, _, id int64) (Artifact, error) {
 	return *a, nil
 }
 
-func (m *memoryStore) Version(_ context.Context, _, id int64, number int) (Version, error) {
+func (m *memoryStore) Version(_ context.Context, _, id string, number int) (Version, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -94,27 +95,27 @@ func (m *memoryStore) Version(_ context.Context, _, id int64, number int) (Versi
 	return vs[number-1], nil
 }
 
-func (m *memoryStore) Versions(context.Context, int64, int64) ([]int, error) { return nil, nil }
-func (m *memoryStore) Delete(context.Context, int64, int64) error            { return nil }
-func (m *memoryStore) Interrupt(context.Context) (int64, error)              { return 0, nil }
+func (m *memoryStore) Versions(context.Context, string, string) ([]int, error) { return nil, nil }
+func (m *memoryStore) Delete(context.Context, string, string) error            { return nil }
+func (m *memoryStore) Interrupt(context.Context) (int64, error)                { return 0, nil }
 
 type fakeLabs struct {
 	pages []labs.Page
 }
 
-func (f *fakeLabs) Get(_ context.Context, owner, lab int64) (labs.Detail, error) {
-	if owner != 1 {
+func (f *fakeLabs) Get(_ context.Context, owner, lab string) (labs.Detail, error) {
+	if owner != "user-1" {
 		return labs.Detail{}, labs.ErrNotFound
 	}
 
 	return labs.Detail{Lab: labs.Lab{ID: lab, Name: "ResNets", Topic: "deep residual learning"}}, nil
 }
 
-func (f *fakeLabs) PageURLs(context.Context, int64, []int64) ([]string, error) {
+func (f *fakeLabs) PageURLs(context.Context, string, []string) ([]string, error) {
 	return []string{"https://arxiv.org/abs/1512.03385", "https://d2l.ai/resnet.html"}, nil
 }
 
-func (f *fakeLabs) Pages(context.Context, int64, int64, int) ([]labs.Page, error) {
+func (f *fakeLabs) Pages(context.Context, string, string, int) ([]labs.Page, error) {
 	return f.pages, nil
 }
 
@@ -229,14 +230,14 @@ func TestAReportIsBuiltSectionBySection(t *testing.T) {
 		{Heading: "Opinion"},
 	}}
 
-	a, err := s.Build(context.Background(), 1, 7, "a report on residual networks", outline)
+	a, err := s.Build(context.Background(), "user-1", "lab-7", "a report on residual networks", outline)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	s.running.Wait()
 
-	v, _ := store.Version(context.Background(), 1, a.ID, 0)
+	v, _ := store.Version(context.Background(), "user-1", a.ID, 0)
 	if v.Status != StatusDone || v.Number != 1 || len(v.Sections) != 4 {
 		t.Fatalf("version = %+v", v)
 	}
@@ -273,13 +274,13 @@ func TestAReportIsBuiltSectionBySection(t *testing.T) {
 		t.Errorf("progress saved %d times; the page shows it section by section", store.saves)
 	}
 
-	if _, err := s.Rebuild(context.Background(), 1, a.ID); err != nil {
+	if _, err := s.Rebuild(context.Background(), "user-1", a.ID); err != nil {
 		t.Fatal(err)
 	}
 
 	s.running.Wait()
 
-	if v2, _ := store.Version(context.Background(), 1, a.ID, 0); v2.Number != 2 || v2.Status != StatusDone {
+	if v2, _ := store.Version(context.Background(), "user-1", a.ID, 0); v2.Number != 2 || v2.Status != StatusDone {
 		t.Errorf("rebuild = %+v", v2)
 	}
 }
@@ -309,7 +310,7 @@ func TestAReportKeepsTheSourcesThatDisagree(t *testing.T) {
 
 	s := newService(store, answers, &model{}, &fakeLabs{})
 
-	a, err := s.Build(context.Background(), 1, 7, "", Outline{Title: "Residual networks",
+	a, err := s.Build(context.Background(), "user-1", "lab-7", "", Outline{Title: "Residual networks",
 		Sections: []Planned{{Heading: "Blocks", Focus: "blocks"}, {Heading: "Depth", Focus: "depth"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +318,7 @@ func TestAReportKeepsTheSourcesThatDisagree(t *testing.T) {
 
 	s.running.Wait()
 
-	v, _ := store.Version(context.Background(), 1, a.ID, 0)
+	v, _ := store.Version(context.Background(), "user-1", a.ID, 0)
 
 	if len(v.Sources) != 3 || v.Sources[0].URL != book || v.Sources[1].URL != paper || v.Sources[2].URL != blog {
 		t.Fatalf("sources = %+v; want the uncited side of the conflict kept, after the cited ones", v.Sources)
@@ -352,17 +353,17 @@ func TestAnOutlineIsCheckedBeforeAnythingIsBuilt(t *testing.T) {
 		{Title: "T", Sections: []Planned{{Heading: ""}}},
 		{Title: "T", Sections: []Planned{{Heading: strings.Repeat("h", 121)}}},
 	} {
-		if _, err := s.Build(context.Background(), 1, 7, "", o); !errors.Is(err, ErrInvalid) {
+		if _, err := s.Build(context.Background(), "user-1", "lab-7", "", o); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v: %v", o, err)
 		}
 	}
 
-	if _, err := s.Build(context.Background(), 2, 7, "", Outline{Title: "T", Sections: []Planned{{Heading: "A"}}}); !errors.Is(err, labs.ErrNotFound) {
+	if _, err := s.Build(context.Background(), "user-2", "lab-7", "", Outline{Title: "T", Sections: []Planned{{Heading: "A"}}}); !errors.Is(err, labs.ErrNotFound) {
 		t.Errorf("another user's lab: %v", err)
 	}
 
 	if _, err := NewService(zap.NewNop().Sugar(), newMemoryStore(), &fakeLabs{}, nil, nil, Config{MaxSections: 5}).
-		Build(context.Background(), 1, 7, "", Outline{Title: "T", Sections: []Planned{{Heading: "A"}}}); !errors.Is(err, ErrUnavailable) {
+		Build(context.Background(), "user-1", "lab-7", "", Outline{Title: "T", Sections: []Planned{{Heading: "A"}}}); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("without a model: %v", err)
 	}
 }
@@ -378,7 +379,7 @@ func TestDraftSeesWhatTheLabHolds(t *testing.T) {
 		{Title: "Buy GPUs cheap", Review: &labs.PageReview{Decision: "skip"}},
 	}}
 
-	o, err := newService(newMemoryStore(), &scripted{}, chat, l).Draft(context.Background(), 1, 7, "a report on residual networks")
+	o, err := newService(newMemoryStore(), &scripted{}, chat, l).Draft(context.Background(), "user-1", "lab-7", "a report on residual networks")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +395,7 @@ func TestDraftSeesWhatTheLabHolds(t *testing.T) {
 
 	chat.reply = "I cannot do that."
 
-	o, _ = newService(newMemoryStore(), &scripted{}, chat, l).Draft(context.Background(), 1, 7, "residual networks")
+	o, _ = newService(newMemoryStore(), &scripted{}, chat, l).Draft(context.Background(), "user-1", "lab-7", "residual networks")
 	if o.Title != "residual networks" || len(o.Sections) != 1 || o.Sections[0].Heading != "residual networks" {
 		t.Errorf("with nothing usable, the request is the outline: %+v", o)
 	}
@@ -416,7 +417,7 @@ func TestASavedAnswerKeepsItsCheck(t *testing.T) {
 	store := newMemoryStore()
 	s := newService(store, &scripted{}, &model{}, &fakeLabs{})
 
-	a, err := s.SaveAnswer(context.Background(), 1, 7, SavedAnswer{
+	a, err := s.SaveAnswer(context.Background(), "user-1", "lab-7", SavedAnswer{
 		Question: "What problem do residual connections solve?",
 		Text:     "The degradation problem [1].",
 		Sources:  []answer.Source{{N: 1, Result: retrieval.Result{URL: paper, Title: "Deep Residual Learning"}}},
@@ -427,13 +428,13 @@ func TestASavedAnswerKeepsItsCheck(t *testing.T) {
 		t.Fatalf("save: %+v, %v", a, err)
 	}
 
-	v, _ := store.Version(context.Background(), 1, a.ID, 0)
+	v, _ := store.Version(context.Background(), "user-1", a.ID, 0)
 	if v.Status != StatusDone || v.Sections[0].Claims[0].Verdict != answer.Supported || v.Sources[0].URL != paper ||
 		!strings.Contains(v.Markdown, "The degradation problem [1].") {
 		t.Errorf("version = %+v", v)
 	}
 
-	if _, err := s.SaveAnswer(context.Background(), 1, 7, SavedAnswer{Question: "q"}); !errors.Is(err, ErrInvalid) {
+	if _, err := s.SaveAnswer(context.Background(), "user-1", "lab-7", SavedAnswer{Question: "q"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("an empty answer: %v", err)
 	}
 }
@@ -456,7 +457,7 @@ func TestASectionIsRewrittenOrAddedAloneAndSourcesStayTidy(t *testing.T) {
 	s := newService(store, answers, &model{}, &fakeLabs{})
 	ctx := context.Background()
 
-	a, err := s.Build(ctx, 1, 7, "", Outline{Title: "T", Sections: []Planned{{Heading: "A"}, {Heading: "B"}, {Heading: "C"}}})
+	a, err := s.Build(ctx, "user-1", "lab-7", "", Outline{Title: "T", Sections: []Planned{{Heading: "A"}, {Heading: "B"}, {Heading: "C"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,13 +472,13 @@ func TestASectionIsRewrittenOrAddedAloneAndSourcesStayTidy(t *testing.T) {
 
 	asked := len(answers.asked)
 
-	if _, err := s.Rewrite(ctx, 1, a.ID, 1); err != nil {
+	if _, err := s.Rewrite(ctx, "user-1", a.ID, 1); err != nil {
 		t.Fatal(err)
 	}
 
 	s.running.Wait()
 
-	v, _ := store.Version(ctx, 1, a.ID, 0)
+	v, _ := store.Version(ctx, "user-1", a.ID, 0)
 	if len(answers.asked) != asked+1 || v.Number != 2 || v.Sections[2].State != StateThin {
 		t.Fatalf("rewriting A asked %d times, version %+v; want A alone written", len(answers.asked)-asked, v)
 	}
@@ -488,13 +489,13 @@ func TestASectionIsRewrittenOrAddedAloneAndSourcesStayTidy(t *testing.T) {
 		t.Errorf("renumbered: %q, %q, sources %+v, claims %+v", v.Sections[0].Text, v.Sections[1].Text, v.Sources, v.Sections[1].Claims)
 	}
 
-	if _, err := s.Rewrite(ctx, 1, a.ID, 3); err != nil {
+	if _, err := s.Rewrite(ctx, "user-1", a.ID, 3); err != nil {
 		t.Fatal(err)
 	}
 
 	s.running.Wait()
 
-	if v, _ = store.Version(ctx, 1, a.ID, 0); v.Sections[2].State != StateDone || v.Sections[2].Text != "C cites the paper [2]." {
+	if v, _ = store.Version(ctx, "user-1", a.ID, 0); v.Sections[2].State != StateDone || v.Sections[2].Text != "C cites the paper [2]." {
 		t.Errorf("C after gathering: %+v", v.Sections[2])
 	}
 
@@ -502,48 +503,48 @@ func TestASectionIsRewrittenOrAddedAloneAndSourcesStayTidy(t *testing.T) {
 	answers.written["D"] = "D cites something new [1]."
 	asked = len(answers.asked)
 
-	if _, err := s.Extend(ctx, 1, a.ID, Planned{Heading: "D", Focus: "something new"}); err != nil {
+	if _, err := s.Extend(ctx, "user-1", a.ID, Planned{Heading: "D", Focus: "something new"}); err != nil {
 		t.Fatal(err)
 	}
 
 	s.running.Wait()
 
-	v, _ = store.Version(ctx, 1, a.ID, 0)
+	v, _ = store.Version(ctx, "user-1", a.ID, 0)
 	if len(answers.asked) != asked+1 || len(v.Sections) != 4 || len(v.Outline.Sections) != 4 || v.Sections[3].Text != "D cites something new [3]." {
 		t.Errorf("extended: %d asked, %+v", len(answers.asked)-asked, v)
 	}
 
-	if _, err := s.Extend(ctx, 1, a.ID, Planned{Heading: "E"}); err != nil {
+	if _, err := s.Extend(ctx, "user-1", a.ID, Planned{Heading: "E"}); err != nil {
 		t.Fatal(err)
 	}
 
 	s.running.Wait()
 
-	if _, err := s.Extend(ctx, 1, a.ID, Planned{Heading: "F"}); !errors.Is(err, ErrInvalid) {
+	if _, err := s.Extend(ctx, "user-1", a.ID, Planned{Heading: "F"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("past max_sections: %v", err)
 	}
 
 	for _, n := range []int{0, 6} {
-		if _, err := s.Rewrite(ctx, 1, a.ID, n); !errors.Is(err, ErrInvalid) {
+		if _, err := s.Rewrite(ctx, "user-1", a.ID, n); !errors.Is(err, ErrInvalid) {
 			t.Errorf("rewrite section %d: %v", n, err)
 		}
 	}
 
-	saved, _ := s.SaveAnswer(ctx, 1, 7, SavedAnswer{Question: "q", Text: "An answer [1].", Sources: answers.sources["A"]})
-	if _, err := s.Rewrite(ctx, 1, saved.ID, 1); !errors.Is(err, ErrInvalid) {
+	saved, _ := s.SaveAnswer(ctx, "user-1", "lab-7", SavedAnswer{Question: "q", Text: "An answer [1].", Sources: answers.sources["A"]})
+	if _, err := s.Rewrite(ctx, "user-1", saved.ID, 1); !errors.Is(err, ErrInvalid) {
 		t.Errorf("rewriting a saved answer: %v", err)
 	}
 }
 
 func TestDraftSectionKnowsTheReport(t *testing.T) {
 	store := newMemoryStore()
-	id, _ := store.Create(context.Background(), 1, 7, KindReport, "Residual networks", "")
+	id, _ := store.Create(context.Background(), "user-1", "lab-7", KindReport, "Residual networks", "")
 	_, _ = store.StartVersion(context.Background(), id, Version{Status: StatusDone, Outline: Outline{Title: "Residual networks"},
 		Sections: []Section{{Heading: "Degradation"}, {Heading: "Blocks"}}})
 
 	chat := &recordingModel{reply: `{"heading": "Bottleneck blocks", "focus": "the 1x1, 3x3, 1x1 bottleneck design of deeper ResNets"}`}
 
-	p, err := newService(store, &scripted{}, chat, &fakeLabs{}).DraftSection(context.Background(), 1, id, "the bottleneck design")
+	p, err := newService(store, &scripted{}, chat, &fakeLabs{}).DraftSection(context.Background(), "user-1", id, "the bottleneck design")
 	if err != nil || p.Heading != "Bottleneck blocks" || !strings.Contains(p.Focus, "1x1") {
 		t.Fatalf("section = %+v, %v", p, err)
 	}
@@ -553,7 +554,7 @@ func TestDraftSectionKnowsTheReport(t *testing.T) {
 	}
 
 	chat.reply = "no"
-	if p, _ := newService(store, &scripted{}, chat, &fakeLabs{}).DraftSection(context.Background(), 1, id, "the bottleneck design"); p.Heading != "the bottleneck design" {
+	if p, _ := newService(store, &scripted{}, chat, &fakeLabs{}).DraftSection(context.Background(), "user-1", id, "the bottleneck design"); p.Heading != "the bottleneck design" {
 		t.Errorf("with nothing usable, the request is the section: %+v", p)
 	}
 }

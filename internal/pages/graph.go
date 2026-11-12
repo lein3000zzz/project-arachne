@@ -35,11 +35,11 @@ const (
 
 	pageIDs = `SELECT url, id FROM pages WHERE url = ANY($1)`
 
-	dropStaleLinks = `DELETE FROM links WHERE src = $1 AND dst <> ALL ($2::bigint[])`
+	dropStaleLinks = `DELETE FROM links WHERE src = $1 AND dst <> ALL ($2::uuid[])`
 
 	upsertLinks = `
 		INSERT INTO links (src, dst, kind)
-		SELECT $1, d, k FROM unnest($2::bigint[], $3::smallint[]) AS t (d, k)
+		SELECT $1, d, k FROM unnest($2::uuid[], $3::smallint[]) AS t (d, k)
 		ON CONFLICT (src, dst) DO UPDATE SET kind = EXCLUDED.kind WHERE links.kind <> EXCLUDED.kind`
 
 	// Links into old become links into keep; a source linking to both keeps one
@@ -83,7 +83,7 @@ const (
 )
 
 func savePage(ctx context.Context, tx pgx.Tx, page *data.PageData) error {
-	var id int64
+	var id string
 
 	if err := tx.QueryRow(ctx, upsertPage, page.URL, hostOf(page.URL), page.Status, page.Title, page.ContentType,
 		page.LastRunID, page.FoundAt, page.LastUpdatedAt).Scan(&id); err != nil {
@@ -118,7 +118,7 @@ func savePage(ctx context.Context, tx pgx.Tx, page *data.PageData) error {
 
 		// The alias's own outgoing links described the same page, fetched earlier
 		// under the other name; the links just saved supersede them.
-		var oldID int64
+		var oldID string
 
 		err := tx.QueryRow(ctx, `SELECT id FROM pages WHERE url = $1`, alias).Scan(&oldID)
 
@@ -140,7 +140,7 @@ func savePage(ctx context.Context, tx pgx.Tx, page *data.PageData) error {
 	return nil
 }
 
-func replaceReferences(ctx context.Context, tx pgx.Tx, id int64, refs []data.Reference) error {
+func replaceReferences(ctx context.Context, tx pgx.Tx, id string, refs []data.Reference) error {
 	if _, err := tx.Exec(ctx, dropReferences, id); err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func replaceReferences(ctx context.Context, tx pgx.Tx, id int64, refs []data.Ref
 	return err
 }
 
-func replaceLinks(ctx context.Context, tx pgx.Tx, id int64, page *data.PageData) error {
+func replaceLinks(ctx context.Context, tx pgx.Tx, id string, page *data.PageData) error {
 	kinds := make(map[string]int16, len(page.Links))
 
 	for _, link := range page.Links {
@@ -190,7 +190,7 @@ func replaceLinks(ctx context.Context, tx pgx.Tx, id int64, page *data.PageData)
 	// keeps them from waiting on each other in a cycle.
 	sort.Strings(targets)
 
-	ids := make([]int64, 0, len(targets))
+	ids := make([]string, 0, len(targets))
 	linkKinds := make([]int16, 0, len(targets))
 
 	if len(targets) > 0 {
@@ -208,13 +208,10 @@ func replaceLinks(ctx context.Context, tx pgx.Tx, id int64, page *data.PageData)
 			return err
 		}
 
-		byURL := make(map[string]int64, len(targets))
+		byURL := make(map[string]string, len(targets))
 
 		for rows.Next() {
-			var (
-				u      string
-				target int64
-			)
+			var u, target string
 
 			if err := rows.Scan(&u, &target); err != nil {
 				rows.Close()
@@ -295,7 +292,7 @@ func resolveThroughAliases(ctx context.Context, tx pgx.Tx, kinds map[string]int1
 // fold merges page row old into keep: links into old now point at keep, aliases
 // of old name keep, its labs hold keep, and old is deleted. withOutgoing also gives keep old's
 // outgoing links, for merging two stored spellings of one URL.
-func fold(ctx context.Context, tx pgx.Tx, old, keep int64, withOutgoing bool) error {
+func fold(ctx context.Context, tx pgx.Tx, old, keep string, withOutgoing bool) error {
 	if old == keep {
 		return nil
 	}

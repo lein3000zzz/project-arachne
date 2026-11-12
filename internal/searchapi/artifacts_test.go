@@ -19,8 +19,8 @@ import (
 type fakeArtifacts struct {
 	ArtifactService
 
-	owner   int64
-	lab     int64
+	owner   string
+	lab     string
 	outline artifacts.Outline
 	saved   artifacts.SavedAnswer
 	section int
@@ -28,32 +28,32 @@ type fakeArtifacts struct {
 	err     error
 }
 
-func (f *fakeArtifacts) Rewrite(_ context.Context, owner, id int64, section int) (artifacts.Artifact, error) {
+func (f *fakeArtifacts) Rewrite(_ context.Context, owner, id string, section int) (artifacts.Artifact, error) {
 	f.owner, f.section = owner, section
 	return artifacts.Artifact{ID: id}, f.err
 }
 
-func (f *fakeArtifacts) DraftSection(_ context.Context, owner, _ int64, request string) (artifacts.Planned, error) {
+func (f *fakeArtifacts) DraftSection(_ context.Context, owner, _, request string) (artifacts.Planned, error) {
 	f.owner = owner
 	return artifacts.Planned{Heading: request, Focus: request}, f.err
 }
 
-func (f *fakeArtifacts) Extend(_ context.Context, owner, id int64, p artifacts.Planned) (artifacts.Artifact, error) {
+func (f *fakeArtifacts) Extend(_ context.Context, owner, id string, p artifacts.Planned) (artifacts.Artifact, error) {
 	f.owner, f.planned = owner, p
 	return artifacts.Artifact{ID: id}, f.err
 }
 
-func (f *fakeArtifacts) Draft(_ context.Context, owner, lab int64, request string) (artifacts.Outline, error) {
+func (f *fakeArtifacts) Draft(_ context.Context, owner, lab, request string) (artifacts.Outline, error) {
 	f.owner, f.lab = owner, lab
 	return artifacts.Outline{Title: request, Sections: []artifacts.Planned{{Heading: "A", Focus: "a"}}}, f.err
 }
 
-func (f *fakeArtifacts) Build(_ context.Context, owner, lab int64, _ string, o artifacts.Outline) (artifacts.Artifact, error) {
+func (f *fakeArtifacts) Build(_ context.Context, owner, lab, _ string, o artifacts.Outline) (artifacts.Artifact, error) {
 	f.owner, f.lab, f.outline = owner, lab, o
-	return artifacts.Artifact{ID: 9, LabID: lab, Title: o.Title}, f.err
+	return artifacts.Artifact{ID: tid(9), LabID: lab, Title: o.Title}, f.err
 }
 
-func (f *fakeArtifacts) Get(_ context.Context, owner, id int64, version int) (artifacts.Artifact, artifacts.Version, []int, error) {
+func (f *fakeArtifacts) Get(_ context.Context, owner, id string, version int) (artifacts.Artifact, artifacts.Version, []int, error) {
 	f.owner = owner
 	v := artifacts.Version{Number: 2, Status: artifacts.StatusDone, Markdown: "# T\n",
 		Sections: []artifacts.Section{{Heading: "A", State: artifacts.StateDone, Text: "Text [1]."}},
@@ -62,9 +62,9 @@ func (f *fakeArtifacts) Get(_ context.Context, owner, id int64, version int) (ar
 	return artifacts.Artifact{ID: id, Title: "T"}, v, []int{1, 2}, f.err
 }
 
-func (f *fakeArtifacts) SaveAnswer(_ context.Context, owner, lab int64, saved artifacts.SavedAnswer) (artifacts.Artifact, error) {
+func (f *fakeArtifacts) SaveAnswer(_ context.Context, owner, lab string, saved artifacts.SavedAnswer) (artifacts.Artifact, error) {
 	f.owner, f.lab, f.saved = owner, lab, saved
-	return artifacts.Artifact{ID: 5, LabID: lab, Kind: artifacts.KindAnswer, Title: saved.Question}, f.err
+	return artifacts.Artifact{ID: tid(5), LabID: lab, Kind: artifacts.KindAnswer, Title: saved.Question}, f.err
 }
 
 func serveArtifacts(service ArtifactService, recent *recentAnswers, method, target, body string) *httptest.ResponseRecorder {
@@ -89,12 +89,12 @@ func serveArtifacts(service ArtifactService, recent *recentAnswers, method, targ
 func TestReportsAreDraftedAndBuiltAsTheSignedInUser(t *testing.T) {
 	service := &fakeArtifacts{}
 
-	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/labs/4/artifacts/outline", `{"request":"residual networks"}`); rec.Code != http.StatusOK ||
-		service.owner != testUser.ID || service.lab != 4 || !strings.Contains(rec.Body.String(), `"title":"residual networks"`) {
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/labs/"+tid(4)+"/artifacts/outline", `{"request":"residual networks"}`); rec.Code != http.StatusOK ||
+		service.owner != testUser.ID || service.lab != tid(4) || !strings.Contains(rec.Body.String(), `"title":"residual networks"`) {
 		t.Errorf("draft: %d %s", rec.Code, rec.Body)
 	}
 
-	rec := serveArtifacts(service, nil, http.MethodPost, "/api/labs/4/artifacts",
+	rec := serveArtifacts(service, nil, http.MethodPost, "/api/labs/"+tid(4)+"/artifacts",
 		`{"request":"r","outline":{"title":"T","sections":[{"heading":"B","focus":"b"},{"heading":"A","focus":"a"}]}}`)
 	if rec.Code != http.StatusAccepted || service.outline.Sections[0].Heading != "B" {
 		t.Errorf("build: %d %s, outline %+v", rec.Code, rec.Body, service.outline)
@@ -102,14 +102,14 @@ func TestReportsAreDraftedAndBuiltAsTheSignedInUser(t *testing.T) {
 
 	for err, want := range map[error]int{artifacts.ErrBuilding: http.StatusConflict, artifacts.ErrInvalid: http.StatusBadRequest,
 		artifacts.ErrNotFound: http.StatusNotFound, artifacts.ErrUnavailable: http.StatusServiceUnavailable} {
-		if rec := serveArtifacts(&fakeArtifacts{err: err}, nil, http.MethodPost, "/api/labs/4/artifacts/outline", `{"request":"r"}`); rec.Code != want {
+		if rec := serveArtifacts(&fakeArtifacts{err: err}, nil, http.MethodPost, "/api/labs/"+tid(4)+"/artifacts/outline", `{"request":"r"}`); rec.Code != want {
 			t.Errorf("%v: %d, want %d", err, rec.Code, want)
 		}
 	}
 }
 
 func TestAnArtifactComesRendered(t *testing.T) {
-	rec := serveArtifacts(&fakeArtifacts{}, nil, http.MethodGet, "/api/artifacts/7?version=2", "")
+	rec := serveArtifacts(&fakeArtifacts{}, nil, http.MethodGet, "/api/artifacts/"+tid(7)+"?version=2", "")
 
 	var got struct {
 		HTML     string              `json:"html"`
@@ -123,12 +123,12 @@ func TestAnArtifactComesRendered(t *testing.T) {
 		t.Errorf("get: %d %s, %v", rec.Code, rec.Body, err)
 	}
 
-	rec = serveArtifacts(&fakeArtifacts{}, nil, http.MethodGet, "/api/artifacts/7/markdown", "")
-	if rec.Code != http.StatusOK || rec.Body.String() != "# T\n" || !strings.Contains(rec.Header().Get("Content-Disposition"), `artifact-7-v2.md`) {
+	rec = serveArtifacts(&fakeArtifacts{}, nil, http.MethodGet, "/api/artifacts/"+tid(7)+"/markdown", "")
+	if rec.Code != http.StatusOK || rec.Body.String() != "# T\n" || !strings.Contains(rec.Header().Get("Content-Disposition"), "artifact-"+tid(7)+"-v2.md") {
 		t.Errorf("markdown: %d %v %q", rec.Code, rec.Header(), rec.Body)
 	}
 
-	if rec := serveArtifacts(&fakeArtifacts{}, nil, http.MethodGet, "/api/artifacts/7?version=0", ""); rec.Code != http.StatusBadRequest {
+	if rec := serveArtifacts(&fakeArtifacts{}, nil, http.MethodGet, "/api/artifacts/"+tid(7)+"?version=0", ""); rec.Code != http.StatusBadRequest {
 		t.Errorf("version 0: %d", rec.Code)
 	}
 }
@@ -139,16 +139,16 @@ func TestASavedAnswerIsTheServersOwn(t *testing.T) {
 		Sources: []answer.Source{{N: 1, Result: retrieval.Result{URL: "https://arxiv.org/abs/1512.03385"}}}}
 
 	checking := recent.add(testUser.ID, "what do residual connections solve", res, false)
-	theirs := recent.add(testUser.ID+1, "someone else's question", res, true)
+	theirs := recent.add(tid(2), "someone else's question", res, true)
 
 	service := &fakeArtifacts{}
 
-	if rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/4/artifacts/answers", `{"answer":"`+checking+`"}`); rec.Code != http.StatusConflict {
+	if rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/"+tid(4)+"/artifacts/answers", `{"answer":"`+checking+`"}`); rec.Code != http.StatusConflict {
 		t.Errorf("still being checked: %d %s", rec.Code, rec.Body)
 	}
 
 	for _, id := range []string{theirs, "made-up"} {
-		if rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/4/artifacts/answers", `{"answer":"`+id+`"}`); rec.Code != http.StatusNotFound {
+		if rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/"+tid(4)+"/artifacts/answers", `{"answer":"`+id+`"}`); rec.Code != http.StatusNotFound {
 			t.Errorf("%s: %d", id, rec.Code)
 		}
 	}
@@ -159,13 +159,13 @@ func TestASavedAnswerIsTheServersOwn(t *testing.T) {
 	})
 
 	// Whatever else the body carries is refused; the text is the server's.
-	if rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/4/artifacts/answers",
+	if rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/"+tid(4)+"/artifacts/answers",
 		`{"answer":"`+checking+`","text":"Residual connections were invented by me."}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("a text in the body: %d", rec.Code)
 	}
 
-	rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/4/artifacts/answers", `{"answer":"`+checking+`"}`)
-	if rec.Code != http.StatusCreated || service.lab != 4 || service.saved.Text != res.Answer ||
+	rec := serveArtifacts(service, recent, http.MethodPost, "/api/labs/"+tid(4)+"/artifacts/answers", `{"answer":"`+checking+`"}`)
+	if rec.Code != http.StatusCreated || service.lab != tid(4) || service.saved.Text != res.Answer ||
 		service.saved.Question != "what do residual connections solve" || service.saved.Claims[0].Verdict != answer.Supported ||
 		len(service.saved.Conflicts) != 1 || service.saved.Conflicts[0].About != "depth" {
 		t.Errorf("save: %d %s, saved %+v", rec.Code, rec.Body, service.saved)
@@ -189,16 +189,16 @@ func TestAnAnsweredQuestionCanBeNamed(t *testing.T) {
 
 func TestRecentAnswersAreBounded(t *testing.T) {
 	r := newRecentAnswers(2, time.Hour)
-	first := r.add(1, "a", answer.Result{}, true)
-	r.add(1, "b", answer.Result{}, true)
-	r.add(1, "c", answer.Result{}, true)
+	first := r.add(tid(1), "a", answer.Result{}, true)
+	r.add(tid(1), "b", answer.Result{}, true)
+	r.add(tid(1), "c", answer.Result{}, true)
 
-	if _, ok := r.get(1, first); ok {
+	if _, ok := r.get(tid(1), first); ok {
 		t.Error("the oldest past the limit is kept")
 	}
 
 	stale := newRecentAnswers(10, -time.Second)
-	if _, ok := stale.get(1, stale.add(1, "a", answer.Result{}, true)); ok {
+	if _, ok := stale.get(tid(1), stale.add(tid(1), "a", answer.Result{}, true)); ok {
 		t.Error("an expired answer is kept")
 	}
 }
@@ -206,26 +206,26 @@ func TestRecentAnswersAreBounded(t *testing.T) {
 func TestAReportIsExtendedByAsking(t *testing.T) {
 	service := &fakeArtifacts{}
 
-	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections/3/rewrite", ""); rec.Code != http.StatusAccepted ||
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/"+tid(7)+"/sections/3/rewrite", ""); rec.Code != http.StatusAccepted ||
 		service.section != 3 || service.owner != testUser.ID {
 		t.Errorf("rewrite: %d %s", rec.Code, rec.Body)
 	}
 
-	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections/x/rewrite", ""); rec.Code != http.StatusNotFound {
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/"+tid(7)+"/sections/x/rewrite", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("a section that is no number: %d", rec.Code)
 	}
 
-	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections/plan", `{"request":"bottlenecks"}`); rec.Code != http.StatusOK ||
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/"+tid(7)+"/sections/plan", `{"request":"bottlenecks"}`); rec.Code != http.StatusOK ||
 		!strings.Contains(rec.Body.String(), `"heading":"bottlenecks"`) {
 		t.Errorf("plan: %d %s", rec.Code, rec.Body)
 	}
 
-	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/7/sections", `{"heading":"Bottlenecks","focus":"1x1 convolutions"}`); rec.Code != http.StatusAccepted ||
+	if rec := serveArtifacts(service, nil, http.MethodPost, "/api/artifacts/"+tid(7)+"/sections", `{"heading":"Bottlenecks","focus":"1x1 convolutions"}`); rec.Code != http.StatusAccepted ||
 		service.planned.Heading != "Bottlenecks" || service.planned.Focus != "1x1 convolutions" {
 		t.Errorf("extend: %d %s, %+v", rec.Code, rec.Body, service.planned)
 	}
 
-	if rec := serveArtifacts(&fakeArtifacts{err: artifacts.ErrBuilding}, nil, http.MethodPost, "/api/artifacts/7/sections/1/rewrite", ""); rec.Code != http.StatusConflict {
+	if rec := serveArtifacts(&fakeArtifacts{err: artifacts.ErrBuilding}, nil, http.MethodPost, "/api/artifacts/"+tid(7)+"/sections/1/rewrite", ""); rec.Code != http.StatusConflict {
 		t.Errorf("while building: %d", rec.Code)
 	}
 }

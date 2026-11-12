@@ -60,6 +60,11 @@ func TestSketchesAreKeptAndFilledIn(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	got, err := store.Sketches(ctx, []string{"https://a.dev/sketched", "https://a.dev/short", "https://a.dev/missing"})
+	if err != nil || len(got) != 1 || copies.Resemblance(got["https://a.dev/sketched"], sketch) != 1 {
+		t.Errorf("sketches %v, %v; only pages with one", got, err)
+	}
+
 	var stored []byte
 	if err := pool.QueryRow(ctx, `SELECT sketch FROM page_reviews WHERE url = 'https://a.dev/sketched'`).Scan(&stored); err != nil ||
 		copies.Resemblance(copies.SketchFrom(stored), sketch) != 1 {

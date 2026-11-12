@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,38 +20,47 @@ import (
 	"go.uber.org/zap"
 )
 
+// idOf is the ID a test calls n: IDs sort as their numbers do, as the
+// database's do in the order they were made.
+func idOf(n int) string { return fmt.Sprintf("id-%03d", n) }
+
+func numOf(id string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(id, "id-"))
+	return n
+}
+
 // memStore keeps research in memory, deduplicating works as the database does.
 type memStore struct {
 	mu        sync.Mutex
-	runs      map[int64]*Run
+	runs      map[string]*Run
 	subtopics []Subtopic
 	works     []*Work
 	links     []Link
-	refs      map[int64][]Reference
+	refs      map[string][]Reference
 	startErr  error
 	// How reading a site's works goes; read works of other sites are in.
 	readAs map[string]string
 }
 
 func newMemStore() *memStore {
-	return &memStore{runs: map[int64]*Run{}, refs: map[int64][]Reference{}}
+	return &memStore{runs: map[string]*Run{}, refs: map[string][]Reference{}}
 }
 
-func (m *memStore) StartRun(_ context.Context, labID int64, request string, budget Budget, focus Focus, model string) (int64, error) {
+func (m *memStore) StartRun(_ context.Context, labID, request string, budget Budget, focus Focus, model string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.startErr != nil {
-		return 0, m.startErr
+		return "", m.startErr
 	}
 
-	id := int64(len(m.runs) + 1)
+	id := idOf(len(m.runs) + 1)
 	m.runs[id] = &Run{ID: id, LabID: labID, Request: request, Budget: budget, Focus: focus, Status: StatusRunning, Model: model, Rounds: []Round{}}
 
 	return id, nil
 }
 
-func (m *memStore) SaveRounds(_ context.Context, id int64, rounds []Round) error {
+func (m *memStore) SaveRounds(_ context.Context, id string, rounds []Round) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -59,7 +69,7 @@ func (m *memStore) SaveRounds(_ context.Context, id int64, rounds []Round) error
 	return nil
 }
 
-func (m *memStore) FinishRun(_ context.Context, id int64, status, stopped, errText string) error {
+func (m *memStore) FinishRun(_ context.Context, id, status, stopped, errText string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -69,14 +79,14 @@ func (m *memStore) FinishRun(_ context.Context, id int64, status, stopped, errTe
 	return nil
 }
 
-func (m *memStore) Run(_ context.Context, id int64) (Run, error) {
+func (m *memStore) Run(_ context.Context, id string) (Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return *m.runs[id], nil
 }
 
-func (m *memStore) LatestRun(_ context.Context, _ int64) (Run, error) {
+func (m *memStore) LatestRun(_ context.Context, _ string) (Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -84,31 +94,60 @@ func (m *memStore) LatestRun(_ context.Context, _ int64) (Run, error) {
 		return Run{}, ErrNotFound
 	}
 
-	return *m.runs[int64(len(m.runs))], nil
+	return *m.runs[idOf(len(m.runs))], nil
 }
 
 func (m *memStore) Interrupt(context.Context) (int64, error) { return 0, nil }
 
-func (m *memStore) Subtopics(context.Context, int64) ([]Subtopic, error) {
+func (m *memStore) Subtopics(context.Context, string) ([]Subtopic, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return slices.Clone(m.subtopics), nil
 }
 
-func (m *memStore) AddSubtopics(_ context.Context, _ int64, subs []Subtopic) ([]Subtopic, error) {
+func (m *memStore) AddSubtopics(_ context.Context, _ string, subs []Subtopic) ([]Subtopic, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, sub := range subs {
-		sub.ID = int64(len(m.subtopics) + 1)
+		sub.ID = idOf(len(m.subtopics) + 1)
 		m.subtopics = append(m.subtopics, sub)
 	}
 
 	return slices.Clone(m.subtopics), nil
 }
 
-func (m *memStore) Find(_ context.Context, _, runID int64, w Work, f Find) (int64, bool, error) {
+func (m *memStore) RenameSubtopic(_ context.Context, _, id, name, focus string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.subtopics {
+		if m.subtopics[i].ID == id {
+			m.subtopics[i].Name, m.subtopics[i].Focus = name, focus
+			return nil
+		}
+	}
+
+	return ErrSubtopicNotFound
+}
+
+func (m *memStore) MergeSubtopics(_ context.Context, _, from, into string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, w := range m.works {
+		if w.SubtopicID == from {
+			w.SubtopicID = into
+		}
+	}
+
+	m.subtopics = slices.DeleteFunc(m.subtopics, func(sub Subtopic) bool { return sub.ID == from })
+
+	return nil
+}
+
+func (m *memStore) Find(_ context.Context, _, runID string, w Work, f Find) (string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -140,14 +179,14 @@ func (m *memStore) Find(_ context.Context, _, runID int64, w Work, f Find) (int6
 		w.Verdict = VerdictPending
 	}
 
-	w.ID = int64(len(m.works) + 1)
+	w.ID = idOf(len(m.works) + 1)
 	w.Finds = []Find{f}
 	m.works = append(m.works, &w)
 
 	return w.ID, true, nil
 }
 
-func (m *memStore) Works(context.Context, int64) ([]Work, error) {
+func (m *memStore) Works(context.Context, string) ([]Work, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -156,7 +195,7 @@ func (m *memStore) Works(context.Context, int64) ([]Work, error) {
 		out[i] = *w
 		out[i].Finds = slices.Clone(w.Finds)
 
-		if w.SourceID != 0 {
+		if w.SourceID != "" {
 			out[i].Read = ReadIn
 			if state, ok := m.readAs[siteOf(w.URL)]; ok {
 				out[i].Read = state
@@ -167,15 +206,15 @@ func (m *memStore) Works(context.Context, int64) ([]Work, error) {
 	return out, nil
 }
 
-func (m *memStore) work(id int64) *Work { return m.works[id-1] }
+func (m *memStore) work(id string) *Work { return m.works[numOf(id)-1] }
 
-func (m *memStore) Judge(_ context.Context, id int64, verdict, reason string, subtopicID int64) error {
+func (m *memStore) Judge(_ context.Context, id, verdict, reason, subtopicID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if w := m.work(id); !w.ByUser {
 		w.Verdict, w.Reason = verdict, reason
-		if subtopicID != 0 {
+		if subtopicID != "" {
 			w.SubtopicID = subtopicID
 		}
 	}
@@ -183,25 +222,25 @@ func (m *memStore) Judge(_ context.Context, id int64, verdict, reason string, su
 	return nil
 }
 
-func (m *memStore) SetVerdict(_ context.Context, _, id int64, verdict string, subtopicID int64) error {
+func (m *memStore) SetVerdict(_ context.Context, _, id, verdict, subtopicID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if id < 1 || int(id) > len(m.works) {
+	if n := numOf(id); n < 1 || n > len(m.works) {
 		return ErrWorkNotFound
 	}
 
 	w := m.work(id)
 	w.Verdict, w.ByUser = verdict, true
 
-	if subtopicID != 0 {
+	if subtopicID != "" {
 		w.SubtopicID = subtopicID
 	}
 
 	return nil
 }
 
-func (m *memStore) SetSource(_ context.Context, id, sourceID int64) error {
+func (m *memStore) SetSource(_ context.Context, id, sourceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -210,7 +249,7 @@ func (m *memStore) SetSource(_ context.Context, id, sourceID int64) error {
 	return nil
 }
 
-func (m *memStore) Expanded(_ context.Context, id int64, references, citing bool) error {
+func (m *memStore) Expanded(_ context.Context, id string, references, citing bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -220,7 +259,7 @@ func (m *memStore) Expanded(_ context.Context, id int64, references, citing bool
 	return nil
 }
 
-func (m *memStore) Link(_ context.Context, _ int64, l Link) error {
+func (m *memStore) Link(_ context.Context, _ string, l Link) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -231,14 +270,14 @@ func (m *memStore) Link(_ context.Context, _ int64, l Link) error {
 	return nil
 }
 
-func (m *memStore) Links(context.Context, int64) ([]Link, error) {
+func (m *memStore) Links(context.Context, string) ([]Link, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return slices.Clone(m.links), nil
 }
 
-func (m *memStore) ReferencesOf(_ context.Context, ids []int64) ([]Reference, error) {
+func (m *memStore) ReferencesOf(_ context.Context, ids []string) ([]Reference, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -273,14 +312,14 @@ type fakeLabs struct {
 	getErr error
 }
 
-func (f *fakeLabs) Get(context.Context, int64, int64) (labs.Detail, error) {
+func (f *fakeLabs) Get(context.Context, string, string) (labs.Detail, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	return f.lab, f.getErr
 }
 
-func (f *fakeLabs) AddResearched(_ context.Context, _, _ int64, r labs.Researched) (labs.Source, error) {
+func (f *fakeLabs) AddResearched(_ context.Context, _, _ string, r labs.Researched) (labs.Source, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -290,7 +329,7 @@ func (f *fakeLabs) AddResearched(_ context.Context, _, _ int64, r labs.Researche
 
 	f.read = append(f.read, r.URL)
 
-	return labs.Source{ID: int64(100 + len(f.read)), URL: r.URL, Kind: labs.KindResearch}, nil
+	return labs.Source{ID: idOf(100 + len(f.read)), URL: r.URL, Kind: labs.KindResearch}, nil
 }
 
 type fakeSearch struct {
@@ -392,7 +431,7 @@ func testConfig() Config {
 	}
 }
 
-func waitDone(t *testing.T, store *memStore, id int64) Run {
+func waitDone(t *testing.T, store *memStore, id string) Run {
 	t.Helper()
 
 	for range 500 {
@@ -413,8 +452,8 @@ const resnetPlan = `{"subtopics": [{"name": "Residual blocks", "focus": "what a 
 
 func TestARunFindsThroughEveryChannelAndReadsWhatItKeeps(t *testing.T) {
 	store := newMemStore()
-	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "ResNets", Topic: "deep residual learning", Engines: []string{"brave"}},
-		Sources: []labs.SourceStatus{{Source: labs.Source{ID: 7, Kind: labs.KindLink, URL: "https://arxiv.org/abs/1512.03385"}}}}}
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "ResNets", Topic: "deep residual learning", Engines: []string{"brave"}},
+		Sources: []labs.SourceStatus{{Source: labs.Source{ID: idOf(7), Kind: labs.KindLink, URL: "https://arxiv.org/abs/1512.03385"}}}}}
 
 	search := &fakeSearch{results: map[string][]websearch.Result{
 		"residual networks": {
@@ -436,7 +475,7 @@ func TestARunFindsThroughEveryChannelAndReadsWhatItKeeps(t *testing.T) {
 	chat := &model{plan: resnetPlan, queries: `{"queries": [{"subtopic": 2, "query": "resnet variants"}]}`}
 	s := NewService(zap.NewNop().Sugar(), store, lab, search, scholar, chat, testConfig())
 
-	run, err := s.Start(context.Background(), 1, 3, Ask{})
+	run, err := s.Start(context.Background(), idOf(1), idOf(3), Ask{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +486,7 @@ func TestARunFindsThroughEveryChannelAndReadsWhatItKeeps(t *testing.T) {
 	}
 
 	seed := store.byURL("https://arxiv.org/abs/1512.03385")
-	if seed == nil || seed.OpenAlexID != "W1" || seed.SourceID != 7 || seed.Verdict != VerdictKeep {
+	if seed == nil || seed.OpenAlexID != "W1" || seed.SourceID != idOf(7) || seed.Verdict != VerdictKeep {
 		t.Fatalf("the seed kept its source and learned its OpenAlex ID: %+v", seed)
 	}
 
@@ -458,12 +497,12 @@ func TestARunFindsThroughEveryChannelAndReadsWhatItKeeps(t *testing.T) {
 		"https://link.example.org/identity":                       ChannelSearch,
 	} {
 		w := store.byURL(u)
-		if w == nil || w.Finds[0].Channel != want || w.Verdict != VerdictKeep || w.SourceID == 0 {
+		if w == nil || w.Finds[0].Channel != want || w.Verdict != VerdictKeep || w.SourceID == "" {
 			t.Errorf("%s: %+v, want found by %s, kept and read", u, w, want)
 		}
 	}
 
-	if w := store.byURL("https://shop.example.com/deals"); w == nil || w.Verdict != VerdictDrop || w.Reason == "" || w.SourceID != 0 {
+	if w := store.byURL("https://shop.example.com/deals"); w == nil || w.Verdict != VerdictDrop || w.Reason == "" || w.SourceID != "" {
 		t.Errorf("junk is dropped with a reason, and kept on the map: %+v", w)
 	}
 
@@ -480,7 +519,7 @@ func TestARunFindsThroughEveryChannelAndReadsWhatItKeeps(t *testing.T) {
 		t.Errorf("a later round searches what the model wrote: %v", search.asked)
 	}
 
-	m, err := s.Map(context.Background(), 1, 3)
+	m, err := s.Map(context.Background(), idOf(1), idOf(3))
 	if err != nil || m.Run == nil || len(m.Subtopics) != 2 || m.Coverage.Kept != 5 || m.Coverage.Dropped != 1 || m.Coverage.Estimate != nil {
 		t.Errorf("map: %+v, %v", m.Coverage, err)
 	}
@@ -488,7 +527,7 @@ func TestARunFindsThroughEveryChannelAndReadsWhatItKeeps(t *testing.T) {
 
 func TestAPreprintAndItsPublishedVersionAreOneWork(t *testing.T) {
 	store := newMemStore()
-	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "ResNets", Engines: []string{"brave"}}}}
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "ResNets", Engines: []string{"brave"}}}}
 
 	paper := openalex.Work{ID: "W1", DOI: "10.1109/cvpr.2016.90", Title: "Deep Residual Learning", PDFURL: "https://arxiv.org/pdf/1512.03385"}
 	search := &fakeSearch{results: map[string][]websearch.Result{"resnet": {{URL: "https://arxiv.org/abs/1512.03385v3", Title: "[1512.03385] Deep Residual Learning"}}}}
@@ -497,10 +536,10 @@ func TestAPreprintAndItsPublishedVersionAreOneWork(t *testing.T) {
 	chat := &model{plan: `{"subtopics": [{"name": "A", "focus": "a", "queries": ["resnet"]}, {"name": "B", "focus": "b", "queries": []}]}`, queries: `{}`}
 	s := NewService(zap.NewNop().Sugar(), store, lab, search, scholar, chat, testConfig())
 
-	run, _ := s.Start(context.Background(), 1, 3, Ask{Found: ptr(10), Read: ptr(0)})
+	run, _ := s.Start(context.Background(), idOf(1), idOf(3), Ask{Found: ptr(10), Read: ptr(0)})
 	waitDone(t, store, run.ID)
 
-	works, _ := store.Works(context.Background(), 3)
+	works, _ := store.Works(context.Background(), idOf(3))
 	if len(works) != 1 || works[0].OpenAlexID != "W1" || len(works[0].Finds) != 1 {
 		t.Errorf("works %+v", works)
 	}
@@ -508,7 +547,7 @@ func TestAPreprintAndItsPublishedVersionAreOneWork(t *testing.T) {
 
 func TestTheBudgetStopsJudgingAndLeavesTheRestPending(t *testing.T) {
 	store := newMemStore()
-	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "Go", Engines: []string{"brave"}}}}
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "Go", Engines: []string{"brave"}}}}
 
 	var results []websearch.Result
 	for i := range 8 {
@@ -518,10 +557,10 @@ func TestTheBudgetStopsJudgingAndLeavesTheRestPending(t *testing.T) {
 	chat := &model{plan: `{"subtopics": [{"name": "A", "focus": "a", "queries": ["go"]}, {"name": "B", "focus": "b"}]}`}
 	s := NewService(zap.NewNop().Sugar(), store, lab, &fakeSearch{results: map[string][]websearch.Result{"go": results}}, nil, chat, testConfig())
 
-	run, _ := s.Start(context.Background(), 1, 3, Ask{Found: ptr(3), Read: ptr(1)})
+	run, _ := s.Start(context.Background(), idOf(1), idOf(3), Ask{Found: ptr(3), Read: ptr(1)})
 	run = waitDone(t, store, run.ID)
 
-	m, _ := s.Map(context.Background(), 1, 3)
+	m, _ := s.Map(context.Background(), idOf(1), idOf(3))
 	if run.Stopped != StopBudget || m.Coverage.Kept != 3 || m.Coverage.Pending != 5 || m.Coverage.Read != 1 {
 		t.Errorf("stopped %q, coverage %+v", run.Stopped, m.Coverage)
 	}
@@ -529,7 +568,7 @@ func TestTheBudgetStopsJudgingAndLeavesTheRestPending(t *testing.T) {
 
 func TestReadingStopsWhenTheLabIsFull(t *testing.T) {
 	store := newMemStore()
-	lab := &fakeLabs{limit: 2, lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "Go", Engines: []string{"brave"}}}}
+	lab := &fakeLabs{limit: 2, lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "Go", Engines: []string{"brave"}}}}
 
 	var results []websearch.Result
 	for i := range 5 {
@@ -539,7 +578,7 @@ func TestReadingStopsWhenTheLabIsFull(t *testing.T) {
 	chat := &model{plan: `{"subtopics": [{"name": "A", "focus": "a", "queries": ["go"]}, {"name": "B", "focus": "b"}]}`, queries: `{}`}
 	s := NewService(zap.NewNop().Sugar(), store, lab, &fakeSearch{results: map[string][]websearch.Result{"go": results}}, nil, chat, testConfig())
 
-	run, _ := s.Start(context.Background(), 1, 3, Ask{})
+	run, _ := s.Start(context.Background(), idOf(1), idOf(3), Ask{})
 	run = waitDone(t, store, run.ID)
 
 	if len(lab.read) != 2 || !strings.Contains(run.Rounds[0].Failed["reading"], "full") {
@@ -553,7 +592,7 @@ func TestASiteThatRefusesIsTriedOnceAndItsReadRefunded(t *testing.T) {
 	store := newMemStore()
 	store.readAs = map[string]string{"medium.com": ReadBlocked}
 
-	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "Zig", Engines: []string{"brave"}}}}
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "Zig", Engines: []string{"brave"}}}}
 
 	var results []websearch.Result
 	for _, u := range []string{"https://a.medium.com/x", "https://b.medium.com/y", "https://medium.com/z",
@@ -564,7 +603,7 @@ func TestASiteThatRefusesIsTriedOnceAndItsReadRefunded(t *testing.T) {
 	chat := &model{plan: `{"subtopics": [{"name": "A", "focus": "a", "queries": ["zig"]}, {"name": "B", "focus": "b"}]}`, queries: `{}`}
 	s := NewService(zap.NewNop().Sugar(), store, lab, &fakeSearch{results: map[string][]websearch.Result{"zig": results}}, nil, chat, testConfig())
 
-	run, _ := s.Start(context.Background(), 1, 3, Ask{Read: ptr(10)})
+	run, _ := s.Start(context.Background(), idOf(1), idOf(3), Ask{Read: ptr(10)})
 	run = waitDone(t, store, run.ID)
 
 	medium := 0
@@ -587,8 +626,8 @@ func TestASiteThatRefusesIsTriedOnceAndItsReadRefunded(t *testing.T) {
 // still tried.
 func TestAGonePageDoesNotCountAgainstItsSite(t *testing.T) {
 	s := sitesOf([]Work{
-		{SourceID: 1, URL: "https://penchef.com/a", Read: ReadGone},
-		{SourceID: 2, URL: "https://medium.com/b", Read: ReadBlocked},
+		{SourceID: idOf(1), URL: "https://penchef.com/a", Read: ReadGone},
+		{SourceID: idOf(2), URL: "https://medium.com/b", Read: ReadBlocked},
 	})
 
 	if s["penchef.com"].unread != 0 || s["medium.com"].unread != 1 || !unread(ReadGone) {
@@ -624,31 +663,31 @@ func TestPapersAreReadFromTheirOpenCopyFirst(t *testing.T) {
 }
 
 func TestStartingNeedsAModelChannelsAndASaneBudget(t *testing.T) {
-	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "Go"}}}
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "Go"}}}
 	cfg := testConfig()
 
-	if _, err := NewService(zap.NewNop().Sugar(), newMemStore(), lab, &fakeSearch{}, nil, nil, cfg).Start(context.Background(), 1, 3, Ask{}); !errors.Is(err, ErrUnavailable) {
+	if _, err := NewService(zap.NewNop().Sugar(), newMemStore(), lab, &fakeSearch{}, nil, nil, cfg).Start(context.Background(), idOf(1), idOf(3), Ask{}); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("without a model: %v", err)
 	}
 
-	if _, err := NewService(zap.NewNop().Sugar(), newMemStore(), lab, &fakeSearch{}, nil, &model{}, cfg).Start(context.Background(), 1, 3, Ask{}); !errors.Is(err, ErrNoChannels) {
+	if _, err := NewService(zap.NewNop().Sugar(), newMemStore(), lab, &fakeSearch{}, nil, &model{}, cfg).Start(context.Background(), idOf(1), idOf(3), Ask{}); !errors.Is(err, ErrNoChannels) {
 		t.Errorf("no engines, no OpenAlex: %v", err)
 	}
 
 	s := NewService(zap.NewNop().Sugar(), newMemStore(), lab, nil, &fakeScholar{}, &model{}, cfg)
-	if _, err := s.Start(context.Background(), 1, 3, Ask{Found: ptr(5000)}); !errors.Is(err, labs.ErrInvalid) {
+	if _, err := s.Start(context.Background(), idOf(1), idOf(3), Ask{Found: ptr(5000)}); !errors.Is(err, labs.ErrInvalid) {
 		t.Errorf("past the budget's cap: %v", err)
 	}
 
 	busy := newMemStore()
 	busy.startErr = ErrRunning
 
-	if _, err := NewService(zap.NewNop().Sugar(), busy, lab, nil, &fakeScholar{}, &model{}, cfg).Start(context.Background(), 1, 3, Ask{}); !errors.Is(err, ErrRunning) {
+	if _, err := NewService(zap.NewNop().Sugar(), busy, lab, nil, &fakeScholar{}, &model{}, cfg).Start(context.Background(), idOf(1), idOf(3), Ask{}); !errors.Is(err, ErrRunning) {
 		t.Errorf("twice: %v", err)
 	}
 
 	lab.getErr = labs.ErrNotFound
-	if _, err := s.Map(context.Background(), 2, 3); !errors.Is(err, labs.ErrNotFound) {
+	if _, err := s.Map(context.Background(), idOf(2), idOf(3)); !errors.Is(err, labs.ErrNotFound) {
 		t.Errorf("another user's lab: %v", err)
 	}
 }
@@ -674,10 +713,10 @@ func TestJudgingTakesOnlyWhatItWasShown(t *testing.T) {
 	s := NewService(zap.NewNop().Sugar(), nil, nil, nil, nil,
 		reply(`{"works": [{"n": 1, "verdict": "KEEP", "subtopic": 2}, {"n": 1, "verdict": "drop"}, {"n": 9, "verdict": "keep"}, {"n": 2, "verdict": "great"}]}`), testConfig())
 
-	subs := []Subtopic{{ID: 10, Name: "A"}, {ID: 20, Name: "B"}}
+	subs := []Subtopic{{ID: idOf(10), Name: "A"}, {ID: idOf(20), Name: "B"}}
 
-	got, err := s.judge(context.Background(), labs.Detail{}, subs, []Work{{ID: 5, Title: "x"}, {ID: 6, Title: "y"}})
-	if err != nil || len(got) != 1 || got[0] != (verdict{work: 5, verdict: VerdictKeep, subtopicID: 20}) {
+	got, err := s.judge(context.Background(), labs.Detail{}, subs, []Work{{ID: idOf(5), Title: "x"}, {ID: idOf(6), Title: "y"}})
+	if err != nil || len(got) != 1 || got[0] != (verdict{work: idOf(5), verdict: VerdictKeep, subtopicID: idOf(20)}) {
 		t.Errorf("verdicts %+v, %v", got, err)
 	}
 }
@@ -687,7 +726,7 @@ func TestCoverageIsEstimatedFromWhatSearchAndCitationsBothFound(t *testing.T) {
 
 	add := func(n int, finds ...string) {
 		for range n {
-			w := Work{ID: int64(len(works) + 1), Verdict: VerdictKeep, SubtopicID: 1}
+			w := Work{ID: idOf(len(works) + 1), Verdict: VerdictKeep, SubtopicID: idOf(1)}
 			for _, c := range finds {
 				w.Finds = append(w.Finds, Find{Channel: c})
 			}
@@ -700,7 +739,7 @@ func TestCoverageIsEstimatedFromWhatSearchAndCitationsBothFound(t *testing.T) {
 	add(4, ChannelReference)
 	add(4, ChannelSearch, ChannelCiting)
 
-	c := coverageOf([]Subtopic{{ID: 1}}, works)
+	c := coverageOf([]Subtopic{{ID: idOf(1)}}, works)
 
 	// Chapman: (10+1)(8+1)/(4+1) - 1 = 18.8.
 	e := c.Estimate
@@ -747,15 +786,15 @@ func TestDOIsAreReadFromLinks(t *testing.T) {
 // in each, both already followed.
 func steeredLab() (*memStore, *fakeLabs) {
 	store := newMemStore()
-	store.subtopics = []Subtopic{{ID: 1, Name: "Blocks", Queries: []string{"residual blocks", "resnet"}}, {ID: 2, Name: "Training"}}
+	store.subtopics = []Subtopic{{ID: idOf(1), Name: "Blocks", Queries: []string{"residual blocks", "resnet"}}, {ID: idOf(2), Name: "Training"}}
 	store.works = []*Work{
-		{ID: 1, URL: "https://arxiv.org/abs/1512.03385", Kind: KindPaper, Title: "ResNet", OpenAlexID: "W1", SubtopicID: 1, Verdict: VerdictKeep,
+		{ID: idOf(1), URL: "https://arxiv.org/abs/1512.03385", Kind: KindPaper, Title: "ResNet", OpenAlexID: "W1", SubtopicID: idOf(1), Verdict: VerdictKeep,
 			ReferencesDone: true, CitingDone: true, Finds: []Find{{Channel: ChannelSearch, Query: "resnet"}}},
-		{ID: 2, URL: "https://arxiv.org/abs/1603.09382", Kind: KindPaper, Title: "Stochastic Depth", OpenAlexID: "W9", SubtopicID: 2, Verdict: VerdictKeep,
+		{ID: idOf(2), URL: "https://arxiv.org/abs/1603.09382", Kind: KindPaper, Title: "Stochastic Depth", OpenAlexID: "W9", SubtopicID: idOf(2), Verdict: VerdictKeep,
 			Finds: []Find{{Channel: ChannelSearch, Query: "resnet"}}},
 	}
 
-	return store, &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "ResNets", Engines: []string{"brave"}}}}
+	return store, &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "ResNets", Engines: []string{"brave"}}}}
 }
 
 func TestFollowingOneWorkFollowsItAloneEvenIfDone(t *testing.T) {
@@ -763,8 +802,8 @@ func TestFollowingOneWorkFollowsItAloneEvenIfDone(t *testing.T) {
 	// Found through the work by an earlier run and left unjudged, and a
 	// backlog work found otherwise.
 	store.works = append(store.works,
-		&Work{ID: 3, URL: "https://openmp.example.com/spec", Title: "OpenMP spec", Verdict: VerdictPending, Finds: []Find{{Channel: ChannelReference, Via: 1, Run: 7}}},
-		&Work{ID: 4, URL: "https://backlog.example.com/x", Title: "Backlog", Verdict: VerdictPending, Finds: []Find{{Channel: ChannelSearch, Query: "zig", Run: 7}}})
+		&Work{ID: idOf(3), URL: "https://openmp.example.com/spec", Title: "OpenMP spec", Verdict: VerdictPending, Finds: []Find{{Channel: ChannelReference, Via: idOf(1), Run: idOf(7)}}},
+		&Work{ID: idOf(4), URL: "https://backlog.example.com/x", Title: "Backlog", Verdict: VerdictPending, Finds: []Find{{Channel: ChannelSearch, Query: "zig", Run: idOf(7)}}})
 	scholar := &fakeScholar{
 		catalog: map[string]openalex.Work{"W1": {ID: "W1", References: []string{"W2"}}, "W2": {ID: "W2", Title: "Highway Networks", LandingURL: "https://example.org/highway"}},
 		citing: map[string][]openalex.Work{
@@ -775,13 +814,13 @@ func TestFollowingOneWorkFollowsItAloneEvenIfDone(t *testing.T) {
 
 	s := NewService(zap.NewNop().Sugar(), store, lab, nil, scholar, &model{}, testConfig())
 
-	run, err := s.Start(context.Background(), 1, 3, Ask{Focus: Focus{Work: 1}})
+	run, err := s.Start(context.Background(), idOf(1), idOf(3), Ask{Focus: Focus{Work: idOf(1)}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	run = waitDone(t, store, run.ID)
-	if run.Stopped != StopFollowed || len(run.Rounds) != 1 || run.Focus.Work != 1 || len(run.Rounds[0].Queries) != 0 {
+	if run.Stopped != StopFollowed || len(run.Rounds) != 1 || run.Focus.Work != idOf(1) || len(run.Rounds[0].Queries) != 0 {
 		t.Errorf("run %+v", run)
 	}
 
@@ -794,8 +833,8 @@ func TestFollowingOneWorkFollowsItAloneEvenIfDone(t *testing.T) {
 		t.Errorf("read %v: only what was found through the work, earlier finds of it included", lab.read)
 	}
 
-	if store.work(4).Verdict != VerdictPending || store.work(3).Verdict != VerdictKeep {
-		t.Errorf("the backlog was judged (%s) or the work's earlier find was not (%s)", store.work(4).Verdict, store.work(3).Verdict)
+	if store.work(idOf(4)).Verdict != VerdictPending || store.work(idOf(3)).Verdict != VerdictKeep {
+		t.Errorf("the backlog was judged (%s) or the work's earlier find was not (%s)", store.work(idOf(4)).Verdict, store.work(idOf(3)).Verdict)
 	}
 }
 
@@ -809,7 +848,7 @@ func TestResearchingOneSubtopicStaysOnIt(t *testing.T) {
 	chat := &model{queries: `{"queries": [{"subtopic": 1, "query": "bottleneck blocks"}]}`}
 	s := NewService(zap.NewNop().Sugar(), store, lab, search, nil, chat, testConfig())
 
-	run, err := s.Start(context.Background(), 1, 3, Ask{Focus: Focus{Subtopic: 1}})
+	run, err := s.Start(context.Background(), idOf(1), idOf(3), Ask{Focus: Focus{Subtopic: idOf(1)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -830,49 +869,49 @@ func TestTheUsersVerdictStandsAndAWorkCanBeReadByHand(t *testing.T) {
 	s := NewService(zap.NewNop().Sugar(), store, lab, nil, &fakeScholar{}, &model{}, testConfig())
 	ctx := context.Background()
 
-	w, err := s.SetVerdict(ctx, 1, 3, 2, VerdictDrop, 1)
-	if err != nil || w.Verdict != VerdictDrop || !w.ByUser || w.SubtopicID != 1 {
+	w, err := s.SetVerdict(ctx, idOf(1), idOf(3), idOf(2), VerdictDrop, idOf(1))
+	if err != nil || w.Verdict != VerdictDrop || !w.ByUser || w.SubtopicID != idOf(1) {
 		t.Fatalf("set: %+v, %v", w, err)
 	}
 
-	if err := store.Judge(ctx, 2, VerdictKeep, "the model's", 2); err != nil || store.work(2).Verdict != VerdictDrop {
+	if err := store.Judge(ctx, idOf(2), VerdictKeep, "the model's", idOf(2)); err != nil || store.work(idOf(2)).Verdict != VerdictDrop {
 		t.Error("the model overruled the user")
 	}
 
 	for _, c := range []struct {
 		verdict  string
-		work     int64
-		subtopic int64
+		work     string
+		subtopic string
 		want     error
-	}{{"great", 2, 0, labs.ErrInvalid}, {VerdictKeep, 99, 0, ErrWorkNotFound}, {VerdictKeep, 2, 77, ErrSubtopicNotFound}} {
-		if _, err := s.SetVerdict(ctx, 1, 3, c.work, c.verdict, c.subtopic); !errors.Is(err, c.want) {
+	}{{"great", idOf(2), "", labs.ErrInvalid}, {VerdictKeep, idOf(99), "", ErrWorkNotFound}, {VerdictKeep, idOf(2), idOf(77), ErrSubtopicNotFound}} {
+		if _, err := s.SetVerdict(ctx, idOf(1), idOf(3), c.work, c.verdict, c.subtopic); !errors.Is(err, c.want) {
 			t.Errorf("%+v: %v", c, err)
 		}
 	}
 
-	w, err = s.ReadWork(ctx, 1, 3, 2)
-	if err != nil || w.SourceID == 0 || w.Verdict != VerdictKeep || !slices.Equal(lab.read, []string{"https://arxiv.org/abs/1603.09382"}) {
+	w, err = s.ReadWork(ctx, idOf(1), idOf(3), idOf(2))
+	if err != nil || w.SourceID == "" || w.Verdict != VerdictKeep || !slices.Equal(lab.read, []string{"https://arxiv.org/abs/1603.09382"}) {
 		t.Errorf("read by hand: %+v, %v, read %v", w, err, lab.read)
 	}
 
-	if _, err := s.ReadWork(ctx, 1, 3, 2); err != nil || len(lab.read) != 1 {
+	if _, err := s.ReadWork(ctx, idOf(1), idOf(3), idOf(2)); err != nil || len(lab.read) != 1 {
 		t.Errorf("read twice: %v, read %v", err, lab.read)
 	}
 }
 
 func TestAFocusMustMakeSense(t *testing.T) {
 	store, lab := steeredLab()
-	store.works = append(store.works, &Work{ID: 3, URL: "https://example.com/blog", Kind: KindWeb, Verdict: VerdictKeep})
+	store.works = append(store.works, &Work{ID: idOf(3), URL: "https://example.com/blog", Kind: KindWeb, Verdict: VerdictKeep})
 
 	s := NewService(zap.NewNop().Sugar(), store, lab, nil, &fakeScholar{}, &model{}, testConfig())
 
 	for focus, want := range map[Focus]error{
-		{Work: 1, Subtopic: 1}: labs.ErrInvalid,
-		{Work: 42}:             ErrWorkNotFound,
-		{Work: 3}:              ErrNothingToFollow,
-		{Subtopic: 9}:          ErrSubtopicNotFound,
+		{Work: idOf(1), Subtopic: idOf(1)}: labs.ErrInvalid,
+		{Work: idOf(42)}:                   ErrWorkNotFound,
+		{Work: idOf(3)}:                    ErrNothingToFollow,
+		{Subtopic: idOf(9)}:                ErrSubtopicNotFound,
 	} {
-		if _, err := s.Start(context.Background(), 1, 3, Ask{Focus: focus}); !errors.Is(err, want) {
+		if _, err := s.Start(context.Background(), idOf(1), idOf(3), Ask{Focus: focus}); !errors.Is(err, want) {
 			t.Errorf("%+v: %v, want %v", focus, err, want)
 		}
 	}
@@ -884,7 +923,7 @@ func TestACopyGivesItsReadBack(t *testing.T) {
 	store := newMemStore()
 	store.readAs = map[string]string{"mirror.org": ReadCopy}
 
-	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: 3, Name: "Zig", Engines: []string{"brave"}}}}
+	lab := &fakeLabs{lab: labs.Detail{Lab: labs.Lab{ID: idOf(3), Name: "Zig", Engines: []string{"brave"}}}}
 
 	var results []websearch.Result
 	for _, u := range []string{"https://mirror.org/x", "https://go.dev/doc/1", "https://go.dev/doc/2"} {
@@ -894,14 +933,14 @@ func TestACopyGivesItsReadBack(t *testing.T) {
 	chat := &model{plan: `{"subtopics": [{"name": "A", "focus": "a", "queries": ["zig"]}, {"name": "B", "focus": "b"}]}`, queries: `{}`}
 	s := NewService(zap.NewNop().Sugar(), store, lab, &fakeSearch{results: map[string][]websearch.Result{"zig": results}}, nil, chat, testConfig())
 
-	run, _ := s.Start(context.Background(), 1, 3, Ask{Read: ptr(2)})
+	run, _ := s.Start(context.Background(), idOf(1), idOf(3), Ask{Read: ptr(2)})
 	run = waitDone(t, store, run.ID)
 
 	if run.Rounds[0].Copies != 1 || len(lab.read) != 3 {
 		t.Errorf("round 1 %+v, read %v: the copy's read spent again on a work the lab lacks", run.Rounds[0], lab.read)
 	}
 
-	if s := sitesOf([]Work{{SourceID: 1, URL: "https://mirror.org/x", Read: ReadCopy}}); s["mirror.org"].ok != 1 {
+	if s := sitesOf([]Work{{SourceID: idOf(1), URL: "https://mirror.org/x", Read: ReadCopy}}); s["mirror.org"].ok != 1 {
 		t.Errorf("sites %+v: the site gave its page", s)
 	}
 }
@@ -916,32 +955,68 @@ func TestAWorkThatBringsOnlyTextTheLabHadIsACopy(t *testing.T) {
 	other := copies.SketchOf(copies.SetOf(strings.ReplaceAll(text.String(), "w", "v")))
 
 	works := []Work{
-		{ID: 1, SourceID: 10, Read: ReadIn}, // the user's source's text, read again by a work
-		{ID: 2, SourceID: 11, Read: ReadIn}, // the arXiv page
-		{ID: 3, SourceID: 12, Read: ReadIn}, // its mirror, word for word
-		{ID: 4, SourceID: 13, Read: ReadIn}, // one page new, one copied
-		{ID: 5, SourceID: 14, Read: ReadIn}, // a page the user's source crawled already
-		{ID: 6, SourceID: 15, Read: ReadSetAside},
+		{ID: idOf(1), SourceID: idOf(10), Read: ReadIn}, // the user's source's text, read again by a work
+		{ID: idOf(2), SourceID: idOf(11), Read: ReadIn}, // the arXiv page
+		{ID: idOf(3), SourceID: idOf(12), Read: ReadIn}, // its mirror, word for word
+		{ID: idOf(4), SourceID: idOf(13), Read: ReadIn}, // one page new, one copied
+		{ID: idOf(5), SourceID: idOf(14), Read: ReadIn}, // a page the user's source crawled already
+		{ID: idOf(6), SourceID: idOf(15), Read: ReadSetAside},
 	}
 
 	pages := []LabPage{
-		{SourceID: 1, URL: "https://docs.dev/a", Hash: "a", Sketch: sketch},
-		{SourceID: 10, URL: "https://blog.dev/a-again", Hash: "a2", Sketch: sketch},
-		{SourceID: 11, URL: "https://arxiv.org/abs/1", Hash: "p", Sketch: other},
-		{SourceID: 12, URL: "https://mirror.org/1", Hash: "p"},
-		{SourceID: 13, URL: "https://new.dev/x", Hash: "x"},
-		{SourceID: 13, URL: "https://new.dev/copy", Hash: "p"},
-		{SourceID: 14, URL: "https://docs.dev/a", Hash: "a", Sketch: sketch},
-		{SourceID: 15, URL: "https://spam.dev/a", Hash: "a"},
+		{SourceID: idOf(1), URL: "https://docs.dev/a", Hash: "a", Sketch: sketch},
+		{SourceID: idOf(10), URL: "https://blog.dev/a-again", Hash: "a2", Sketch: sketch},
+		{SourceID: idOf(11), URL: "https://arxiv.org/abs/1", Hash: "p", Sketch: other},
+		{SourceID: idOf(12), URL: "https://mirror.org/1", Hash: "p"},
+		{SourceID: idOf(13), URL: "https://new.dev/x", Hash: "x"},
+		{SourceID: idOf(13), URL: "https://new.dev/copy", Hash: "p"},
+		{SourceID: idOf(14), URL: "https://docs.dev/a", Hash: "a", Sketch: sketch},
+		{SourceID: idOf(15), URL: "https://spam.dev/a", Hash: "a"},
 	}
 
 	markCopies(works, pages)
 
-	want := map[int64]string{1: "https://docs.dev/a", 3: "https://arxiv.org/abs/1", 5: "https://docs.dev/a"}
+	want := map[string]string{idOf(1): "https://docs.dev/a", idOf(3): "https://arxiv.org/abs/1", idOf(5): "https://docs.dev/a"}
 
 	for _, w := range works {
 		if of, copied := want[w.ID]; copied != (w.Read == ReadCopy) || w.CopyOf != of {
-			t.Errorf("work %d: %s, copy of %q", w.ID, w.Read, w.CopyOf)
+			t.Errorf("work %s: %s, copy of %q", w.ID, w.Read, w.CopyOf)
 		}
+	}
+}
+
+func TestTheUserRenamesAndMergesSubtopics(t *testing.T) {
+	store, lab := steeredLab()
+	s := NewService(zap.NewNop().Sugar(), store, lab, nil, &fakeScholar{}, &model{}, testConfig())
+	ctx := context.Background()
+
+	sub, err := s.RenameSubtopic(ctx, idOf(1), idOf(3), idOf(1), "  Residual blocks ", "what a block computes")
+	if err != nil || sub.Name != "Residual blocks" || store.subtopics[0].Focus != "what a block computes" {
+		t.Fatalf("%+v, %v; %+v", sub, err, store.subtopics)
+	}
+
+	for _, name := range []string{"", "two\nlines", strings.Repeat("x", 81)} {
+		if _, err := s.RenameSubtopic(ctx, idOf(1), idOf(3), idOf(1), name, ""); !errors.Is(err, labs.ErrInvalid) {
+			t.Errorf("name %q: %v", name, err)
+		}
+	}
+
+	if err := s.MergeSubtopics(ctx, idOf(1), idOf(3), idOf(2), idOf(2)); !errors.Is(err, labs.ErrInvalid) {
+		t.Errorf("into itself: %v", err)
+	}
+
+	store.runs[idOf(1)] = &Run{ID: idOf(1), Status: StatusRunning}
+	if err := s.MergeSubtopics(ctx, idOf(1), idOf(3), idOf(2), idOf(1)); !errors.Is(err, ErrRunning) {
+		t.Errorf("while researching: %v", err)
+	}
+
+	store.runs[idOf(1)].Status = StatusDone
+	if err := s.MergeSubtopics(ctx, idOf(1), idOf(3), idOf(2), idOf(1)); err != nil || len(store.subtopics) != 1 || store.work(idOf(2)).SubtopicID != idOf(1) {
+		t.Errorf("merged: %v; %+v", err, store.subtopics)
+	}
+
+	lab.getErr = labs.ErrNotFound
+	if _, err := s.RenameSubtopic(ctx, idOf(9), idOf(3), idOf(1), "Mine", ""); !errors.Is(err, labs.ErrNotFound) {
+		t.Errorf("another user's lab: %v", err)
 	}
 }

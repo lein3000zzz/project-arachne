@@ -122,7 +122,7 @@ func TestTheModelsPicksAreReadIntoTheIndex(t *testing.T) {
 		updates [][]Reading
 	)
 
-	got, err := newService(s, r, p, `{"read": [1, 2, 4, 9, 2]}`, time.Minute).Look(context.Background(), 1, "how do zig and rust compare?", Events{
+	got, err := newService(s, r, p, `{"read": [1, 2, 4, 9, 2]}`, time.Minute).Look(context.Background(), "user-1", "how do zig and rust compare?", Events{
 		Searched: func(_ string, f []Found, failed map[string]string) error {
 			found = f
 			return nil
@@ -174,7 +174,7 @@ func TestAPickThatIsNoUseReadsTheFirstResults(t *testing.T) {
 
 	var found []Found
 
-	got, err := newService(s, r, &pages{}, `{"read": []}`, time.Minute).Look(context.Background(), 1, "zig", Events{
+	got, err := newService(s, r, &pages{}, `{"read": []}`, time.Minute).Look(context.Background(), "user-1", "zig", Events{
 		Searched: func(_ string, f []Found, _ map[string]string) error {
 			found = f
 			return nil
@@ -196,7 +196,7 @@ func TestOutOfTimeReadsWhatIsThere(t *testing.T) {
 
 	started := time.Now()
 
-	got, err := newService(s, r, &pages{}, `{"read": [1]}`, 50*time.Millisecond).Look(context.Background(), 1, "zig", Events{})
+	got, err := newService(s, r, &pages{}, `{"read": [1]}`, 50*time.Millisecond).Look(context.Background(), "user-1", "zig", Events{})
 	if err != nil || len(got) != 1 || time.Since(started) > time.Second {
 		t.Errorf("pages %v, %v after %s", got, err, time.Since(started))
 	}
@@ -205,15 +205,15 @@ func TestOutOfTimeReadsWhatIsThere(t *testing.T) {
 func TestWhatCannotBeLookedUp(t *testing.T) {
 	r := &fakeRuns{steps: []runs.Status{runs.StatusFinished}, seen: map[string]int{}}
 
-	if _, err := newService(&search{engines: []string{"yandex"}}, r, &pages{}, "", time.Minute).Look(context.Background(), 1, "q", Events{}); !errors.Is(err, ErrNoEngines) {
+	if _, err := newService(&search{engines: []string{"yandex"}}, r, &pages{}, "", time.Minute).Look(context.Background(), "user-1", "q", Events{}); !errors.Is(err, ErrNoEngines) {
 		t.Errorf("no engine of ours: %v", err)
 	}
 
-	if _, err := newService(&search{engines: []string{"bing"}}, r, &pages{}, "", time.Minute).Look(context.Background(), 1, "q", Events{}); !errors.Is(err, ErrNothingFound) {
+	if _, err := newService(&search{engines: []string{"bing"}}, r, &pages{}, "", time.Minute).Look(context.Background(), "user-1", "q", Events{}); !errors.Is(err, ErrNothingFound) {
 		t.Errorf("no results: %v", err)
 	}
 
-	if _, err := New(nil, r, &pages{}, nil, Config{}).Look(context.Background(), 1, "q", Events{}); !errors.Is(err, ErrUnavailable) {
+	if _, err := New(nil, r, &pages{}, nil, Config{}).Look(context.Background(), "user-1", "q", Events{}); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("no search engine: %v", err)
 	}
 
@@ -221,17 +221,17 @@ func TestWhatCannotBeLookedUp(t *testing.T) {
 
 	done := make(chan error)
 	go func() {
-		_, err := s.Look(context.Background(), 7, "q", Events{})
+		_, err := s.Look(context.Background(), "user-7", "q", Events{})
 		done <- err
 	}()
 
 	time.Sleep(20 * time.Millisecond)
 
-	if _, err := s.Look(context.Background(), 7, "q", Events{}); !errors.Is(err, ErrBusy) {
+	if _, err := s.Look(context.Background(), "user-7", "q", Events{}); !errors.Is(err, ErrBusy) {
 		t.Errorf("a second look-up of one user at once: %v", err)
 	}
 
-	if _, err := s.Look(context.Background(), 8, "q", Events{}); err != nil {
+	if _, err := s.Look(context.Background(), "user-8", "q", Events{}); err != nil {
 		t.Errorf("another user's: %v", err)
 	}
 

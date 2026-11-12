@@ -2,7 +2,7 @@
 -- waits in memory dies with the crawler; a page leaves this table only once
 -- indexed or turned down on review.
 CREATE TABLE index_queue (
-    id            bigserial   PRIMARY KEY,
+    id            uuid        PRIMARY KEY DEFAULT uuidv7(),
     url           text        NOT NULL,
     run_id        text        NOT NULL DEFAULT '',
     title         text        NOT NULL DEFAULT '',

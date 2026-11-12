@@ -45,10 +45,10 @@ func TestUploadsReachTheLabAsFiles(t *testing.T) {
 	handler := newTestHandler(Services{Labs: service}, testConfig())
 
 	body, kind := multipartBody(t, map[string][]byte{"C:\\papers\\resnet.pdf": []byte("%PDF-1.5"), "notes.md": []byte("# notes")})
-	req := signedIn(httptest.NewRequest(http.MethodPost, "/api/labs/4/uploads", body))
+	req := signedIn(httptest.NewRequest(http.MethodPost, "/api/labs/"+tid(4)+"/uploads", body))
 	req.Header.Set("Content-Type", kind)
 
-	if rec := do(handler, req); rec.Code != http.StatusOK || service.owner != testUser.ID || service.labIDs[0] != 4 || len(service.files) != 2 {
+	if rec := do(handler, req); rec.Code != http.StatusOK || service.owner != testUser.ID || service.labIDs[0] != tid(4) || len(service.files) != 2 {
 		t.Fatalf("upload: %d %s, files %+v", rec.Code, rec.Body, service.files)
 	}
 
@@ -63,21 +63,21 @@ func TestUploadsReachTheLabAsFiles(t *testing.T) {
 	}
 
 	big, kind := multipartBody(t, map[string][]byte{"huge.pdf": bytes.Repeat([]byte("x"), uploads.MaxBytes+1)})
-	req = signedIn(httptest.NewRequest(http.MethodPost, "/api/labs/4/uploads", big))
+	req = signedIn(httptest.NewRequest(http.MethodPost, "/api/labs/"+tid(4)+"/uploads", big))
 	req.Header.Set("Content-Type", kind)
 
 	if rec := do(handler, req); rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), "huge.pdf") {
 		t.Errorf("over the limit: %d %s", rec.Code, rec.Body)
 	}
 
-	if rec := serveLabs(service, http.MethodPost, "/api/labs/4/uploads", `{"files": []}`); rec.Code != http.StatusBadRequest {
+	if rec := serveLabs(service, http.MethodPost, "/api/labs/"+tid(4)+"/uploads", `{"files": []}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("JSON instead of files: %d", rec.Code)
 	}
 }
 
 type fakeUploads struct{ files map[string]uploads.File }
 
-func (f fakeUploads) Owned(_ context.Context, owner int64, id string) (uploads.File, error) {
+func (f fakeUploads) Owned(_ context.Context, owner, id string) (uploads.File, error) {
 	file, ok := f.files[id]
 	if !ok || owner != testUser.ID {
 		return uploads.File{}, uploads.ErrNotFound

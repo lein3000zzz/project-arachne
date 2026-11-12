@@ -14,7 +14,7 @@ func TestEndpointsAreKeptPerUser(t *testing.T) {
 	ctx := context.Background()
 	store := NewPostgresStore(pool)
 
-	var lein int64
+	var lein string
 	if err := pool.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('lein', 'x') RETURNING id`).Scan(&lein); err != nil {
 		t.Fatal(err)
 	}

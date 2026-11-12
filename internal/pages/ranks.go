@@ -22,7 +22,7 @@ func NewGraphStore(pool *pgxpool.Pool) *GraphStore {
 
 // LinkGraph numbers pages and hosts densely from 0, in the order the ranker wants.
 type LinkGraph struct {
-	PageIDs []int64
+	PageIDs []string
 	Hosts   []string
 	HostOf  []int32
 	Links   []rank.Edge
@@ -48,19 +48,19 @@ func (s *GraphStore) LoadLinkGraph(ctx context.Context) (*LinkGraph, error) {
 	return graph, nil
 }
 
-func (g *LinkGraph) loadPages(ctx context.Context, tx pgx.Tx) (map[int64]int32, error) {
+func (g *LinkGraph) loadPages(ctx context.Context, tx pgx.Tx) (map[string]int32, error) {
 	rows, err := tx.Query(ctx, `SELECT id, host FROM pages ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	index := make(map[int64]int32)
+	index := make(map[string]int32)
 	hostIndex := make(map[string]int32)
 
 	for rows.Next() {
 		var (
-			id   int64
+			id   string
 			host string
 		)
 
@@ -83,7 +83,7 @@ func (g *LinkGraph) loadPages(ctx context.Context, tx pgx.Tx) (map[int64]int32, 
 	return index, rows.Err()
 }
 
-func (g *LinkGraph) loadLinks(ctx context.Context, tx pgx.Tx, index map[int64]int32) error {
+func (g *LinkGraph) loadLinks(ctx context.Context, tx pgx.Tx, index map[string]int32) error {
 	rows, err := tx.Query(ctx, `SELECT src, dst FROM links WHERE kind = $1`, kindHyperlink)
 	if err != nil {
 		return err
@@ -91,7 +91,7 @@ func (g *LinkGraph) loadLinks(ctx context.Context, tx pgx.Tx, index map[int64]in
 	defer rows.Close()
 
 	for rows.Next() {
-		var src, dst int64
+		var src, dst string
 		if err := rows.Scan(&src, &dst); err != nil {
 			return err
 		}
@@ -111,9 +111,9 @@ type RankRun struct {
 // SaveRanks replaces all scores in one transaction: readers see the previous run
 // or this one, never a mix. A page merged away since the graph was loaded is
 // skipped rather than failing the run.
-func (s *GraphStore) SaveRanks(ctx context.Context, run RankRun, pageIDs []int64, pageScores []float64, hosts []string, hostScores []float64) error {
+func (s *GraphStore) SaveRanks(ctx context.Context, run RankRun, pageIDs []string, pageScores []float64, hosts []string, hostScores []float64) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `CREATE TEMP TABLE new_page_ranks (page_id bigint, score double precision) ON COMMIT DROP`); err != nil {
+		if _, err := tx.Exec(ctx, `CREATE TEMP TABLE new_page_ranks (page_id uuid, score double precision) ON COMMIT DROP`); err != nil {
 			return err
 		}
 
@@ -229,8 +229,8 @@ func (s *GraphStore) ResolveTwin(ctx context.Context, placeholder, identity stri
 		}
 
 		var (
-			oldID    *int64
-			targetID int64
+			oldID    *string
+			targetID string
 		)
 
 		// The placeholder may have been crawled meanwhile, and then the crawler

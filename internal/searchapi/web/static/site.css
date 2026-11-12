@@ -79,13 +79,23 @@ p { margin: 0 0 1rem; }
 
 .shell { max-width: 78rem; margin: 0 auto; padding: 0 clamp(1rem, 4vw, 3rem); }
 
-.site { display: flex; align-items: center; gap: 0.6rem 1.2rem; flex-wrap: wrap; padding: 1rem 0; border-bottom: 1px solid var(--line); }
+/* One header everywhere: where to go on the left, the account on the right,
+   both as plain words - the page's own buttons are the only outlines. */
+.site { display: flex; align-items: center; gap: 0.6rem 1.6rem; flex-wrap: wrap; padding: 1rem 0; border-bottom: 1px solid var(--line); }
 .brand { font-weight: 650; color: var(--fg); text-decoration: none; font-size: 0.9rem; }
 .nav { display: flex; gap: 1.3rem; flex-wrap: wrap; font-size: 0.72rem; margin-right: auto; }
-.nav a { color: var(--muted); text-decoration: none; }
-.nav a:hover, .nav a[aria-current="true"] { color: var(--fg); }
-.site > .brand:has(+ .who), .site > .brand:has(+ .theme) { margin-right: auto; }
-.brand, .nav a, .action, .theme, .seg, .chip, .field label, .control-label, .row-when, .table th {
+.nav a { color: var(--muted); text-decoration: none; padding: 0.2rem 0; border-bottom: 1px solid transparent; }
+.nav a:hover { color: var(--fg); }
+.nav a[aria-current] { color: var(--fg); border-bottom-color: var(--fg); }
+.site > .brand:has(+ .account) { margin-right: auto; }
+.account { display: flex; gap: 0.4rem 1.2rem; flex-wrap: wrap; align-items: center; font-size: 0.68rem; }
+.account a, .link {
+  font: inherit; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none;
+}
+.account a:hover, .link:hover, .account a[aria-current] { color: var(--fg); }
+.account .who { color: var(--muted); }
+.account .who:empty { display: none; }
+.brand, .nav a, .account, .action, .seg, .chip, .field label, .control-label, .row-when, .table th {
   letter-spacing: 0.08em; text-transform: uppercase;
 }
 
@@ -95,13 +105,11 @@ section:last-of-type { border-bottom: 0; }
 .hero { padding-top: clamp(1.8rem, 4vw, 3rem); }
 
 /* Thin outlines only: no fills, no shadows, no radius but circles. */
-.action, .theme {
-  font: inherit; font-size: 0.72rem; color: var(--fg); background: transparent;
+.action {
+  font: inherit; font-size: 0.72rem; color: var(--fg); background: transparent; padding: 0.4rem 1.1rem;
   border: 1px solid var(--fg); border-radius: 999px; cursor: pointer; text-decoration: none;
 }
-.action { padding: 0.4rem 1.1rem; }
-.theme { padding: 0.15rem 0.7rem; }
-.action:hover, .theme:hover { background: var(--accent-soft); }
+.action:hover { background: var(--accent-soft); }
 .action.primary { background: var(--fg); color: var(--bg); }
 .action.primary:hover { background: var(--fg); color: var(--bg); opacity: 0.82; }
 .action:disabled { opacity: 0.5; cursor: default; }
@@ -216,7 +224,6 @@ section:last-of-type { border-bottom: 0; }
 .contact { display: flex; gap: 1.1rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
 .colophon { font-size: 0.8rem; color: var(--muted); margin: 0; font-family: var(--mono); }
 
-.who { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 
 .login { display: grid; gap: 1.4rem; max-width: 24rem; margin: 2.2rem 0 1rem; }
 .login .action { justify-self: start; }
@@ -247,6 +254,7 @@ section:last-of-type { border-bottom: 0; }
   border: 1px solid var(--line); border-radius: 999px; padding: 0 0.5rem; color: var(--muted); margin-left: 0.5rem;
 }
 .tag.lab { border-color: var(--fg); color: var(--fg); }
+.tag.bad { border-color: var(--bad); color: var(--bad); }
 
 .field textarea {
   font: inherit; font-family: var(--mono); font-size: 0.95rem; line-height: 1.5; color: var(--fg); background: transparent;
@@ -267,18 +275,11 @@ section:last-of-type { border-bottom: 0; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 1rem; }
 .card { position: relative; display: grid; align-content: start; padding: 1rem 1.1rem; border: 1px solid var(--line); background: var(--raised); }
 .card:hover { border-color: var(--fg); }
-.card h3 { margin-right: 4rem; }
 .card h3 a { text-decoration: none; }
-/* The whole card opens the lab; delete sits above that. */
+/* The whole card opens the lab. */
 .card h3 a::after { content: ""; position: absolute; inset: 0; }
 .card p { margin: 0.3rem 0 0; }
 .card .card-meta { margin-top: 0.6rem; }
-.card-delete {
-  position: absolute; z-index: 1; top: 0.8rem; right: 0.9rem; font: inherit; font-size: 0.62rem; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--muted); background: var(--raised); border: 1px solid transparent; border-radius: 999px;
-  padding: 0.1rem 0.55rem; cursor: pointer;
-}
-.card-delete:hover, .card-delete:focus-visible { color: var(--bad); border-color: var(--bad); }
 /* No rule under the last section that shows: the footer draws its own. */
 section:not(:has(~ section:not([hidden]))) { border-bottom: 0; }
 
@@ -330,6 +331,7 @@ section:not(:has(~ section:not([hidden]))) { border-bottom: 0; }
 .options[open] summary::before { content: "−"; }
 .options summary:hover { color: var(--fg); }
 .options .controls { margin: 1rem 0 0; }
+.options .controls + .note { margin: 0.9rem 0 0; }
 
 /* The sources the answer read, as compact numbered lines under it. */
 .read { list-style: none; margin: 1.2rem 0 0; padding: 0; display: grid; gap: 0.45rem; max-width: 72ch; }
@@ -351,7 +353,7 @@ section:not(:has(~ section:not([hidden]))) { border-bottom: 0; }
 .web-found .reading .note { display: block; margin: 0.1rem 0 0; }
 .web-found li.skipped, .web-found li.skipped a { color: var(--muted); }
 
-.pages .page-summary { color: var(--muted); font-family: var(--nd); font-size: 0.76rem; margin: 0.2rem 0 0 2.6rem; }
+.pages .page-summary { color: var(--muted); font-family: var(--nd); font-size: 0.76rem; margin: 0.2rem 0 0; }
 .pages li.set-aside a { color: var(--muted); }
 
 /* A gathering as it happened: searches, what each showed, what was taken. */
@@ -400,7 +402,7 @@ section:not(:has(~ section:not([hidden]))) { border-bottom: 0; }
 .refs { list-style: none; margin: 0.8rem 0 0; padding: 0; display: grid; gap: 0.6rem; max-width: 72ch; }
 .refs .check { align-items: flex-start; }
 .refs .check input { margin-top: 0.2rem; }
-.refs .host { display: block; margin-left: 1.45rem; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); overflow-wrap: anywhere; }
+.refs .host { display: block; margin-left: 1.65rem; font-family: var(--mono); font-size: 0.72rem; color: var(--muted); overflow-wrap: anywhere; }
 .refs .host a { color: var(--muted); }
 .refs li.had { color: var(--muted); }
 
@@ -449,7 +451,6 @@ section:not(:has(~ section:not([hidden]))) { border-bottom: 0; }
 .artifact-list { list-style: none; margin: 0 0 0.6rem; padding: 0; }
 .artifact-list li { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; align-items: baseline; padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
 .artifact-list .tag { margin-left: 0; }
-.section-states { font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.2em; color: var(--muted); }
 .outline { margin: 0.9rem 0 1.2rem; padding-left: 1.3rem; display: grid; gap: 0.7rem; }
 .outline li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.4rem 1rem; }
 .outline li > div:first-child { flex: 1 1 20rem; }
@@ -458,10 +459,8 @@ section:not(:has(~ section:not([hidden]))) { border-bottom: 0; }
 .report-body h2 .rewrite { margin-left: 0.8rem; vertical-align: 0.2em; }
 .extend { border-top: 1px solid var(--line); margin-top: 1rem; }
 
-/* Settings: header links look like the header's buttons. */
-a.theme { text-decoration: none; display: inline-flex; align-items: center; }
-a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
 .settings-form { display: grid; gap: 1.3rem; max-width: 40rem; margin-top: 1.6rem; }
+.settings-form .segmented { justify-self: start; }
 .token-form { margin-top: 1.2rem; }
 .token-new { max-width: 48rem; margin-top: 1.2rem; display: grid; gap: 0.6rem; font-size: 0.82rem; }
 .token-new p { margin: 0; }
@@ -495,11 +494,19 @@ a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
 .file-pick { position: relative; overflow: hidden; display: inline-block; }
 .file-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
-.overview { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 1rem; }
+.overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; }
 .ov-card {
-  font: inherit; text-align: left; color: var(--fg); background: var(--raised); border: 1px solid var(--line);
-  padding: 1rem 1.1rem; cursor: pointer; display: grid; gap: 0.2rem; align-content: start;
+  position: relative; color: var(--fg); background: var(--raised); border: 1px solid var(--line);
+  padding: 1rem 1.1rem; display: grid; gap: 0.2rem; align-content: start; justify-items: start;
 }
+/* The card opens its tab; its lines, above that, open the tab filtered. */
+.ov-open { font: inherit; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; }
+.ov-open::after { content: ""; position: absolute; inset: 0; }
+.ov-go {
+  position: relative; z-index: 1; font: inherit; font-size: 0.8rem; text-align: left; background: none; border: 0; padding: 0;
+  cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; max-width: 100%;
+}
+.ov-go:hover, .ov-go:focus-visible { color: var(--fg); }
 .ov-card:hover { border-color: var(--fg); }
 .ov-title { font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
 .ov-big { font-size: 1.6rem; line-height: 1.2; margin: 0.15rem 0 0.25rem; }
@@ -517,7 +524,8 @@ a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
 .empty { margin: 1rem 0; }
 .listview .table { margin-top: 0.4rem; }
 
-.pages li.page { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: 0.2rem; }
+.pages li.page { padding: 0.55rem 0; }
+.pages li.failed a { color: var(--muted); }
 .pages .host { color: var(--muted); font-size: 0.72rem; margin-left: 0.5rem; }
 .pages li .note { margin: 0.15rem 0 0; font-family: var(--nd); font-size: 0.76rem; }
 
@@ -569,6 +577,18 @@ a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
 .graph-side { min-width: 0; }
 .graph-side .works li { border-bottom: 0; padding-top: 0; }
 .graph-legend { margin: 0.6rem 0 0; font-size: 0.76rem; }
+.graph-actions { margin-left: auto; display: flex; gap: 0.4rem; }
+.graph-tools .segmented .seg { font-size: 0.74rem; }
+/* Full screen: the browser's own, or the window where there is none. */
+.graph.full { position: fixed; inset: 0; z-index: 60; margin: 0; padding: 0.8rem 1rem; border: 0; background: var(--bg);
+  display: flex; flex-direction: column; }
+.graph.full .graph-body { flex: 1; min-height: 0; }
+.graph.full .graph-canvas { height: 100%; min-height: 0; }
+.graph.full .graph-side { overflow: auto; }
+.graph.full .graph-legend { margin-top: 0.4rem; }
+@media (min-width: 60rem) { .graph.full .graph-body { grid-template-columns: minmax(0, 1fr) 22rem; } }
+@media (max-width: 59.99rem) { .graph.full .graph-side { max-height: 30vh; } .graph.full .graph-body { grid-template-rows: minmax(0, 1fr) auto; } }
+body.no-scroll { overflow: hidden; }
 
 /* Context quality: a verdict, then what the unusable pages are. */
 .quality { margin-top: 1.8rem; max-width: 72ch; }
@@ -588,3 +608,165 @@ a.theme[aria-current="page"] { background: var(--fg); color: var(--bg); }
 .conflicts-head { margin: 0 0 0.4rem; font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bad); }
 .conflicts ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.4rem; }
 .conflicts a { font-family: var(--nd); text-decoration: none; }
+
+/* A page title with its one action beside it. */
+.title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem 1.2rem; }
+.title-row h1 { margin: 0; }
+.hero .cards { margin-top: 1.8rem; }
+.hero .drawer { margin-top: 1.2rem; }
+
+/* Row actions in long lists: words, not outlines, so a page of rows stays calm. */
+.table td.actions .buttons { gap: 1rem; }
+.link { font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.link:disabled { opacity: 0.5; cursor: default; }
+.link.danger:hover, .link.danger:focus-visible { color: var(--bad); }
+
+/* A work: what it is on the left, what to do with it on the right. */
+.works li.work { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.35rem 1.4rem; }
+@media (min-width: 64rem) {
+  .map-works .works li.work { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+  .map-works .works li.work .work-actions { margin-top: 0.1rem; flex-direction: column; align-items: flex-end; gap: 0.4rem; }
+}
+.work-main .tag { margin-left: 0.4rem; }
+
+/* Prose stays readable on a wide screen. */
+section > p.note, section > p.lede, .panel > p.note { max-width: 72ch; }
+.tokens-table { max-width: 56rem; }
+
+/* Once something is asked, the answer is what the page is for: the title
+   steps aside and the answer starts near the top. */
+body.asked #search .hero h1 { display: none; }
+body.asked #search .hero { padding-top: 1.2rem; padding-bottom: 1.6rem; }
+body.asked #search .query { margin-top: 0.4rem; }
+
+/* A source on a phone: its state, count and actions on one line. */
+@media (max-width: 44rem) {
+  #sources .table.stack td:not(.url) { display: inline-block; margin: 0.35rem 1.2rem 0 0; padding: 0; }
+  #sources .table.stack td.actions { padding-top: 0; }
+}
+
+/* Beside the graph there is room to read a work's line whole. */
+.graph-side .clamp-1 { white-space: normal; }
+.quality .options { margin: 0 0 0.6rem; }
+.cards > .note { grid-column: 1 / -1; }
+
+/* Checkboxes in the site's own hand: a thin square that fills, in either
+   theme; the browser's blue one shouted over everything around it. */
+input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; margin: 0; flex: none; width: 1rem; height: 1rem;
+  border: 1px solid var(--fg); border-radius: 3px; background: transparent; cursor: pointer;
+  display: inline-grid; place-content: center; vertical-align: -0.15em;
+}
+input[type="checkbox"]::before {
+  content: ""; width: 0.62rem; height: 0.62rem; background: var(--bg); transform: scale(0);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+input[type="checkbox"]:checked { background: var(--fg); }
+input[type="checkbox"]:checked::before { transform: scale(1); }
+input[type="checkbox"]:disabled { opacity: 0.4; cursor: default; }
+@media (prefers-reduced-motion: no-preference) { input[type="checkbox"]::before { transition: transform 0.1s ease-out; } }
+.check { gap: 0.65rem; }
+
+/* A drafted plan: what the model made of the request, a row per part. In a
+   drawer the drawer is the box; a second border inside it was one too many. */
+.drawer .plan { border: 0; background: none; padding: 1.1rem 0 0.6rem; margin: 0; max-width: none; }
+.plan .eyebrow { margin-bottom: 0.3rem; }
+.plan > .note { max-width: 72ch; }
+.plan-rows { display: grid; gap: 0.95rem; margin: 1.1rem 0 1.4rem; padding-top: 1.1rem; border-top: 1px solid var(--line); }
+.plan-row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0.35rem 1rem; align-items: baseline; }
+.plan-label { font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.plan-value { display: flex; flex-wrap: wrap; gap: 0.45rem 0.9rem; align-items: center; min-width: 0; font-size: 0.85rem; }
+.plan-value .note { margin: 0; }
+.plan-value .plan-sources { margin: 0; flex-basis: 100%; }
+.plan-value.ticks { margin: 0; gap: 0.4rem; }
+.plan-row.off { opacity: 0.4; }
+.plan-row .file-list { flex-basis: 100%; }
+.file-list li { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; align-items: baseline; }
+.file-list .host { margin: 0; }
+@media (max-width: 44rem) { .plan-row { grid-template-columns: minmax(0, 1fr); } }
+
+/* The shared base in a line under the title. */
+.base-stats { margin: 0.2rem 0 0; }
+.base-stats .more { display: block; font-size: 0.8rem; opacity: 0.75; }
+body.asked #search .hero .base-stats { display: none; }
+/* A tick is the pill itself: its box stays out of sight in every state. */
+.tick input[type="checkbox"], .tick input[type="checkbox"]:disabled { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.tick:has(input:disabled) { cursor: default; }
+
+/* On a phone the lab's tabs scroll sideways: the fading edge says there are more. */
+@media (max-width: 44rem) {
+  .lab-page .tabs { mask-image: linear-gradient(to right, #000 82%, transparent); -webkit-mask-image: linear-gradient(to right, #000 82%, transparent); padding-right: 2rem; }
+}
+
+/* Asking in place: the question, then yes and no as words. */
+.confirm { display: inline-flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; align-items: baseline; font-size: 0.8rem; }
+.confirm-q { color: var(--fg); font-size: 0.8rem; }
+.confirm .link, .buttons .link { font-size: 0.7rem; }
+.inline-error { margin-left: 0.8rem; font-size: 0.8rem; }
+.table td.actions .confirm-q { white-space: nowrap; }
+/* While asking, yes reads as what it does; no stays plain. */
+.confirm .link.danger, .confirm-q ~ .link.danger { color: var(--bad); }
+.confirm .link:not(.danger), .confirm-q ~ .link:not(.danger) { color: var(--fg); }
+
+/* Measurements, folded: there for the record, out of the reader's way. */
+.measure { margin: 0 0 0.9rem; }
+.measure summary {
+  cursor: pointer; list-style: none; display: inline-flex; gap: 0.35rem; font-size: 0.64rem; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--muted);
+}
+.measure summary::-webkit-details-marker { display: none; }
+.measure summary::before { content: "+"; font-family: var(--mono); }
+.measure[open] summary::before { content: "−"; }
+.measure summary:hover { color: var(--fg); }
+.measure > .note, .measure > .chips { margin: 0.45rem 0 0; }
+.row .measure { margin: 0; }
+.answer-measure { margin-top: 1.2rem; }
+.save-answer + .web-offer { margin-top: -0.3rem; }
+
+/* The one thing worth doing next, above the lab's parts. */
+.next-step {
+  display: flex; flex-wrap: wrap; gap: 0.6rem 1.4rem; align-items: center; justify-content: space-between;
+  border: 1px solid var(--line); border-left: 2px solid var(--fg); background: var(--raised); padding: 0.8rem 1rem; margin: 0 0 1rem;
+}
+.next-step:empty { display: none; }
+.next-step p { margin: 0; max-width: 72ch; font-size: 0.9rem; }
+.quality-links { margin-top: 0.2rem; gap: 1.2rem; }
+.quality-links:empty { display: none; }
+
+/* A research run's budget as it is spent. */
+.meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 18rem)); gap: 0.5rem 1.6rem; margin: 0.5rem 0 0.4rem; }
+.meter { display: grid; gap: 0.25rem; }
+.meter-label { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meter-bar { display: block; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.meter-fill { display: block; height: 100%; background: var(--fg); }
+@media (prefers-reduced-motion: no-preference) { .meter-fill { transition: width 0.6s ease; } }
+
+/* The report's doubtful claims as ways through it. */
+.jump {
+  font: inherit; background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg);
+  text-decoration: underline dotted; text-underline-offset: 3px;
+}
+.jump.unsupported { color: var(--bad); }
+.jump:hover, .jump:focus-visible { text-decoration-style: solid; }
+.mark.current { outline: 1px solid var(--fg); border-radius: 2px; }
+.report-body .claim-info, .answer .claim-info { border-left: 2px solid var(--line); padding: 0.4rem 0 0.4rem 0.8rem; margin: -0.4rem 0 1rem; }
+
+/* Renaming a lab or a subtopic: small edits beside what they change. */
+.lab-title, .group-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 1rem; }
+.lab-title h1 { margin-bottom: 0.3rem; }
+.lab-head #topic { margin-bottom: 0.25rem; }
+#topicMore { display: block; margin: 0 0 0.2rem; }
+.lab-head #summary { margin-top: 0.6rem; }
+#labTopic { min-height: 7rem; }
+.sub-merge > .note:empty { display: none; }
+.sub-edit { display: grid; gap: 0.8rem; max-width: 40rem; margin: 0 0 1rem; }
+.sub-edit input, .sub-merge select {
+  font: inherit; font-family: var(--mono); font-size: 0.9rem; color: var(--fg); background: transparent;
+  border: 0; border-bottom: 1px solid var(--line); padding: 0.3rem 0; width: 100%;
+}
+.sub-edit input:focus, .sub-merge select:focus { outline: 0; border-bottom-color: var(--fg); }
+.sub-merge { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: center; margin: 0.2rem 0 0.9rem;
+  padding: 0.7rem 0.9rem; border: 1px solid var(--line); background: var(--raised); }
+.sub-merge select { width: auto; min-width: 12rem; }
+.sub-merge p { flex-basis: 100%; margin: 0; }
+#renameForm { margin: 0.6rem 0 0.4rem; }

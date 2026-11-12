@@ -21,8 +21,8 @@ func TestUploadsAreTheirOwnersAndForgottenWithTheirLastSource(t *testing.T) {
 		return nil
 	})
 
-	var lein, other int64
-	for name, id := range map[string]*int64{"lein": &lein, "other": &other} {
+	var lein, other string
+	for name, id := range map[string]*string{"lein": &lein, "other": &other} {
 		if err := pool.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ($1, 'x') RETURNING id`, name).Scan(id); err != nil {
 			t.Fatal(err)
 		}

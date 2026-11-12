@@ -26,7 +26,7 @@ type recentAnswers struct {
 }
 
 type recentAnswer struct {
-	owner     int64
+	owner     string
 	query     string
 	res       answer.Result
 	claims    []answer.Claim
@@ -41,7 +41,7 @@ func newRecentAnswers(limit int, ttl time.Duration) *recentAnswers {
 }
 
 // add keeps an answer and returns its id; checked says no check will follow.
-func (r *recentAnswers) add(owner int64, query string, res answer.Result, checked bool) string {
+func (r *recentAnswers) add(owner, query string, res answer.Result, checked bool) string {
 	id, err := utils.GenerateID()
 	if err != nil {
 		return ""
@@ -71,7 +71,7 @@ func (r *recentAnswers) check(id string, v answer.Verification) {
 }
 
 // get returns the answer if it is the owner's and still kept.
-func (r *recentAnswers) get(owner int64, id string) (recentAnswer, bool) {
+func (r *recentAnswers) get(owner, id string) (recentAnswer, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

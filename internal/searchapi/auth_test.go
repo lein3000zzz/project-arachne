@@ -3,6 +3,7 @@ package searchapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,7 +20,10 @@ const (
 	testPass    = "correct horse battery"
 )
 
-var testUser = auth.User{ID: 1, Username: "lein"}
+// tid is a test ID in the shape the handler takes; IDs sort as their numbers do.
+func tid(n int) string { return fmt.Sprintf("00000000-0000-7000-8000-%012d", n) }
+
+var testUser = auth.User{ID: tid(1), Username: "lein"}
 
 type fakeAuth struct {
 	renewed   time.Time
@@ -329,5 +333,14 @@ func TestChangePassword(t *testing.T) {
 		if rec := do(handler, withSession(httptest.NewRequest(http.MethodPost, "/api/me/password", strings.NewReader(body)))); rec.Code != want {
 			t.Errorf("%s: %d, want %d", body, rec.Code, want)
 		}
+	}
+}
+
+func TestThePagesLearnTheirListSize(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newTestHandler(Services{}, Config{ListSize: 15}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ui", nil))
+
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"list_size":15}` {
+		t.Errorf("GET /api/ui: %d %s; open to anyone, the login page included", rec.Code, rec.Body)
 	}
 }

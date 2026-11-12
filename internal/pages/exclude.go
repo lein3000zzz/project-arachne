@@ -41,7 +41,7 @@ func (repo *PagePostgresRepo) EnsureExcluded(ctx context.Context, fingerprint st
 	}
 
 	var (
-		ids  []int64
+		ids  []string
 		urls []string
 	)
 

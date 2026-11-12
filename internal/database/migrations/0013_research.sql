@@ -3,8 +3,8 @@
 
 -- The subtopics a lab's topic splits into: the tree of the map.
 CREATE TABLE lab_subtopics (
-    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lab_id     bigint      NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
+    id         uuid PRIMARY KEY DEFAULT uuidv7(),
+    lab_id     uuid        NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
     position   integer     NOT NULL,
     name       text        NOT NULL,
     focus      text        NOT NULL DEFAULT '',
@@ -14,8 +14,8 @@ CREATE TABLE lab_subtopics (
 CREATE UNIQUE INDEX lab_subtopics_name ON lab_subtopics (lab_id, lower(name));
 
 CREATE TABLE research_runs (
-    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lab_id       bigint      NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
+    id           uuid PRIMARY KEY DEFAULT uuidv7(),
+    lab_id       uuid        NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
     request      text        NOT NULL DEFAULT '',
     found_budget integer     NOT NULL,
     read_budget  integer     NOT NULL,
@@ -34,8 +34,8 @@ CREATE UNIQUE INDEX research_runs_running ON research_runs (lab_id) WHERE status
 
 -- What research found for a lab: papers and web works, judged, some read.
 CREATE TABLE works (
-    id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    lab_id          bigint      NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
+    id              uuid PRIMARY KEY DEFAULT uuidv7(),
+    lab_id          uuid        NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
     url             text        NOT NULL,
     kind            text        NOT NULL CHECK (kind IN ('paper', 'web')),
     title           text        NOT NULL DEFAULT '',
@@ -46,16 +46,16 @@ CREATE TABLE works (
     openalex_id     text        NOT NULL DEFAULT '',
     -- Shown, never used to judge: niche works count as much as famous ones.
     cited_by        integer,
-    subtopic_id     bigint      REFERENCES lab_subtopics (id) ON DELETE SET NULL,
+    subtopic_id     uuid        REFERENCES lab_subtopics (id) ON DELETE SET NULL,
     verdict         text        NOT NULL DEFAULT 'pending' CHECK (verdict IN ('pending', 'keep', 'maybe', 'drop')),
     reason          text        NOT NULL DEFAULT '',
     by_user         boolean     NOT NULL DEFAULT false,
     -- The lab source it became when read.
-    source_id       bigint      REFERENCES sources (id) ON DELETE SET NULL,
+    source_id       uuid        REFERENCES sources (id) ON DELETE SET NULL,
     -- OpenAlex was asked for what it cites, and for what cites it.
     references_done boolean     NOT NULL DEFAULT false,
     citing_done     boolean     NOT NULL DEFAULT false,
-    first_run       bigint      REFERENCES research_runs (id) ON DELETE SET NULL,
+    first_run       uuid        REFERENCES research_runs (id) ON DELETE SET NULL,
     first_round     integer     NOT NULL DEFAULT 0,
     created_at      timestamptz NOT NULL DEFAULT now(),
     UNIQUE (lab_id, url)
@@ -67,22 +67,22 @@ CREATE INDEX works_source ON works (source_id);
 -- Every way a work was found, once per query or citing work: the coverage
 -- estimate counts what search found against what citations found.
 CREATE TABLE work_finds (
-    id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    work_id  bigint      NOT NULL REFERENCES works (id) ON DELETE CASCADE,
+    id       uuid PRIMARY KEY DEFAULT uuidv7(),
+    work_id  uuid        NOT NULL REFERENCES works (id) ON DELETE CASCADE,
     channel  text        NOT NULL CHECK (channel IN ('seed', 'search', 'reference', 'citing')),
     query    text        NOT NULL DEFAULT '',
-    via_work bigint      REFERENCES works (id) ON DELETE CASCADE,
-    run_id   bigint      REFERENCES research_runs (id) ON DELETE SET NULL,
+    via_work uuid        REFERENCES works (id) ON DELETE CASCADE,
+    run_id   uuid        REFERENCES research_runs (id) ON DELETE SET NULL,
     round    integer     NOT NULL DEFAULT 0,
     found_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX work_finds_once ON work_finds (work_id, channel, query, coalesce(via_work, 0));
+CREATE UNIQUE INDEX work_finds_once ON work_finds (work_id, channel, query, via_work) NULLS NOT DISTINCT;
 
 -- A work of the lab citing another: the map's lines.
 CREATE TABLE work_links (
-    lab_id    bigint NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
-    from_work bigint NOT NULL REFERENCES works (id) ON DELETE CASCADE,
-    to_work   bigint NOT NULL REFERENCES works (id) ON DELETE CASCADE,
+    lab_id    uuid NOT NULL REFERENCES labs (id) ON DELETE CASCADE,
+    from_work uuid NOT NULL REFERENCES works (id) ON DELETE CASCADE,
+    to_work   uuid NOT NULL REFERENCES works (id) ON DELETE CASCADE,
     PRIMARY KEY (from_work, to_work)
 );
 CREATE INDEX work_links_lab ON work_links (lab_id);

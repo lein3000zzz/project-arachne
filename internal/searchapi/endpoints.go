@@ -12,10 +12,10 @@ import (
 )
 
 type EndpointService interface {
-	Get(ctx context.Context, userID int64) (endpoints.Endpoint, error)
-	Set(ctx context.Context, userID int64, in endpoints.Settings) (endpoints.Endpoint, error)
-	Delete(ctx context.Context, userID int64) error
-	Test(ctx context.Context, userID int64, in endpoints.Settings) (endpoints.TestResult, error)
+	Get(ctx context.Context, userID string) (endpoints.Endpoint, error)
+	Set(ctx context.Context, userID string, in endpoints.Settings) (endpoints.Endpoint, error)
+	Delete(ctx context.Context, userID string) error
+	Test(ctx context.Context, userID string, in endpoints.Settings) (endpoints.TestResult, error)
 }
 
 // ServerModel is the chat model the server runs, which answers users who set
@@ -60,14 +60,14 @@ func (h *endpointsHandler) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *endpointsHandler) set(w http.ResponseWriter, r *http.Request) {
-	h.withSettings(w, r, func(ctx context.Context, user int64, in endpoints.Settings) (int, any, error) {
+	h.withSettings(w, r, func(ctx context.Context, user string, in endpoints.Settings) (int, any, error) {
 		e, err := h.service.Set(ctx, user, in)
 		return http.StatusOK, e, err
 	})
 }
 
 func (h *endpointsHandler) test(w http.ResponseWriter, r *http.Request) {
-	h.withSettings(w, r, func(ctx context.Context, user int64, in endpoints.Settings) (int, any, error) {
+	h.withSettings(w, r, func(ctx context.Context, user string, in endpoints.Settings) (int, any, error) {
 		res, err := h.service.Test(ctx, user, in)
 		return http.StatusOK, res, err
 	})
@@ -92,7 +92,7 @@ func (h *endpointsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *endpointsHandler) withSettings(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, user int64, in endpoints.Settings) (int, any, error)) {
+func (h *endpointsHandler) withSettings(w http.ResponseWriter, r *http.Request, do func(ctx context.Context, user string, in endpoints.Settings) (int, any, error)) {
 	if h.service == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: endpoints.ErrUnavailable.Error()})
 		return

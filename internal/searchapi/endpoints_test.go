@@ -16,12 +16,12 @@ import (
 type fakeEndpoints struct {
 	own    *endpoints.Endpoint
 	got    endpoints.Settings
-	user   int64
+	user   string
 	err    error
 	tested bool
 }
 
-func (f *fakeEndpoints) Get(_ context.Context, user int64) (endpoints.Endpoint, error) {
+func (f *fakeEndpoints) Get(_ context.Context, user string) (endpoints.Endpoint, error) {
 	f.user = user
 	if f.own == nil {
 		return endpoints.Endpoint{}, endpoints.ErrNotSet
@@ -30,17 +30,17 @@ func (f *fakeEndpoints) Get(_ context.Context, user int64) (endpoints.Endpoint, 
 	return *f.own, nil
 }
 
-func (f *fakeEndpoints) Set(_ context.Context, user int64, in endpoints.Settings) (endpoints.Endpoint, error) {
+func (f *fakeEndpoints) Set(_ context.Context, user string, in endpoints.Settings) (endpoints.Endpoint, error) {
 	f.user, f.got = user, in
 	return endpoints.Endpoint{Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, KeySet: in.APIKey != nil}, f.err
 }
 
-func (f *fakeEndpoints) Delete(_ context.Context, user int64) error {
+func (f *fakeEndpoints) Delete(_ context.Context, user string) error {
 	f.user, f.own = user, nil
 	return f.err
 }
 
-func (f *fakeEndpoints) Test(_ context.Context, user int64, in endpoints.Settings) (endpoints.TestResult, error) {
+func (f *fakeEndpoints) Test(_ context.Context, user string, in endpoints.Settings) (endpoints.TestResult, error) {
 	f.user, f.got, f.tested = user, in, true
 	return endpoints.TestResult{Model: in.Model, Reply: "OK", Seconds: 0.4}, f.err
 }

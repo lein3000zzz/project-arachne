@@ -20,7 +20,7 @@ type Coverage struct {
 }
 
 type SubtopicCoverage struct {
-	ID       int64     `json:"id"`
+	ID       string    `json:"id"`
 	Kept     int       `json:"kept"`
 	In       int       `json:"in"`
 	Estimate *Estimate `json:"estimate,omitempty"`
@@ -60,7 +60,7 @@ func coverageOf(subtopics []Subtopic, works []Work) Coverage {
 			c.Dropped++
 		}
 
-		if w.SourceID != 0 {
+		if w.SourceID != "" {
 			c.Read++
 		}
 

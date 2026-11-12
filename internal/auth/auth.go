@@ -17,7 +17,7 @@ import (
 )
 
 type User struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Username  string    `json:"username"`
 	Admin     bool      `json:"admin"`
 	CreatedAt time.Time `json:"created_at"`
@@ -58,23 +58,23 @@ type Store interface {
 	UserCount(ctx context.Context) (int, error)
 	CreateUser(ctx context.Context, username, passwordHash string, admin bool) (User, error)
 	AccountByName(ctx context.Context, username string) (Account, error)
-	PasswordHash(ctx context.Context, userID int64) (string, error)
+	PasswordHash(ctx context.Context, userID string) (string, error)
 	// SetPasswordHash keeps the user's sessions; ReplacePassword ends them.
-	SetPasswordHash(ctx context.Context, userID int64, hash string) error
-	ReplacePassword(ctx context.Context, userID int64, hash string) error
-	SetDisabled(ctx context.Context, userID int64, disabled bool) error
+	SetPasswordHash(ctx context.Context, userID, hash string) error
+	ReplacePassword(ctx context.Context, userID, hash string) error
+	SetDisabled(ctx context.Context, userID string, disabled bool) error
 
-	CreateSession(ctx context.Context, tokenHash []byte, userID int64, ttl time.Duration, userAgent string) (time.Time, error)
+	CreateSession(ctx context.Context, tokenHash []byte, userID string, ttl time.Duration, userAgent string) (time.Time, error)
 	// SessionUser renews a session last seen more than renewAfter ago and then
 	// returns its new expiry; otherwise the zero time.
 	SessionUser(ctx context.Context, tokenHash []byte, ttl, renewAfter time.Duration) (User, time.Time, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
 
-	SaveToken(ctx context.Context, userID int64, name string, tokenHash []byte) error
+	SaveToken(ctx context.Context, userID, name string, tokenHash []byte) error
 	// AddToken fails with ErrTokenExists or, at limit tokens, ErrTooManyTokens.
-	AddToken(ctx context.Context, userID int64, name string, tokenHash []byte, limit int) error
-	ListTokens(ctx context.Context, userID int64) ([]Token, error)
-	DeleteToken(ctx context.Context, userID int64, name string) error
+	AddToken(ctx context.Context, userID, name string, tokenHash []byte, limit int) error
+	ListTokens(ctx context.Context, userID string) ([]Token, error)
+	DeleteToken(ctx context.Context, userID, name string) error
 	TokenUser(ctx context.Context, tokenHash []byte, touchAfter time.Duration) (User, error)
 
 	LockedFor(ctx context.Context, keys []string) (time.Duration, error)
@@ -151,7 +151,7 @@ func (s *Service) Login(ctx context.Context, username, password, addr, userAgent
 		return Session{}, err
 	}
 
-	if !ok || account.ID == 0 {
+	if !ok || account.ID == "" {
 		return Session{}, s.failed(ctx, limits)
 	}
 
@@ -301,7 +301,7 @@ func (s *Service) RevokeToken(ctx context.Context, username, name string) error 
 // AddToken returns a new API token of the user's, the only time it is ever
 // shown. Unlike CreateToken it refuses a name in use: replacing a token from
 // a page would cut off whatever uses it without a word.
-func (s *Service) AddToken(ctx context.Context, userID int64, name string) (string, error) {
+func (s *Service) AddToken(ctx context.Context, userID, name string) (string, error) {
 	if !tokenNamePattern.MatchString(name) {
 		return "", ErrInvalidTokenName
 	}
@@ -315,11 +315,11 @@ func (s *Service) AddToken(ctx context.Context, userID int64, name string) (stri
 	return token, nil
 }
 
-func (s *Service) Tokens(ctx context.Context, userID int64) ([]Token, error) {
+func (s *Service) Tokens(ctx context.Context, userID string) ([]Token, error) {
 	return s.store.ListTokens(ctx, userID)
 }
 
-func (s *Service) RemoveToken(ctx context.Context, userID int64, name string) error {
+func (s *Service) RemoveToken(ctx context.Context, userID, name string) error {
 	return s.store.DeleteToken(ctx, userID, name)
 }
 
@@ -338,7 +338,7 @@ func (s *Service) startSession(ctx context.Context, user User, userAgent string)
 	return Session{Token: token, User: user, ExpiresAt: expires}, nil
 }
 
-func (s *Service) replacePassword(ctx context.Context, userID int64, password string) error {
+func (s *Service) replacePassword(ctx context.Context, userID, password string) error {
 	encoded, err := s.passwords.Hash(ctx, password)
 	if err != nil {
 		return err
@@ -347,7 +347,7 @@ func (s *Service) replacePassword(ctx context.Context, userID int64, password st
 	return s.store.ReplacePassword(ctx, userID, encoded)
 }
 
-func (s *Service) rehash(ctx context.Context, userID int64, password string) {
+func (s *Service) rehash(ctx context.Context, userID, password string) {
 	encoded, err := s.passwords.Hash(ctx, password)
 	if err == nil {
 		err = s.store.SetPasswordHash(ctx, userID, encoded)

@@ -63,10 +63,10 @@ func TestASourcesCrawlFillsTheLab(t *testing.T) {
 
 	run := producer.runs[0]
 
-	var sourceID, submittedBy int64
+	var sourceID, submittedBy string
 	if err := pool.QueryRow(ctx, `SELECT source_id, submitted_by FROM runs WHERE id = $1`, run.ID).Scan(&sourceID, &submittedBy); err != nil ||
 		sourceID != detail.Sources[0].ID || submittedBy != lein {
-		t.Fatalf("run row: source %d, by %d, %v", sourceID, submittedBy, err)
+		t.Fatalf("run row: source %s, by %s, %v", sourceID, submittedBy, err)
 	}
 
 	repo := pages.NewPostgresRepo(zap.NewNop().Sugar(), pool)
@@ -83,7 +83,7 @@ func TestASourcesCrawlFillsTheLab(t *testing.T) {
 	save("https://go.dev/doc/effective_go", run.ID)
 	save("https://go.dev/blog/", "someone-elses-run")
 
-	urls, err := service.PageURLs(ctx, lein, []int64{detail.ID, detail.ID})
+	urls, err := service.PageURLs(ctx, lein, []string{detail.ID, detail.ID})
 	if err != nil || fmt.Sprint(urls) != "[https://go.dev/doc/ https://go.dev/doc/effective_go]" {
 		t.Errorf("lab pages: %v, %v", urls, err)
 	}

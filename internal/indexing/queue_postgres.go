@@ -12,7 +12,7 @@ import (
 
 // Job is a queued page, as a worker holds it.
 type Job struct {
-	ID       int64
+	ID       string
 	Doc      documents.Document
 	Attempts int
 }
@@ -25,14 +25,14 @@ type Queue interface {
 	// Claim takes the oldest page ready to index whose URL has no older
 	// version waiting; nil when there is none.
 	Claim(ctx context.Context, owner string, lease time.Duration) (*Job, error)
-	Extend(ctx context.Context, id int64, owner string, lease time.Duration) error
-	Done(ctx context.Context, id int64) error
+	Extend(ctx context.Context, id, owner string, lease time.Duration) error
+	Done(ctx context.Context, id string) error
 	// Retry counts a failed attempt and holds the page back for a while.
-	Retry(ctx context.Context, id int64, after time.Duration, why string) error
+	Retry(ctx context.Context, id string, after time.Duration, why string) error
 	// Release gives a page back untried: its worker is stopping.
-	Release(ctx context.Context, id int64) error
+	Release(ctx context.Context, id string) error
 	// Bury keeps a page that failed every try, with why.
-	Bury(ctx context.Context, id int64, why string) error
+	Bury(ctx context.Context, id, why string) error
 	// Prune drops dead pages older than the age given.
 	Prune(ctx context.Context, age time.Duration) (int64, error)
 }
@@ -85,19 +85,19 @@ func (q *PostgresQueue) Claim(ctx context.Context, owner string, lease time.Dura
 	return &j, nil
 }
 
-func (q *PostgresQueue) Extend(ctx context.Context, id int64, owner string, lease time.Duration) error {
+func (q *PostgresQueue) Extend(ctx context.Context, id, owner string, lease time.Duration) error {
 	_, err := q.pool.Exec(ctx, `UPDATE index_queue SET claimed_until = now() + $3 * interval '1 second' WHERE id = $1 AND claimed_by = $2`,
 		id, owner, lease.Seconds())
 
 	return err
 }
 
-func (q *PostgresQueue) Done(ctx context.Context, id int64) error {
+func (q *PostgresQueue) Done(ctx context.Context, id string) error {
 	_, err := q.pool.Exec(ctx, `DELETE FROM index_queue WHERE id = $1`, id)
 	return err
 }
 
-func (q *PostgresQueue) Retry(ctx context.Context, id int64, after time.Duration, why string) error {
+func (q *PostgresQueue) Retry(ctx context.Context, id string, after time.Duration, why string) error {
 	_, err := q.pool.Exec(ctx, `
 		UPDATE index_queue SET attempts = attempts + 1, ready_at = now() + $2 * interval '1 second', error = $3, claimed_by = NULL, claimed_until = NULL
 		WHERE id = $1`, id, after.Seconds(), why)
@@ -105,12 +105,12 @@ func (q *PostgresQueue) Retry(ctx context.Context, id int64, after time.Duration
 	return err
 }
 
-func (q *PostgresQueue) Release(ctx context.Context, id int64) error {
+func (q *PostgresQueue) Release(ctx context.Context, id string) error {
 	_, err := q.pool.Exec(ctx, `UPDATE index_queue SET claimed_by = NULL, claimed_until = NULL WHERE id = $1`, id)
 	return err
 }
 
-func (q *PostgresQueue) Bury(ctx context.Context, id int64, why string) error {
+func (q *PostgresQueue) Bury(ctx context.Context, id, why string) error {
 	_, err := q.pool.Exec(ctx, `
 		UPDATE index_queue SET attempts = attempts + 1, dead = true, error = $2, claimed_by = NULL, claimed_until = NULL WHERE id = $1`, id, why)
 

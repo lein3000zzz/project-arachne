@@ -25,7 +25,7 @@ const sectionPrompt = `You write one section of a research report, using only th
 // build writes the version's pending sections in order - all of them for a
 // new report, one when a section is rewritten or added - saving progress after
 // each, so the page can show it filling in.
-func (s *Service) build(ownerID, labID, artifactID int64, v Version) {
+func (s *Service) build(ownerID, labID, artifactID string, v Version) {
 	// The owner's own endpoint writes it, when they have one.
 	ctx, cancel := context.WithTimeout(auth.WithUser(s.ctx, auth.User{ID: ownerID}), s.cfg.Timeout)
 	defer cancel()
@@ -37,7 +37,7 @@ func (s *Service) build(ownerID, labID, artifactID int64, v Version) {
 		}
 	}
 
-	urls, err := s.labs.PageURLs(ctx, ownerID, []int64{labID})
+	urls, err := s.labs.PageURLs(ctx, ownerID, []string{labID})
 	if err != nil {
 		s.finish(ctx, artifactID, &v, started, fmt.Errorf("reading the lab: %w", err))
 		return
@@ -246,7 +246,7 @@ func compact(v *Version) {
 	v.Sources = nonNil(kept)
 }
 
-func (s *Service) finish(ctx context.Context, artifactID int64, v *Version, started time.Time, err error) {
+func (s *Service) finish(ctx context.Context, artifactID string, v *Version, started time.Time, err error) {
 	now := time.Now()
 	v.FinishedAt, v.Seconds, v.Status = &now, time.Since(started).Seconds(), StatusDone
 

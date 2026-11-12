@@ -62,21 +62,21 @@ func (f *fakeStore) ClearFailures(_ context.Context, key string) error {
 	return nil
 }
 
-func (f *fakeStore) SetPasswordHash(_ context.Context, _ int64, hash string) error {
+func (f *fakeStore) SetPasswordHash(_ context.Context, _, hash string) error {
 	f.rehashed = hash
 	return nil
 }
 
-func (f *fakeStore) CreateSession(context.Context, []byte, int64, time.Duration, string) (time.Time, error) {
+func (f *fakeStore) CreateSession(context.Context, []byte, string, time.Duration, string) (time.Time, error) {
 	return time.Now().Add(time.Hour), nil
 }
 
-func (f *fakeStore) SaveToken(_ context.Context, _ int64, name string, tokenHash []byte) error {
+func (f *fakeStore) SaveToken(_ context.Context, _, name string, tokenHash []byte) error {
 	f.tokens[name] = tokenHash
 	return nil
 }
 
-func (f *fakeStore) AddToken(_ context.Context, _ int64, name string, tokenHash []byte, limit int) error {
+func (f *fakeStore) AddToken(_ context.Context, _, name string, tokenHash []byte, limit int) error {
 	f.tokens[name], f.limit = tokenHash, limit
 	return nil
 }
@@ -120,7 +120,7 @@ func addAccount(t *testing.T, store *fakeStore, h *Hasher, name, password string
 		t.Fatal(err)
 	}
 
-	store.accounts[strings.ToLower(name)] = Account{User: User{ID: int64(len(store.accounts) + 1), Username: name}, PasswordHash: encoded}
+	store.accounts[strings.ToLower(name)] = Account{User: User{ID: "user-" + name, Username: name}, PasswordHash: encoded}
 }
 
 func TestUnknownUserAndWrongPasswordLookTheSame(t *testing.T) {
@@ -249,13 +249,13 @@ func TestTokensAreStoredOnlyAsHashes(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 
-	added, err := s.AddToken(context.Background(), 1, "claude-code")
+	added, err := s.AddToken(context.Background(), "user-1", "claude-code")
 	sum = sha256.Sum256([]byte(added))
 	if err != nil || !bytes.Equal(store.tokens["claude-code"], sum[:]) || store.limit != MaxTokens {
 		t.Errorf("an added token: %v, limit %d", err, store.limit)
 	}
 
-	if _, err := s.AddToken(context.Background(), 1, "../x"); !errors.Is(err, ErrInvalidTokenName) {
+	if _, err := s.AddToken(context.Background(), "user-1", "../x"); !errors.Is(err, ErrInvalidTokenName) {
 		t.Errorf("err = %v", err)
 	}
 }

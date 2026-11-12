@@ -52,9 +52,9 @@ type Settings struct {
 
 type Store interface {
 	// ErrNotSet when the user has none.
-	Get(ctx context.Context, userID int64) (Endpoint, []byte, error)
-	Set(ctx context.Context, userID int64, e Endpoint, sealedKey []byte) error
-	Delete(ctx context.Context, userID int64) error
+	Get(ctx context.Context, userID string) (Endpoint, []byte, error)
+	Set(ctx context.Context, userID string, e Endpoint, sealedKey []byte) error
+	Delete(ctx context.Context, userID string) error
 }
 
 type Config struct {
@@ -75,7 +75,7 @@ type Service struct {
 	transport http.RoundTripper
 
 	mu      sync.Mutex
-	clients map[int64]cached
+	clients map[string]cached
 }
 
 type cached struct {
@@ -99,17 +99,17 @@ func New(store Store, key []byte, cfg Config) (*Service, error) {
 	}
 
 	return &Service{store: store, seal: seal, cfg: cfg, transport: guardedTransport(cfg.AllowPrivate, cfg.AllowedHosts),
-		clients: map[int64]cached{}}, nil
+		clients: map[string]cached{}}, nil
 }
 
-func (s *Service) Get(ctx context.Context, userID int64) (Endpoint, error) {
+func (s *Service) Get(ctx context.Context, userID string) (Endpoint, error) {
 	e, _, err := s.store.Get(ctx, userID)
 	return e, err
 }
 
 // Set checks and saves the user's endpoint; the next request they make uses
 // it.
-func (s *Service) Set(ctx context.Context, userID int64, in Settings) (Endpoint, error) {
+func (s *Service) Set(ctx context.Context, userID string, in Settings) (Endpoint, error) {
 	e, err := s.check(ctx, in)
 	if err != nil {
 		return Endpoint{}, err
@@ -150,7 +150,7 @@ func (s *Service) Set(ctx context.Context, userID int64, in Settings) (Endpoint,
 }
 
 // Delete goes back to the server's model.
-func (s *Service) Delete(ctx context.Context, userID int64) error {
+func (s *Service) Delete(ctx context.Context, userID string) error {
 	defer s.forget(userID)
 	return s.store.Delete(ctx, userID)
 }
@@ -163,7 +163,7 @@ type TestResult struct {
 
 // Test sends one short request with these settings - the saved key when none
 // is given - without saving anything.
-func (s *Service) Test(ctx context.Context, userID int64, in Settings) (TestResult, error) {
+func (s *Service) Test(ctx context.Context, userID string, in Settings) (TestResult, error) {
 	e, err := s.check(ctx, in)
 	if err != nil {
 		return TestResult{}, err
@@ -202,7 +202,7 @@ func (s *Service) Test(ctx context.Context, userID int64, in Settings) (TestResu
 }
 
 // Client is the user's own model, if they set one.
-func (s *Service) Client(ctx context.Context, userID int64) (llm.Client, bool, error) {
+func (s *Service) Client(ctx context.Context, userID string) (llm.Client, bool, error) {
 	s.mu.Lock()
 	c, ok := s.clients[userID]
 	s.mu.Unlock()
@@ -241,7 +241,7 @@ func (s *Service) Client(ctx context.Context, userID int64) (llm.Client, bool, e
 	return c.client, c.client != nil, nil
 }
 
-func (s *Service) forget(userID int64) {
+func (s *Service) forget(userID string) {
 	s.mu.Lock()
 	delete(s.clients, userID)
 	s.mu.Unlock()

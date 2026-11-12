@@ -16,10 +16,10 @@ import (
 type fakeLookup struct {
 	pages []string
 	err   error
-	user  int64
+	user  string
 }
 
-func (f *fakeLookup) Look(_ context.Context, user int64, question string, ev weblookup.Events) ([]string, error) {
+func (f *fakeLookup) Look(_ context.Context, user, question string, ev weblookup.Events) ([]string, error) {
 	f.user = user
 
 	if f.err != nil {
@@ -49,7 +49,7 @@ func TestTheWebIsReadBeforeTheAnswer(t *testing.T) {
 	}
 
 	if !slices.Equal(answerer.got.LabURLs, look.pages) || !answerer.got.Fresh || look.user != testUser.ID || !strings.Contains(rec.Body.String(), `"web":true`) {
-		t.Errorf("the pages read come first, seen fresh: %+v; user %d", answerer.got, look.user)
+		t.Errorf("the pages read come first, seen fresh: %+v; user %s", answerer.got, look.user)
 	}
 
 	// Read nothing: the index answers as it would have, and is not waited on.

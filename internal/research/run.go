@@ -37,8 +37,8 @@ const (
 
 type session struct {
 	s       *Service
-	id      int64
-	ownerID int64
+	id      string
+	ownerID string
 	lab     labs.Detail
 	request string
 	budget  Budget
@@ -54,24 +54,24 @@ type session struct {
 	attempts     int
 	// Works read per site this run.
 	sites        map[string]int
-	readNow      map[int64]bool
-	followedRefs map[int64]bool
+	readNow      map[string]bool
+	followedRefs map[string]bool
 
 	// The lab's works by address, DOI and OpenAlex ID, so what is known is
 	// neither looked up again nor found anew.
-	byURL, byDOI, byOA map[string]int64
-	urlOf              map[int64]string
+	byURL, byDOI, byOA map[string]string
+	urlOf              map[string]string
 }
 
-func (s *Service) run(id, ownerID int64, lab labs.Detail, request string, budget Budget, focus Focus) {
+func (s *Service) run(id, ownerID string, lab labs.Detail, request string, budget Budget, focus Focus) {
 	// The owner's own endpoint judges, when they have one.
 	ctx, cancel := context.WithTimeout(auth.WithUser(s.ctx, auth.User{ID: ownerID}), s.cfg.Timeout)
 	defer cancel()
 
 	r := &session{
 		s: s, id: id, ownerID: ownerID, lab: lab, request: request, budget: budget, focus: focus,
-		sites: map[string]int{}, readNow: map[int64]bool{}, followedRefs: map[int64]bool{},
-		byURL: map[string]int64{}, byDOI: map[string]int64{}, byOA: map[string]int64{}, urlOf: map[int64]string{},
+		sites: map[string]int{}, readNow: map[string]bool{}, followedRefs: map[string]bool{},
+		byURL: map[string]string{}, byDOI: map[string]string{}, byOA: map[string]string{}, urlOf: map[string]string{},
 	}
 
 	started := time.Now()
@@ -130,9 +130,9 @@ func (r *session) research(ctx context.Context) (string, error) {
 	rounds := r.s.cfg.Rounds
 
 	switch {
-	case r.focus.Work != 0:
+	case r.focus.Work != "":
 		rounds = 1
-	case r.focus.Subtopic == 0:
+	case r.focus.Subtopic == "":
 		r.seed(ctx)
 	}
 
@@ -174,7 +174,7 @@ func (r *session) research(ctx context.Context) (string, error) {
 		}
 
 		switch {
-		case r.focus.Work != 0:
+		case r.focus.Work != "":
 			return StopFollowed, nil
 		case r.judged >= r.budget.Found:
 			return StopBudget, nil
@@ -215,7 +215,7 @@ func (r *session) load(ctx context.Context) error {
 	return nil
 }
 
-func (r *session) know(id int64, w Work) {
+func (r *session) know(id string, w Work) {
 	if w.URL != "" {
 		r.byURL[w.URL], r.urlOf[id] = id, w.URL
 	}
@@ -229,7 +229,7 @@ func (r *session) know(id int64, w Work) {
 	}
 }
 
-func (r *session) known(w Work) (int64, bool) {
+func (r *session) known(w Work) (string, bool) {
 	if id, ok := r.byURL[w.URL]; ok && w.URL != "" {
 		return id, true
 	}
@@ -242,7 +242,7 @@ func (r *session) known(w Work) (int64, bool) {
 		return id, true
 	}
 
-	return 0, false
+	return "", false
 }
 
 func (r *session) save(ctx context.Context) {
@@ -289,15 +289,15 @@ func (r *session) queries(ctx context.Context, n int) ([]string, error) {
 	subs := r.subs
 
 	switch {
-	case r.focus.Work != 0:
+	case r.focus.Work != "":
 		return nil, nil
-	case r.focus.Subtopic != 0:
+	case r.focus.Subtopic != "":
 		subs = slices.DeleteFunc(slices.Clone(r.subs), func(s Subtopic) bool { return s.ID != r.focus.Subtopic })
 	}
 
 	var untried []string
 
-	if r.focus.Subtopic != 0 && n == 1 {
+	if r.focus.Subtopic != "" && n == 1 {
 		for _, q := range subs[0].Queries {
 			if !containsFold(r.tried, q) {
 				untried = append(untried, q)
@@ -324,7 +324,7 @@ func (r *session) queries(ctx context.Context, n int) ([]string, error) {
 		return nil, err
 	}
 
-	kept := map[int64][]string{}
+	kept := map[string][]string{}
 
 	for _, w := range works {
 		if w.Verdict == VerdictKeep {
@@ -342,9 +342,9 @@ func (r *session) queries(ctx context.Context, n int) ([]string, error) {
 // of the subtopic asked for.
 func (r *session) follows(w Work) bool {
 	switch {
-	case r.focus.Work != 0:
+	case r.focus.Work != "":
 		return w.ID == r.focus.Work
-	case r.focus.Subtopic != 0:
+	case r.focus.Subtopic != "":
 		return w.Verdict == VerdictKeep && w.SubtopicID == r.focus.Subtopic
 	}
 
@@ -357,9 +357,9 @@ func (r *session) follows(w Work) bool {
 // over the whole topic.
 func (r *session) judges(w Work) bool {
 	switch {
-	case r.focus.Work != 0:
+	case r.focus.Work != "":
 		return slices.ContainsFunc(w.Finds, func(f Find) bool { return f.Via == r.focus.Work })
-	case r.focus.Subtopic != 0:
+	case r.focus.Subtopic != "":
 		return slices.ContainsFunc(w.Finds, func(f Find) bool { return f.Run == r.id })
 	}
 
@@ -375,9 +375,9 @@ func (r *session) forced(w Work) bool {
 // it follows, or the subtopic's.
 func (r *session) mayRead(w Work) bool {
 	switch {
-	case r.focus.Work != 0:
+	case r.focus.Work != "":
 		return slices.ContainsFunc(w.Finds, func(f Find) bool { return f.Via == r.focus.Work })
-	case r.focus.Subtopic != 0:
+	case r.focus.Subtopic != "":
 		return w.SubtopicID == r.focus.Subtopic
 	}
 
@@ -479,7 +479,7 @@ func (r *session) followReferences(ctx context.Context) {
 		r.paperReferences(ctx, works)
 	}
 
-	var read []int64
+	var read []string
 
 	for _, w := range works {
 		if w.Read == ReadIn && r.follows(w) && !r.followedRefs[w.ID] {
@@ -498,7 +498,7 @@ func (r *session) followReferences(ctx context.Context) {
 		return
 	}
 
-	taken := map[int64]int{}
+	taken := map[string]int{}
 
 	for _, ref := range refs {
 		if taken[ref.Work] >= r.s.cfg.PerWork || ctx.Err() != nil {
@@ -518,7 +518,7 @@ func (r *session) followReferences(ctx context.Context) {
 		}
 
 		from := ref.Work
-		r.take(ctx, []Work{w}, Find{Channel: ChannelReference, Via: from}, func(id int64) Link { return Link{From: from, To: id} })
+		r.take(ctx, []Work{w}, Find{Channel: ChannelReference, Via: from}, func(id string) Link { return Link{From: from, To: id} })
 	}
 }
 
@@ -556,7 +556,7 @@ func (r *session) paperReferences(ctx context.Context, works []Work) {
 
 		for _, ref := range refs {
 			if id, ok := r.byOA[ref]; ok {
-				r.take(ctx, []Work{{URL: r.urlOf[id]}}, Find{Channel: ChannelReference, Via: citing.ID}, func(to int64) Link { return Link{From: citing.ID, To: to} })
+				r.take(ctx, []Work{{URL: r.urlOf[id]}}, Find{Channel: ChannelReference, Via: citing.ID}, func(to string) Link { return Link{From: citing.ID, To: to} })
 			} else {
 				unknown = append(unknown, ref)
 			}
@@ -576,7 +576,7 @@ func (r *session) paperReferences(ctx context.Context, works []Work) {
 			}
 		}
 
-		r.take(ctx, found, Find{Channel: ChannelReference, Via: citing.ID}, func(to int64) Link { return Link{From: citing.ID, To: to} })
+		r.take(ctx, found, Find{Channel: ChannelReference, Via: citing.ID}, func(to string) Link { return Link{From: citing.ID, To: to} })
 
 		if err := r.s.store.Expanded(context.WithoutCancel(ctx), citing.ID, true, false); err != nil {
 			r.s.logger.Warnw("Failed to record followed references", "work", citing.ID, "error", err)
@@ -617,7 +617,7 @@ func (r *session) followCiting(ctx context.Context) {
 		}
 
 		cited := w.ID
-		r.take(ctx, found, Find{Channel: ChannelCiting, Via: cited}, func(from int64) Link { return Link{From: from, To: cited} })
+		r.take(ctx, found, Find{Channel: ChannelCiting, Via: cited}, func(from string) Link { return Link{From: from, To: cited} })
 
 		if err := r.s.store.Expanded(context.WithoutCancel(ctx), cited, false, true); err != nil {
 			r.s.logger.Warnw("Failed to record followed citations", "work", cited, "error", err)
@@ -628,7 +628,7 @@ func (r *session) followCiting(ctx context.Context) {
 // take records a find of each work. A work with a DOI the lab does not know
 // is looked up in OpenAlex first, so a preprint, its published version and a
 // citation of either end as one work.
-func (r *session) take(ctx context.Context, found []Work, f Find, link func(id int64) Link) {
+func (r *session) take(ctx context.Context, found []Work, f Find, link func(id string) Link) {
 	f.Round = r.roundN()
 
 	for _, w := range found {
@@ -681,7 +681,7 @@ func (r *session) enrich(ctx context.Context, w Work) Work {
 
 	enriched := r.s.paper(*p)
 
-	if w.SourceID != 0 {
+	if w.SourceID != "" {
 		enriched.URL = w.URL
 	}
 
@@ -830,20 +830,20 @@ func (r *session) readKept(ctx context.Context) {
 		return true
 	}
 
-	queues := map[int64][]Work{}
+	queues := map[string][]Work{}
 
 	for _, w := range works {
-		if w.Verdict == VerdictKeep && w.SourceID == 0 && readable(w) && r.mayRead(w) {
+		if w.Verdict == VerdictKeep && w.SourceID == "" && readable(w) && r.mayRead(w) {
 			queues[w.SubtopicID] = append(queues[w.SubtopicID], w)
 		}
 	}
 
-	order := make([]int64, 0, len(r.subs)+1)
+	order := make([]string, 0, len(r.subs)+1)
 	for _, sub := range r.subs {
 		order = append(order, sub.ID)
 	}
 
-	order = append(order, 0)
+	order = append(order, "")
 
 	for _, id := range order {
 		slices.SortStableFunc(queues[id], func(a, b Work) int {
@@ -989,7 +989,7 @@ func sitesOf(works []Work) map[string]siteRecord {
 	out := map[string]siteRecord{}
 
 	for _, w := range works {
-		if w.SourceID == 0 {
+		if w.SourceID == "" {
 			continue
 		}
 

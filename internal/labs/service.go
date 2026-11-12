@@ -14,19 +14,21 @@ import (
 )
 
 type Store interface {
-	Create(ctx context.Context, ownerID int64, name, topic string, engines []string) (Lab, error)
-	SetEngines(ctx context.Context, ownerID, labID int64, engines []string) (Lab, error)
-	Get(ctx context.Context, ownerID, labID int64) (Lab, error)
-	List(ctx context.Context, ownerID int64) ([]Lab, error)
-	Delete(ctx context.Context, ownerID, labID int64) error
-	AddSource(ctx context.Context, ownerID, labID int64, src Source) (Source, error)
-	Source(ctx context.Context, ownerID, labID, sourceID int64) (Source, error)
-	Sources(ctx context.Context, ownerID, labID int64) ([]Source, error)
-	RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error
-	PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error)
-	Pages(ctx context.Context, ownerID, labID int64, limit int) ([]Page, error)
-	QualityPages(ctx context.Context, ownerID, labID int64) ([]QualityPage, error)
-	References(ctx context.Context, ownerID, labID int64) ([]Document, error)
+	Create(ctx context.Context, ownerID string, name, topic string, engines []string) (Lab, error)
+	SetEngines(ctx context.Context, ownerID, labID string, engines []string) (Lab, error)
+	Rename(ctx context.Context, ownerID, labID, name, topic string) (Lab, error)
+	Get(ctx context.Context, ownerID, labID string) (Lab, error)
+	List(ctx context.Context, ownerID string) ([]Lab, error)
+	Delete(ctx context.Context, ownerID, labID string) error
+	AddSource(ctx context.Context, ownerID, labID string, src Source) (Source, error)
+	Source(ctx context.Context, ownerID, labID, sourceID string) (Source, error)
+	Sources(ctx context.Context, ownerID, labID string) ([]Source, error)
+	RemoveSource(ctx context.Context, ownerID, labID, sourceID string) error
+	PageURLs(ctx context.Context, ownerID string, labIDs []string) ([]string, error)
+	Pages(ctx context.Context, ownerID, labID string, limit int) ([]Page, error)
+	QualityPages(ctx context.Context, ownerID, labID string) ([]QualityPage, error)
+	RetryFailed(ctx context.Context, ownerID, labID string) (int64, error)
+	References(ctx context.Context, ownerID, labID string) ([]Document, error)
 }
 
 type Runs interface {
@@ -58,10 +60,10 @@ type Limits struct {
 
 // Uploads keeps uploaded files, under addresses no web page can have.
 type Uploads interface {
-	Save(ctx context.Context, ownerID int64, name, contentType string, data []byte) (url string, err error)
+	Save(ctx context.Context, ownerID string, name, contentType string, data []byte) (url string, err error)
 	// Forget deletes, of these addresses, the files no lab of the owner holds
 	// any more, with their pages and chunks.
-	Forget(ctx context.Context, ownerID int64, urls []string) error
+	Forget(ctx context.Context, ownerID string, urls []string) error
 }
 
 // File is an uploaded file, as received.
@@ -121,14 +123,14 @@ func (s *Service) KeepsUploads(u Uploads) *Service {
 	return s
 }
 
-func (s *Service) List(ctx context.Context, ownerID int64) ([]Lab, error) {
+func (s *Service) List(ctx context.Context, ownerID string) ([]Lab, error) {
 	return s.store.List(ctx, ownerID)
 }
 
 // Create makes the lab and starts crawling its sources. The sources are all
 // checked first, so a bad one leaves no half-made lab behind. Nil engines take
 // the defaults; an empty list means the lab never searches the web.
-func (s *Service) Create(ctx context.Context, ownerID int64, name, topic string, sources []SourceRequest, engines []string) (Detail, error) {
+func (s *Service) Create(ctx context.Context, ownerID string, name, topic string, sources []SourceRequest, engines []string) (Detail, error) {
 	name, err := cleanName(name)
 	if err != nil {
 		return Detail{}, err
@@ -164,7 +166,7 @@ func (s *Service) Create(ctx context.Context, ownerID int64, name, topic string,
 	return s.Get(ctx, ownerID, lab.ID)
 }
 
-func (s *Service) SetEngines(ctx context.Context, ownerID, labID int64, engines []string) (Lab, error) {
+func (s *Service) SetEngines(ctx context.Context, ownerID, labID string, engines []string) (Lab, error) {
 	engines, err := cleanEngines(engines)
 	if err != nil {
 		return Lab{}, err
@@ -173,9 +175,24 @@ func (s *Service) SetEngines(ctx context.Context, ownerID, labID int64, engines 
 	return s.store.SetEngines(ctx, ownerID, labID, engines)
 }
 
+// Rename sets what the lab is called and what it is about - the model's draft
+// is a start, not the last word. Research reads the topic as it stands.
+func (s *Service) Rename(ctx context.Context, ownerID, labID, name, topic string) (Lab, error) {
+	name, err := cleanName(name)
+	if err != nil {
+		return Lab{}, err
+	}
+
+	if topic, err = cleanTopic(topic); err != nil {
+		return Lab{}, err
+	}
+
+	return s.store.Rename(ctx, ownerID, labID, name, topic)
+}
+
 // AddResearched adds a work research chose as a source of one page and
 // starts crawling it.
-func (s *Service) AddResearched(ctx context.Context, ownerID, labID int64, r Researched) (Source, error) {
+func (s *Service) AddResearched(ctx context.Context, ownerID, labID string, r Researched) (Source, error) {
 	existing, err := s.store.Sources(ctx, ownerID, labID)
 	if err != nil {
 		return Source{}, err
@@ -200,14 +217,14 @@ func (s *Service) AddResearched(ctx context.Context, ownerID, labID int64, r Res
 }
 
 // References are what the lab's documents link to or cite.
-func (s *Service) References(ctx context.Context, ownerID, labID int64) ([]Document, error) {
+func (s *Service) References(ctx context.Context, ownerID, labID string) ([]Document, error) {
 	return s.store.References(ctx, ownerID, labID)
 }
 
 // AddReferences adds references of the lab's documents as sources of their
 // own - each page alone, its links not followed - and starts crawling them.
 // Only what one of the lab's documents gives can be added this way.
-func (s *Service) AddReferences(ctx context.Context, ownerID, labID int64, picks []Cited) (Detail, error) {
+func (s *Service) AddReferences(ctx context.Context, ownerID, labID string, picks []Cited) (Detail, error) {
 	if len(picks) == 0 {
 		return Detail{}, fmt.Errorf("%w: pick at least one reference", ErrInvalid)
 	}
@@ -259,7 +276,7 @@ func (s *Service) AddReferences(ctx context.Context, ownerID, labID int64, picks
 // AddUploads keeps the files and adds each as a source of its own, crawled
 // from the store rather than the web. A file the lab already holds is an
 // error, like a link it has.
-func (s *Service) AddUploads(ctx context.Context, ownerID, labID int64, files []File) (Detail, error) {
+func (s *Service) AddUploads(ctx context.Context, ownerID, labID string, files []File) (Detail, error) {
 	if s.uploads == nil || s.runs == nil {
 		return Detail{}, ErrUploadsDisabled
 	}
@@ -315,7 +332,7 @@ func (s *Service) AddUploads(ctx context.Context, ownerID, labID int64, files []
 	return s.Get(ctx, ownerID, labID)
 }
 
-func (s *Service) AddSources(ctx context.Context, ownerID, labID int64, sources []SourceRequest) (Detail, error) {
+func (s *Service) AddSources(ctx context.Context, ownerID, labID string, sources []SourceRequest) (Detail, error) {
 	existing, err := s.store.Sources(ctx, ownerID, labID)
 	if err != nil {
 		return Detail{}, err
@@ -334,7 +351,7 @@ func (s *Service) AddSources(ctx context.Context, ownerID, labID int64, sources 
 }
 
 // Refresh crawls a source again; pages it no longer reaches stay in the lab.
-func (s *Service) Refresh(ctx context.Context, ownerID, labID, sourceID int64) (SourceStatus, error) {
+func (s *Service) Refresh(ctx context.Context, ownerID, labID, sourceID string) (SourceStatus, error) {
 	if s.runs == nil {
 		return SourceStatus{}, ErrCrawlingDisabled
 	}
@@ -354,7 +371,7 @@ func (s *Service) Refresh(ctx context.Context, ownerID, labID, sourceID int64) (
 	return SourceStatus{Source: src, Run: &run}, nil
 }
 
-func (s *Service) RemoveSource(ctx context.Context, ownerID, labID, sourceID int64) error {
+func (s *Service) RemoveSource(ctx context.Context, ownerID, labID, sourceID string) error {
 	src, err := s.store.Source(ctx, ownerID, labID, sourceID)
 	if err != nil {
 		return err
@@ -367,7 +384,7 @@ func (s *Service) RemoveSource(ctx context.Context, ownerID, labID, sourceID int
 	return s.forget(ctx, ownerID, []Source{src})
 }
 
-func (s *Service) Get(ctx context.Context, ownerID, labID int64) (Detail, error) {
+func (s *Service) Get(ctx context.Context, ownerID, labID string) (Detail, error) {
 	lab, err := s.store.Get(ctx, ownerID, labID)
 	if err != nil {
 		return Detail{}, err
@@ -400,7 +417,7 @@ func (s *Service) Get(ctx context.Context, ownerID, labID int64) (Detail, error)
 	return detail, nil
 }
 
-func (s *Service) Delete(ctx context.Context, ownerID, labID int64) error {
+func (s *Service) Delete(ctx context.Context, ownerID, labID string) error {
 	sources, err := s.store.Sources(ctx, ownerID, labID)
 	if err != nil {
 		return err
@@ -416,7 +433,7 @@ func (s *Service) Delete(ctx context.Context, ownerID, labID int64) error {
 // forget deletes the uploaded files among these sources that the owner's
 // labs no longer hold. A crawled page outlives its lab in the shared base; an
 // uploaded file was never shared, so it goes.
-func (s *Service) forget(ctx context.Context, ownerID int64, sources []Source) error {
+func (s *Service) forget(ctx context.Context, ownerID string, sources []Source) error {
 	var urls []string
 
 	for _, src := range sources {
@@ -432,12 +449,12 @@ func (s *Service) forget(ctx context.Context, ownerID int64, sources []Source) e
 	return s.uploads.Forget(ctx, ownerID, urls)
 }
 
-func (s *Service) Pages(ctx context.Context, ownerID, labID int64, limit int) ([]Page, error) {
+func (s *Service) Pages(ctx context.Context, ownerID, labID string, limit int) ([]Page, error) {
 	return s.store.Pages(ctx, ownerID, labID, limit)
 }
 
 // PageURLs returns the pages a search restricted to these labs may return.
-func (s *Service) PageURLs(ctx context.Context, ownerID int64, labIDs []int64) ([]string, error) {
+func (s *Service) PageURLs(ctx context.Context, ownerID string, labIDs []string) ([]string, error) {
 	ids := slices.Clone(labIDs)
 	slices.Sort(ids)
 
@@ -491,7 +508,7 @@ func (s *Service) prepare(sources []SourceRequest, existing []Source) ([]Source,
 
 // addAll records each source, then queues its crawl. A source whose crawl
 // could not be queued stays, with no run, and can be refreshed.
-func (s *Service) addAll(ctx context.Context, ownerID, labID int64, sources []Source) error {
+func (s *Service) addAll(ctx context.Context, ownerID, labID string, sources []Source) error {
 	for _, src := range sources {
 		added, err := s.store.AddSource(ctx, ownerID, labID, src)
 		if err != nil {
@@ -506,7 +523,7 @@ func (s *Service) addAll(ctx context.Context, ownerID, labID int64, sources []So
 	return nil
 }
 
-func (s *Service) submit(ctx context.Context, ownerID int64, src Source) (runs.Run, error) {
+func (s *Service) submit(ctx context.Context, ownerID string, src Source) (runs.Run, error) {
 	return s.runs.Submit(ctx, runRequest(src), runs.Origin{UserID: ownerID, SourceID: src.ID})
 }
 

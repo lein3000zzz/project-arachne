@@ -110,7 +110,7 @@ func (f *fakeProgress) Done(_ context.Context, runID string, failed bool) {
 // their lease lapses.
 type memQueue struct {
 	mu   sync.Mutex
-	next int64
+	next int
 	jobs []*memJob
 }
 
@@ -127,7 +127,7 @@ func (q *memQueue) Push(_ context.Context, doc *documents.Document) error {
 	defer q.mu.Unlock()
 
 	q.next++
-	q.jobs = append(q.jobs, &memJob{Job: Job{ID: q.next, Doc: *doc}})
+	q.jobs = append(q.jobs, &memJob{Job: Job{ID: fmt.Sprint(q.next), Doc: *doc}})
 
 	return nil
 }
@@ -172,7 +172,7 @@ func (q *memQueue) Claim(_ context.Context, owner string, lease time.Duration) (
 	return nil, nil
 }
 
-func (q *memQueue) find(id int64) *memJob {
+func (q *memQueue) find(id string) *memJob {
 	for _, j := range q.jobs {
 		if j.ID == id {
 			return j
@@ -182,7 +182,7 @@ func (q *memQueue) find(id int64) *memJob {
 	return nil
 }
 
-func (q *memQueue) Extend(_ context.Context, id int64, owner string, lease time.Duration) error {
+func (q *memQueue) Extend(_ context.Context, id, owner string, lease time.Duration) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -193,7 +193,7 @@ func (q *memQueue) Extend(_ context.Context, id int64, owner string, lease time.
 	return nil
 }
 
-func (q *memQueue) Done(_ context.Context, id int64) error {
+func (q *memQueue) Done(_ context.Context, id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -202,7 +202,7 @@ func (q *memQueue) Done(_ context.Context, id int64) error {
 	return nil
 }
 
-func (q *memQueue) Retry(_ context.Context, id int64, after time.Duration, why string) error {
+func (q *memQueue) Retry(_ context.Context, id string, after time.Duration, why string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -213,7 +213,7 @@ func (q *memQueue) Retry(_ context.Context, id int64, after time.Duration, why s
 	return nil
 }
 
-func (q *memQueue) Release(_ context.Context, id int64) error {
+func (q *memQueue) Release(_ context.Context, id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -223,7 +223,7 @@ func (q *memQueue) Release(_ context.Context, id int64) error {
 	return nil
 }
 
-func (q *memQueue) Bury(_ context.Context, id int64, why string) error {
+func (q *memQueue) Bury(_ context.Context, id, why string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 

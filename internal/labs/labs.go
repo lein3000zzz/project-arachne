@@ -17,7 +17,7 @@ var (
 )
 
 type Lab struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Topic     string    `json:"topic"`
 	CreatedAt time.Time `json:"created_at"`
@@ -45,8 +45,8 @@ const (
 )
 
 type Source struct {
-	ID    int64  `json:"id"`
-	LabID int64  `json:"lab_id"`
+	ID    string `json:"id"`
+	LabID string `json:"lab_id"`
 	Kind  string `json:"kind"`
 	URL   string `json:"url"`
 	// A preset (site, section, anywhere) or a URL prefix, as runs.Request takes it.
@@ -62,7 +62,7 @@ type Source struct {
 	Query       string   `json:"query,omitempty"`
 	Engines     []string `json:"engines,omitempty"`
 	Reason      string   `json:"reason,omitempty"`
-	GatheringID int64    `json:"gathering_id,omitempty"`
+	GatheringID string   `json:"gathering_id,omitempty"`
 	// For a reference source: the document that cites it, and how.
 	CitedBy  string `json:"cited_by,omitempty"`
 	Citation string `json:"citation,omitempty"`

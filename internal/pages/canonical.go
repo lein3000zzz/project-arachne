@@ -14,7 +14,7 @@ import (
 const metaURLNormVersion = "urlnorm_version"
 
 type storedPage struct {
-	id        int64
+	id        string
 	url       string
 	fetchedAt *time.Time
 }
@@ -42,7 +42,7 @@ func (repo *PagePostgresRepo) EnsureCanonical(ctx context.Context) ([]string, er
 
 	groups := make(map[string][]storedPage)
 
-	var unusable []int64
+	var unusable []string
 
 	for _, page := range pages {
 		canonical, ok := urlnorm.Canonical(page.url, nil)
@@ -152,8 +152,8 @@ func fetchedLater(a, b storedPage) bool {
 	return a.fetchedAt != nil && (b.fetchedAt == nil || a.fetchedAt.After(*b.fetchedAt))
 }
 
-func memberIDs(members []storedPage) []int64 {
-	ids := make([]int64, len(members))
+func memberIDs(members []storedPage) []string {
+	ids := make([]string, len(members))
 	for i, member := range members {
 		ids[i] = member.id
 	}

@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 )
@@ -35,7 +34,7 @@ func newSealer(key []byte) (*sealer, error) {
 	return &sealer{aead: aead}, nil
 }
 
-func (s *sealer) seal(plain string, userID int64) []byte {
+func (s *sealer) seal(plain, userID string) []byte {
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		panic(err)
@@ -44,7 +43,7 @@ func (s *sealer) seal(plain string, userID int64) []byte {
 	return s.aead.Seal(nonce, nonce, []byte(plain), bound(userID))
 }
 
-func (s *sealer) open(sealed []byte, userID int64) (string, error) {
+func (s *sealer) open(sealed []byte, userID string) (string, error) {
 	n := s.aead.NonceSize()
 	if len(sealed) < n {
 		return "", errSeal
@@ -58,6 +57,6 @@ func (s *sealer) open(sealed []byte, userID int64) (string, error) {
 	return string(plain), nil
 }
 
-func bound(userID int64) []byte {
-	return binary.BigEndian.AppendUint64([]byte("arachne endpoint key, user "), uint64(userID))
+func bound(userID string) []byte {
+	return []byte("arachne endpoint key, user " + userID)
 }

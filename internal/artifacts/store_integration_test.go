@@ -18,8 +18,8 @@ func TestArtifactsAreVersionedAndTheirOwners(t *testing.T) {
 	ctx := context.Background()
 	store := NewPostgresStore(pool)
 
-	var lein, other, lab int64
-	for name, id := range map[string]*int64{"lein": &lein, "other": &other} {
+	var lein, other, lab string
+	for name, id := range map[string]*string{"lein": &lein, "other": &other} {
 		if err := pool.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ($1, 'x') RETURNING id`, name).Scan(id); err != nil {
 			t.Fatal(err)
 		}

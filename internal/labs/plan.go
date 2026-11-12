@@ -23,7 +23,7 @@ const ScopePage = "page"
 // user confirms it, and then it is checked again like any other request.
 type Plan struct {
 	// Zero for a new lab.
-	LabID   int64           `json:"lab_id,omitempty"`
+	LabID   string          `json:"lab_id,omitempty"`
 	Name    string          `json:"name,omitempty"`
 	Topic   string          `json:"topic,omitempty"`
 	Sources []SourceRequest `json:"sources"`
@@ -55,10 +55,10 @@ var (
 	zero  = 0.0
 )
 
-// Plan drafts a new lab from a request, or with labID non-zero, more sources
+// Plan drafts a new lab from a request, or with labID set, more sources
 // for that lab. A link is only ever one the request contains: the model picks
 // scopes and may leave links out, but cannot add one.
-func (s *Service) Plan(ctx context.Context, ownerID, labID int64, request string) (Plan, error) {
+func (s *Service) Plan(ctx context.Context, ownerID, labID, request string) (Plan, error) {
 	request = strings.TrimSpace(request)
 	if request == "" || utf8.RuneCountInString(request) > maxRequestRunes {
 		return Plan{}, fmt.Errorf("%w: a request is 1 to %d characters", ErrInvalid, maxRequestRunes)
@@ -66,7 +66,7 @@ func (s *Service) Plan(ctx context.Context, ownerID, labID int64, request string
 
 	var lab *Detail
 
-	if labID != 0 {
+	if labID != "" {
 		detail, err := s.Get(ctx, ownerID, labID)
 		if err != nil {
 			return Plan{}, err

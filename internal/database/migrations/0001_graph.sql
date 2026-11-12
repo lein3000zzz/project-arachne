@@ -1,5 +1,5 @@
 CREATE TABLE pages (
-    id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id           uuid PRIMARY KEY DEFAULT uuidv7(),
     url          text        NOT NULL UNIQUE,
     host         text        NOT NULL,
     -- NULL: a link target never fetched.
@@ -14,8 +14,8 @@ CREATE TABLE pages (
 -- kind 1 is a hyperlink, 2 a resource the page loads (script, style, image).
 -- Only hyperlinks carry rank.
 CREATE TABLE links (
-    src  bigint   NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
-    dst  bigint   NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+    src  uuid     NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+    dst  uuid     NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
     kind smallint NOT NULL CHECK (kind IN (1, 2)),
     PRIMARY KEY (src, dst),
     CHECK (src <> dst)
@@ -26,13 +26,13 @@ CREATE INDEX links_dst ON links (dst);
 -- A URL the server permanently redirects to another page.
 CREATE TABLE aliases (
     url       text   PRIMARY KEY,
-    target_id bigint NOT NULL REFERENCES pages (id) ON DELETE CASCADE
+    target_id uuid NOT NULL REFERENCES pages (id) ON DELETE CASCADE
 );
 
 CREATE INDEX aliases_target ON aliases (target_id);
 
 CREATE TABLE page_ranks (
-    page_id bigint           PRIMARY KEY REFERENCES pages (id) ON DELETE CASCADE,
+    page_id uuid             PRIMARY KEY REFERENCES pages (id) ON DELETE CASCADE,
     score   double precision NOT NULL
 );
 
@@ -42,7 +42,7 @@ CREATE TABLE host_ranks (
 );
 
 CREATE TABLE rank_runs (
-    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id          uuid PRIMARY KEY DEFAULT uuidv7(),
     computed_at timestamptz      NOT NULL DEFAULT now(),
     pages       integer          NOT NULL,
     links       integer          NOT NULL,

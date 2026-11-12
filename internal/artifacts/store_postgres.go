@@ -21,20 +21,20 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 
 const uniqueViolation = "23505"
 
-func (s *PostgresStore) Create(ctx context.Context, ownerID, labID int64, kind Kind, title, request string) (int64, error) {
-	var id int64
+func (s *PostgresStore) Create(ctx context.Context, ownerID, labID string, kind Kind, title, request string) (string, error) {
+	var id string
 
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO artifacts (lab_id, kind, title, request) SELECT id, $3, $4, $5 FROM labs WHERE id = $1 AND owner_id = $2
 		RETURNING id`, labID, ownerID, kind, title, request).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, labs.ErrNotFound
+		return "", labs.ErrNotFound
 	}
 
 	return id, err
 }
 
-func (s *PostgresStore) StartVersion(ctx context.Context, artifactID int64, v Version) (int, error) {
+func (s *PostgresStore) StartVersion(ctx context.Context, artifactID string, v Version) (int, error) {
 	outline, sections, sources, err := encode(v)
 	if err != nil {
 		return 0, err
@@ -70,7 +70,7 @@ func (s *PostgresStore) StartVersion(ctx context.Context, artifactID int64, v Ve
 	return number, err
 }
 
-func (s *PostgresStore) SaveVersion(ctx context.Context, artifactID int64, v Version) error {
+func (s *PostgresStore) SaveVersion(ctx context.Context, artifactID string, v Version) error {
 	outline, sections, sources, err := encode(v)
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ const latestColumns = `
 	coalesce((SELECT jsonb_agg(jsonb_build_object('heading', e->>'heading', 'state', e->>'state'))
 	          FROM jsonb_array_elements(v.sections) e), '[]')`
 
-func (s *PostgresStore) List(ctx context.Context, ownerID, labID int64) ([]Artifact, error) {
+func (s *PostgresStore) List(ctx context.Context, ownerID, labID string) ([]Artifact, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+artifactColumns+`,`+latestColumns+`
 		FROM artifacts a JOIN labs l ON l.id = a.lab_id
@@ -147,7 +147,7 @@ func scanListed(row pgx.CollectableRow) (Artifact, error) {
 	return a, err
 }
 
-func (s *PostgresStore) Get(ctx context.Context, ownerID, artifactID int64) (Artifact, error) {
+func (s *PostgresStore) Get(ctx context.Context, ownerID, artifactID string) (Artifact, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+artifactColumns+`,`+latestColumns+`
 		FROM artifacts a JOIN labs l ON l.id = a.lab_id
@@ -165,7 +165,7 @@ func (s *PostgresStore) Get(ctx context.Context, ownerID, artifactID int64) (Art
 	return a, err
 }
 
-func (s *PostgresStore) Version(ctx context.Context, ownerID, artifactID int64, number int) (Version, error) {
+func (s *PostgresStore) Version(ctx context.Context, ownerID, artifactID string, number int) (Version, error) {
 	var v Version
 
 	err := s.pool.QueryRow(ctx, `
@@ -183,7 +183,7 @@ func (s *PostgresStore) Version(ctx context.Context, ownerID, artifactID int64, 
 	return v, err
 }
 
-func (s *PostgresStore) Versions(ctx context.Context, ownerID, artifactID int64) ([]int, error) {
+func (s *PostgresStore) Versions(ctx context.Context, ownerID, artifactID string) ([]int, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT v.version FROM artifact_versions v JOIN artifacts a ON a.id = v.artifact_id JOIN labs l ON l.id = a.lab_id
 		WHERE v.artifact_id = $1 AND l.owner_id = $2 ORDER BY v.version`, artifactID, ownerID)
@@ -194,7 +194,7 @@ func (s *PostgresStore) Versions(ctx context.Context, ownerID, artifactID int64)
 	return pgx.CollectRows(rows, pgx.RowTo[int])
 }
 
-func (s *PostgresStore) Delete(ctx context.Context, ownerID, artifactID int64) error {
+func (s *PostgresStore) Delete(ctx context.Context, ownerID, artifactID string) error {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM artifacts a USING labs l WHERE a.id = $1 AND l.id = a.lab_id AND l.owner_id = $2`, artifactID, ownerID)
 	if err == nil && tag.RowsAffected() == 0 {

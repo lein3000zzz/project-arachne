@@ -44,12 +44,12 @@ func mapText(labName string, m research.Map, dropped bool) string {
 		b.WriteString("Too few works found both by search and by citations to estimate what is still unfound.\n")
 	}
 
-	titles := map[int64]string{}
+	titles := map[string]string{}
 	for _, w := range m.Works {
 		titles[w.ID] = workTitle(w)
 	}
 
-	inSubtopic := map[int64]bool{}
+	inSubtopic := map[string]bool{}
 
 	for i, sub := range m.Subtopics {
 		inSubtopic[sub.ID] = true
@@ -67,7 +67,7 @@ func mapText(labName string, m research.Map, dropped bool) string {
 			estimate = fmt.Sprintf(", about %.0f%% found", 100*c.Subtopics[i].Estimate.Share)
 		}
 
-		fmt.Fprintf(&b, "\n## %d. %s (subtopic %d): %d kept%s\n", i+1, sub.Name, sub.ID, len(kept), estimate)
+		fmt.Fprintf(&b, "\n## %d. %s (subtopic %s): %d kept%s\n", i+1, sub.Name, sub.ID, len(kept), estimate)
 
 		if sub.Focus != "" {
 			fmt.Fprintf(&b, "%s\n", sub.Focus)
@@ -108,7 +108,7 @@ func mapText(labName string, m research.Map, dropped bool) string {
 				break
 			}
 
-			fmt.Fprintf(&b, "- %s (work %d): %s\n", mdLink(titles[w.ID], w.URL), w.ID, w.Reason)
+			fmt.Fprintf(&b, "- %s (work %s): %s\n", mdLink(titles[w.ID], w.URL), w.ID, w.Reason)
 		}
 	}
 
@@ -132,14 +132,14 @@ var stopNames = map[string]string{
 	research.StopFollowed: "the work's citations were followed",
 }
 
-func writeWorks(b *strings.Builder, works []research.Work, titles map[int64]string, shown int) {
+func writeWorks(b *strings.Builder, works []research.Work, titles map[string]string, shown int) {
 	for i, w := range works {
 		if i == shown {
 			fmt.Fprintf(b, "- and %d more\n", len(works)-i)
 			return
 		}
 
-		about := []string{fmt.Sprintf("work %d", w.ID), w.Kind}
+		about := []string{"work " + w.ID, w.Kind}
 		if w.Year > 0 {
 			about = append(about, fmt.Sprint(w.Year))
 		}
@@ -169,7 +169,7 @@ func writeWorks(b *strings.Builder, works []research.Work, titles map[int64]stri
 
 // foundBy says how a work was found: its queries, and the works it was found
 // through, a few of each.
-func foundBy(w research.Work, titles map[int64]string) string {
+func foundBy(w research.Work, titles map[string]string) string {
 	var queries, citedBy, cites []string
 
 	seed := false

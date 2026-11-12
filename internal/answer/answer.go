@@ -37,10 +37,17 @@ type Config struct {
 	Temperature *float64
 }
 
+// Sketches gives the stored sketch of each page that has one: excerpts alone
+// miss a copy whose search matched another passage than the original's.
+type Sketches interface {
+	Sketches(ctx context.Context, urls []string) (map[string]copies.Sketch, error)
+}
+
 type Service struct {
-	search Searcher
-	chat   llm.Client
-	cfg    Config
+	search   Searcher
+	chat     llm.Client
+	cfg      Config
+	sketches Sketches
 
 	verifier  llm.Client
 	verifyCfg VerifyConfig
@@ -52,6 +59,13 @@ func New(search Searcher, chat llm.Client, cfg Config) (*Service, error) {
 	}
 
 	return &Service{search: search, chat: chat, cfg: cfg}, nil
+}
+
+// ComparesPages tells copies apart by their whole pages too, not only by the
+// passages search matched.
+func (s *Service) ComparesPages(sketches Sketches) *Service {
+	s.sketches = sketches
+	return s
 }
 
 type Request struct {
@@ -257,7 +271,7 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 
 	var picked []retrieval.Result
 
-	texts := excerptSets{}
+	texts := s.copyCheck(ctx, inLabs, shared)
 	relevantLabs := s.fill(texts, s.relevant(inLabs), nil)
 
 	switch {
@@ -278,24 +292,48 @@ func (s *Service) gather(ctx context.Context, req Request) (found []Found, sourc
 	return list(texts, shared[:min(len(shared), req.Results)], sources, req.LabURLs), sources, weak, nil
 }
 
-// excerptSets holds the shingles of each result's matched text, by URL, as
-// copies are looked for.
-type excerptSets map[string]copies.Set
+// copyCheck tells whether two results are one text: by the passages search
+// matched, shingled as they are needed, and by their pages' stored sketches.
+type copyCheck struct {
+	sets  map[string]copies.Set
+	pages map[string]copies.Sketch
+}
 
-func (e excerptSets) of(res retrieval.Result) copies.Set {
-	set, ok := e[res.URL]
+// copyCheck reads the stored sketches of every result at once. Without them
+// - none kept, or the store failing - excerpts alone decide.
+func (s *Service) copyCheck(ctx context.Context, lists ...[]retrieval.Result) *copyCheck {
+	check := &copyCheck{sets: map[string]copies.Set{}}
+
+	if s.sketches == nil {
+		return check
+	}
+
+	var urls []string
+	for _, list := range lists {
+		for _, res := range list {
+			urls = append(urls, res.URL)
+		}
+	}
+
+	check.pages, _ = s.sketches.Sketches(ctx, urls)
+
+	return check
+}
+
+func (c *copyCheck) of(res retrieval.Result) copies.Set {
+	set, ok := c.sets[res.URL]
 	if !ok {
 		set = copies.SetOf(append([]string{res.Snippet}, res.Passages...)...)
-		e[res.URL] = set
+		c.sets[res.URL] = set
 	}
 
 	return set
 }
 
 // copyOf is the first of results whose text res repeats; -1 for none.
-func (e excerptSets) copyOf(res retrieval.Result, results []retrieval.Result) int {
+func (c *copyCheck) copyOf(res retrieval.Result, results []retrieval.Result) int {
 	for i, other := range results {
-		if other.URL != res.URL && copies.Repeats(e.of(res), e.of(other)) {
+		if other.URL != res.URL && (copies.Same(c.pages[res.URL], c.pages[other.URL]) || copies.Repeats(c.of(res), c.of(other))) {
 			return i
 		}
 	}
@@ -326,7 +364,7 @@ func (s *Service) deepen(sources []Source) {
 	}
 }
 
-func list(texts excerptSets, results []retrieval.Result, sources []Source, labURLs []string) []Found {
+func list(texts *copyCheck, results []retrieval.Result, sources []Source, labURLs []string) []Found {
 	found := make([]Found, len(results))
 
 	read := make([]retrieval.Result, len(sources))
@@ -356,7 +394,7 @@ func list(texts excerptSets, results []retrieval.Result, sources []Source, labUR
 // fill takes first's results, then second's, up to the number of sources:
 // each page once, and no page whose text one taken already holds - the model
 // would read the same words twice, and take one source for two that agree.
-func (s *Service) fill(texts excerptSets, first, second []retrieval.Result) []retrieval.Result {
+func (s *Service) fill(texts *copyCheck, first, second []retrieval.Result) []retrieval.Result {
 	var out []retrieval.Result
 
 	for _, res := range append(slices.Clone(first), second...) {

@@ -123,6 +123,8 @@ func main() {
 			logger.Fatal("Error initializing answering:", err)
 		}
 
+		service.ComparesPages(review.NewPostgresStore(db))
+
 		if cfg.Verify.Enabled {
 			// A user's own endpoint checks their answers too; the rest get the
 			// server's checking model, which may be none.
@@ -146,7 +148,8 @@ func main() {
 		logger.Infow("Answering enabled", "serverModel", serverModel.Model, "ownEndpoints", own != nil)
 	}
 
-	services := searchapi.Services{Auth: accounts, Tokens: accounts, Searcher: retriever, Answerer: answerer}
+	services := searchapi.Services{Auth: accounts, Tokens: accounts, Searcher: retriever, Answerer: answerer,
+		Base: pages.NewStatsReader(db, time.Minute)}
 	if own != nil {
 		services.Endpoints = own
 	}
@@ -250,6 +253,7 @@ func main() {
 		WebLookupTimeout: cfg.WebLookup.Timeout.Std(),
 		MCP:              cfg.MCP.Enabled,
 		DefaultEngines:   cfg.WebSearch.DefaultEngines,
+		ListSize:         cfg.UI.ListSize,
 		DefaultLimit:     cfg.Retrieval.DefaultLimit,
 		MaxLimit:         cfg.Retrieval.MaxLimit,
 		RequestTimeout:   cfg.Search.RequestTimeout.Std(),

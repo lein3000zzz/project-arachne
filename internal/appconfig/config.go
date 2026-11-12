@@ -28,6 +28,7 @@ type Config struct {
 	Endpoints   Endpoints   `yaml:"endpoints"`
 	WebLookup   WebLookup   `yaml:"weblookup"`
 	MCP         MCP         `yaml:"mcp"`
+	UI          UI          `yaml:"ui"`
 	WebSearch   WebSearch   `yaml:"websearch"`
 	Documents   Documents   `yaml:"documents"`
 	Research    Research    `yaml:"research"`
@@ -35,6 +36,11 @@ type Config struct {
 	Queue       Queue       `yaml:"queue"`
 	RunState    RunState    `yaml:"run_state"`
 	Shutdown    Shutdown    `yaml:"shutdown"`
+}
+
+type UI struct {
+	// Rows a list on the pages shows at a time.
+	ListSize int `yaml:"list_size"`
 }
 
 type Crawler struct {
@@ -446,6 +452,7 @@ func Default() Config {
 			ChooseTokens: 200,
 		},
 		MCP: MCP{Enabled: true},
+		UI:  UI{ListSize: 15},
 		Endpoints: Endpoints{
 			Enabled:     true,
 			TestTimeout: Duration(30 * time.Second),
@@ -577,6 +584,7 @@ func (c *Config) Validate() error {
 		{"review.part_runes", c.Review.PartRunes},
 		{"review.max_tokens", c.Review.MaxTokens},
 		{"verify.max_claims", c.Verify.MaxClaims},
+		{"ui.list_size", c.UI.ListSize},
 		{"verify.max_tokens", c.Verify.MaxTokens},
 		{"artifacts.max_sections", c.Artifacts.MaxSections},
 		{"weblookup.results", c.WebLookup.Results},
